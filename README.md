@@ -1,0 +1,1 @@
+基于企业微信自建应用实现对话式GitHub Trending检索Agent。GitHub Actions每日抓取热榜，调用GitHub官方API补全topics标签。支持两种交互模式：被动定时推送简报；用户使用自然语言主动检索，由LangGraph解析查询条件进行多维度过滤。用户授权后可以在聊天窗口直接收藏仓库，自动同步Star到GitHub账号；支持查看、取消收藏.

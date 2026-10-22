@@ -230,6 +230,7 @@ Actions → 「每日热榜管线」→ Run workflow（`workflow_dispatch`）。
 7. **`search_caches` 写入非原子**：当前为 delete + insert 两次 `await`（已记账未改）。如并发搜索时偶发丢缓存（「收藏 N」读到旧列表），改用 `db.batch` 一轮原子提交；MVP 可接受，先知悉即可。
 8. **`subscribers.display_name` 以空串占位**：schema 为 `NOT NULL` 无默认值，onboarding 插入 `''`（企微回调只带 userid，暂无名称来源，且无任何运行时读取方）。可选后续迁移改为可空，不阻塞 MVP。
 9. **本地跑 CLI 报 `fetch failed`（TLS 拦截环境）**：部分企业网络/安全软件会对 HTTPS 做中间人拦截——curl 能通（用 Windows 证书库）但 Node fetch 报 `unable to verify the first certificate`。本地执行时加 `NODE_OPTIONS="--use-system-ca"` 即可（如 `NODE_OPTIONS="--use-system-ca" npx tsx src/scraper/run-scraper.ts`）；GitHub Actions 托管 runner 无此问题，管线不受影响。
+10. **Vercel 函数对 `src/` 的相对导入必须带 `.js` 扩展名**（如 `from '../src/config.js'`）：Vercel 构建用项目本地 TypeScript 逐文件转译、不做打包，产物按原样保留在函数包里由 Node ESM 运行时直接加载；Node ESM 不做无扩展名解析，漏写 `.js` 会导致**全部**端点 `FUNCTION_INVOCATION_FAILED`（平台通用 500，运行时日志里是 `ERR_MODULE_NOT_FOUND`）。`package.json` 必须保留 `"type": "module"`（缺了它 ESM 语法的产物会被当 CJS 解析，同样全站 500）。vitest/tsx 均支持 `.js → .ts` 映射，本地不受影响，所以**只有线上会炸**——新增相对导入时务必带上 `.js`。
 
 ---
 

@@ -4,6 +4,11 @@
  * 无需修改本文件的分发逻辑。
  */
 
+import {
+  handleFavorite,
+  handleList,
+  handleUnfavorite,
+} from '../github/stars';
 import { bindHandler } from '../github/oauth';
 import { handleSearch } from './reply';
 
@@ -20,7 +25,9 @@ export type MessageHandler = (msg: InboundMessage) => Promise<void> | void;
 
 export interface Handlers {
   help: MessageHandler;
+  unfavorite: MessageHandler;
   favorite: MessageHandler;
+  list: MessageHandler;
   search: MessageHandler;
   bind: MessageHandler;
 }
@@ -28,7 +35,14 @@ export interface Handlers {
 /** 未注册时的静默 stub（Task 5 阶段的默认行为）。 */
 const stub: MessageHandler = () => {};
 
-let handlers: Handlers = { help: stub, favorite: stub, search: stub, bind: stub };
+let handlers: Handlers = {
+  help: stub,
+  unfavorite: stub,
+  favorite: stub,
+  list: stub,
+  search: stub,
+  bind: stub,
+};
 
 /**
  * 注册（或覆盖）handler。传入部分字段即可，未传的保持原值/默认 stub。
@@ -40,8 +54,18 @@ export function registerHandlers(partial: Partial<Handlers>): void {
 
 /** 恢复默认 stub（测试隔离用）。 */
 export function resetHandlers(): void {
-  handlers = { help: stub, favorite: stub, search: stub, bind: stub };
+  handlers = {
+    help: stub,
+    unfavorite: stub,
+    favorite: stub,
+    list: stub,
+    search: stub,
+    bind: stub,
+  };
 }
+
+/** 「取消收藏 <数字>」——支持有/无空格与多位数（须先于「收藏 N」判断）。 */
+const UNFAVORITE_PATTERN = /^取消收藏\s*\d+$/;
 
 /** 「收藏 <数字>」——支持有/无空格与多位数。 */
 const FAVORITE_PATTERN = /^收藏\s*\d+$/;
@@ -54,7 +78,8 @@ function dispatch(handler: MessageHandler, msg: InboundMessage): Promise<void> {
 /**
  * 分发一条入站消息：
  * - 非 text 类型：静默忽略（返回 resolved promise）
- * - 「帮助」→ help；「收藏 N」→ favorite；「绑定」→ bind；其余 text → search
+ * - 分发顺序：「帮助」→「取消收藏 N」→「收藏 N」→「我的收藏」（精确）→
+ *   「绑定」（精确）→ 其余 text → search
  * handler 抛错会以 rejected promise 传播，由调用方（回调端点）负责 catch。
  */
 export function routeMessage(msg: InboundMessage): Promise<void> {
@@ -65,8 +90,14 @@ export function routeMessage(msg: InboundMessage): Promise<void> {
   if (content === '帮助') {
     return dispatch(handlers.help, msg);
   }
+  if (UNFAVORITE_PATTERN.test(content)) {
+    return dispatch(handlers.unfavorite, msg);
+  }
   if (FAVORITE_PATTERN.test(content)) {
     return dispatch(handlers.favorite, msg);
+  }
+  if (content === '我的收藏') {
+    return dispatch(handlers.list, msg);
   }
   // Task 11：精确匹配「绑定」（trim 后），避免吞掉「绑定 XXX」类消息。
   if (content === '绑定') {
@@ -75,6 +106,12 @@ export function routeMessage(msg: InboundMessage): Promise<void> {
   return dispatch(handlers.search, msg);
 }
 
-// Task 9：搜索 handler、Task 11：绑定 handler 默认挂接真实实现
-// （测试可用 resetHandlers 恢复 stub）。
-registerHandlers({ search: handleSearch, bind: bindHandler });
+// Task 9：搜索 handler、Task 11：绑定 handler、Task 12：收藏/取消收藏/我的收藏
+// handler 默认挂接真实实现（测试可用 resetHandlers 恢复 stub）。
+registerHandlers({
+  search: handleSearch,
+  bind: bindHandler,
+  favorite: handleFavorite,
+  unfavorite: handleUnfavorite,
+  list: handleList,
+});

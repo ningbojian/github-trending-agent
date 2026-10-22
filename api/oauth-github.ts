@@ -1,16 +1,18 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../src/db/client';
-import { subscribers } from '../src/db/schema';
+import { kvCache, subscribers } from '../src/db/schema';
 import {
   encryptSecret,
   exchangeCode,
+  OAUTH_STATE_PREFIX,
 } from '../src/github/oauth';
 
 /**
  * GitHub OAuth 回调端点（Vercel Node function，GET）。
- * 流程：校验 code&state → exchangeCode → encryptSecret → 按 state
- * （即发起绑定时的企业微信 userid）更新 subscribers 行 → 中文成功页。
- * 任一环节失败：中文错误页，绝不写库（exchange 失败时不产生任何 update）。
+ * 流程：校验 code&state → 按 state（一次性随机 nonce）查 kv_cache 行 →
+ * 立即 DELETE 该行（一次性消费，防重放/绑定 CSRF）→ exchangeCode →
+ * encryptSecret → 按映射的 wecomUserid 更新 subscribers 行 → 中文成功页。
+ * state 行缺失/过期：中文错误页，零写入；exchange 失败时不产生任何 update。
  * 请求/响应最小形态与 api/cron-push-digest.ts 保持一致（不引入 @vercel/node 依赖）。
  */
 
@@ -70,6 +72,30 @@ export default async function handler(
     return;
   }
 
+  // state 是发起绑定时生成的一次性 nonce：查 kv_cache 映射行。
+  const stateKey = `${OAUTH_STATE_PREFIX}${state}`;
+  const stateRows = await db()
+    .select()
+    .from(kvCache)
+    .where(eq(kvCache.key, stateKey));
+  const stateRow = stateRows[0];
+  if (
+    !stateRow ||
+    new Date(stateRow.expiresAt).getTime() <= Date.now()
+  ) {
+    // 缺失或已过期：零写入（不消费、不 exchange、不 update）。
+    errorPage(res, 400, '授权链接已失效或不存在，请回到企业微信重新发送「绑定」。');
+    return;
+  }
+  const mappedUserid = (stateRow.value as { wecomUserid?: unknown }).wecomUserid;
+  if (typeof mappedUserid !== 'string' || mappedUserid === '') {
+    errorPage(res, 400, '授权状态数据异常，请回到企业微信重新发送「绑定」。');
+    return;
+  }
+
+  // 一次性消费：立即删除 state 行，重放同一 state 时查不到行 → 错误页。
+  await db().delete(kvCache).where(eq(kvCache.key, stateKey));
+
   let exchanged: { login: string; token: string };
   try {
     exchanged = await exchangeCode(code);
@@ -85,11 +111,11 @@ export default async function handler(
       githubTokenEnc: encryptSecret(exchanged.token),
       githubLogin: exchanged.login,
     })
-    .where(eq(subscribers.wecomUserid, state))
+    .where(eq(subscribers.wecomUserid, mappedUserid))
     .returning({ id: subscribers.id });
 
   if (updated.length === 0) {
-    // state 匹配不到任何订阅者：什么也没写。
+    // 映射的 userid 匹配不到任何订阅者：什么也没写。
     errorPage(res, 404, '未找到对应的企业微信用户。');
     return;
   }

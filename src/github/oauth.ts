@@ -4,13 +4,17 @@ import {
   createHash,
   randomBytes,
 } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 import { env } from '../config';
+import { db } from '../db/client';
+import { kvCache } from '../db/schema';
 import { sendWeComText } from '../wecom/api';
 import type { InboundMessage } from '../wecom/router';
 
 /**
  * GitHub OAuth 绑定：
- * - buildAuthorizeUrl：拼授权链接（scope 固定 public_repo，最小权限）
+ * - buildAuthorizeUrl：拼授权链接（scope 固定 public_repo，最小权限）；
+ *   state 用一次性随机 nonce（防绑定 CSRF），nonce → wecomUserid 映射存 kv_cache
  * - exchangeCode：code → access_token → 拉取用户 login
  * - encryptSecret/decryptSecret：AES-256-GCM 加密用户 token 后入库
  *   （独立实现，不复用 WeCom 的 WXBizMsgCrypt——其格式与企业微信协议绑定）
@@ -20,17 +24,36 @@ import type { InboundMessage } from '../wecom/router';
 /** 授权范围：仅 public_repo（Global Constraint：最小权限，够 star 仓库即可）。 */
 export const OAUTH_SCOPE = 'public_repo';
 
+/** kv_cache 中 OAuth state 行的 key 前缀。 */
+export const OAUTH_STATE_PREFIX = 'oauth_state_';
+
+/** OAuth state nonce 的有效期（10 分钟）。 */
+export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // 授权链接
 // ---------------------------------------------------------------------------
 
-/** 拼 GitHub OAuth 授权链接；state 携带企业微信 userid，回调时凭它定位订阅者。 */
-export function buildAuthorizeUrl(state: string): string {
+/**
+ * 拼 GitHub OAuth 授权链接。
+ * state 不再直接携带企业微信 userid（可被伪造/重放）：改为 16 字节随机
+ * nonce（32 位 hex），nonce → { wecomUserid } 映射写入 kv_cache（10 分钟过期、
+ * 回调一次性消费），回调时凭 nonce 定位订阅者。
+ */
+export async function buildAuthorizeUrl(wecomUserid: string): Promise<string> {
+  const nonce = randomBytes(16).toString('hex');
+  await db()
+    .insert(kvCache)
+    .values({
+      key: `${OAUTH_STATE_PREFIX}${nonce}`,
+      value: { wecomUserid },
+      expiresAt: new Date(Date.now() + OAUTH_STATE_TTL_MS),
+    });
   const params = new URLSearchParams({
     client_id: env.GITHUB_CLIENT_ID,
     redirect_uri: env.GITHUB_OAUTH_REDIRECT_URI,
     scope: OAUTH_SCOPE,
-    state,
+    state: nonce,
   });
   return `https://github.com/login/oauth/authorize?${params.toString()}`;
 }
@@ -151,11 +174,12 @@ export const BIND_REPLY_PREFIX =
 export const BIND_REPLY_SUFFIX = '授权完成后，回到企业微信发送「我的收藏」即可测试。';
 
 /**
- * 绑定 handler：回复带 state=发送者 userid 的 GitHub 授权链接。
+ * 绑定 handler：回复带一次性 nonce state 的 GitHub 授权链接
+ * （nonce → 发送者 userid 映射落 kv_cache，回调时校验并消费）。
  * 由 router 在模块作用域注册（content 精确等于「绑定」才命中）。
  */
 export async function bindHandler(msg: InboundMessage): Promise<void> {
-  const url = buildAuthorizeUrl(msg.fromUserName);
+  const url = await buildAuthorizeUrl(msg.fromUserName);
   await sendWeComText(
     msg.fromUserName,
     `${BIND_REPLY_PREFIX}\n${url}\n${BIND_REPLY_SUFFIX}`,

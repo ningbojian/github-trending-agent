@@ -1,0 +1,600 @@
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SearchResultItem } from '../src/agent/search';
+
+/**
+ * env 惰性单例策略：本文件用 vi.mock 固定 src/config（而非设 process.env），
+ * 避免 Proxy 缓存跨文件串味。凭据为单元测试专用假值（非真实密钥）。
+ */
+const ENV = vi.hoisted(() => ({
+  TOKEN_ENCRYPT_KEY: 'unit-test-encrypt-key',
+}));
+
+vi.mock('../src/config', () => ({ env: ENV }));
+
+// ---------------------------------------------------------------------------
+// Mocks：sendWeComText / db 层 / fetch —— 绝不触网、不连库。
+// ---------------------------------------------------------------------------
+const apiMock = vi.hoisted(() => ({
+  sendWeComText: vi.fn(),
+}));
+
+vi.mock('../src/wecom/api', () => ({
+  sendWeComText: apiMock.sendWeComText,
+}));
+
+const dbMock = vi.hoisted(() => ({
+  /** select 队列：每次 await select 链弹出一行数组作为结果集。 */
+  selectQueue: [] as Record<string, unknown>[][],
+  selectCalls: [] as { table: unknown; condition: unknown }[],
+  orderByCalls: [] as unknown[][],
+  insertCalls: [] as {
+    table: unknown;
+    values: Record<string, unknown>;
+    onConflict: unknown;
+  }[],
+  deleteCalls: [] as { table: unknown; condition: unknown }[],
+  events: [] as string[],
+}));
+
+vi.mock('../src/db/client', () => {
+  /**
+   * 可 await 的 select 流水线：orderBy/limit 只记录并返回自身，
+   * await 时从队列弹出结果集（模拟 drizzle thenable builder）。
+   */
+  function selectPipeline() {
+    const pipeline = {
+      orderBy: (...args: unknown[]) => {
+        dbMock.orderByCalls.push(args);
+        return pipeline;
+      },
+      limit: () => pipeline,
+      then: (
+        onFulfilled?: (value: Record<string, unknown>[]) => unknown,
+        onRejected?: (reason: unknown) => unknown,
+      ) => {
+        dbMock.events.push('select');
+        return Promise.resolve(dbMock.selectQueue.shift() ?? []).then(
+          onFulfilled,
+          onRejected,
+        );
+      },
+    };
+    return pipeline;
+  }
+
+  return {
+    db: () => ({
+      select: () => ({
+        from: (table: unknown) => ({
+          where: (condition: unknown) => {
+            dbMock.selectCalls.push({ table, condition });
+            return selectPipeline();
+          },
+        }),
+      }),
+      insert: (table: unknown) => ({
+        values: (values: Record<string, unknown>) => ({
+          onConflictDoUpdate: (onConflict: unknown) => {
+            dbMock.events.push('upsert');
+            dbMock.insertCalls.push({ table, values, onConflict });
+            return Promise.resolve();
+          },
+        }),
+      }),
+      delete: (table: unknown) => ({
+        where: async (condition: unknown) => {
+          dbMock.events.push('delete');
+          dbMock.deleteCalls.push({ table, condition });
+        },
+      }),
+    }),
+  };
+});
+
+import { encryptSecret } from '../src/github/oauth';
+import {
+  AUTH_EXPIRED_REPLY,
+  handleFavorite,
+  handleList,
+  handleUnfavorite,
+  STAR_FAILURE_REPLY,
+  starRepo,
+  UNBOUND_REPLY,
+  UNSTAR_FAILURE_REPLY,
+  unstarRepo,
+} from '../src/github/stars';
+import { favorites, searchCaches, subscribers } from '../src/db/schema';
+import {
+  registerHandlers,
+  resetHandlers,
+  routeMessage,
+  type InboundMessage,
+} from '../src/wecom/router';
+
+// ---------------------------------------------------------------------------
+// 工具
+// ---------------------------------------------------------------------------
+
+/** 按状态码应答的 fetch 桩（绝不触网）。 */
+function stubFetchStatus(status: number): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: status >= 200 && status < 300,
+    status,
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+/** fetch 桩：网络错误 reject。 */
+function stubFetchNetworkError(): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn().mockRejectedValue(new Error('network down'));
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+function compileQuery(wrapper: unknown): { sql: string; params: unknown[] } {
+  return new PgDialect().sqlToQuery(wrapper as SQL);
+}
+
+function makeItem(overrides: Partial<SearchResultItem> = {}): SearchResultItem {
+  return {
+    fullName: 'vercel/next.js',
+    description: 'The React Framework',
+    language: 'TypeScript',
+    stars: 128000,
+    starsDelta: 321,
+    isNew: false,
+    date: '2026-10-22',
+    htmlUrl: 'https://github.com/vercel/next.js',
+    rank: 1,
+    ...overrides,
+  };
+}
+
+function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
+  return {
+    toUserName: 'gh_agent',
+    fromUserName: 'alice',
+    createTime: 1409659813,
+    msgType: 'text',
+    content: '收藏 1',
+    msgId: '3001',
+    ...overrides,
+  };
+}
+
+/** 已绑定订阅者行（token 为 encryptSecret 加密后的密文）。 */
+function boundSubscriberRow(token = 'gho_test_token'): Record<string, unknown> {
+  return { githubTokenEnc: encryptSecret(token), githubLogin: 'alice-gh' };
+}
+
+/** 入队"最近一次搜索缓存"结果集（handleFavorite 第二次 select）。 */
+function seedSearchCache(items: SearchResultItem[]): void {
+  dbMock.selectQueue.push([{ results: items }]);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  dbMock.selectQueue.length = 0;
+  dbMock.selectCalls.length = 0;
+  dbMock.orderByCalls.length = 0;
+  dbMock.insertCalls.length = 0;
+  dbMock.deleteCalls.length = 0;
+  dbMock.events.length = 0;
+  apiMock.sendWeComText.mockResolvedValue(undefined);
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
+// ---------------------------------------------------------------------------
+// starRepo：PUT /user/starred/{owner}/{repo} 三分支
+// ---------------------------------------------------------------------------
+describe('starRepo（GitHub star，三分支）', () => {
+  it('204 → ok：PUT /user/starred/{owner}/{repo}，Bearer token', async () => {
+    const fetchMock = stubFetchStatus(204);
+
+    await expect(starRepo('gho_tok', 'vercel/next.js')).resolves.toBe('ok');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/user/starred/vercel/next.js');
+    expect(init.method).toBe('PUT');
+    const headers = init.headers as Record<string, string>;
+    expect(headers.authorization).toBe('Bearer gho_tok');
+  });
+
+  it('401 → auth_failed', async () => {
+    stubFetchStatus(401);
+    await expect(starRepo('bad-token', 'a/b')).resolves.toBe('auth_failed');
+  });
+
+  it('其他状态码（500）→ failed，不抛错', async () => {
+    stubFetchStatus(500);
+    await expect(starRepo('gho_tok', 'a/b')).resolves.toBe('failed');
+    expect(console.warn).toHaveBeenCalled();
+  });
+
+  it('网络错误 → failed，不抛错（不冲出 handler）', async () => {
+    stubFetchNetworkError();
+    await expect(starRepo('gho_tok', 'a/b')).resolves.toBe('failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// unstarRepo：DELETE /user/starred/{owner}/{repo}
+// ---------------------------------------------------------------------------
+describe('unstarRepo（GitHub unstar）', () => {
+  it('204 → ok：DELETE 同一路径', async () => {
+    const fetchMock = stubFetchStatus(204);
+
+    await expect(unstarRepo('gho_tok', 'vercel/next.js')).resolves.toBe('ok');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/user/starred/vercel/next.js');
+    expect(init.method).toBe('DELETE');
+    const headers = init.headers as Record<string, string>;
+    expect(headers.authorization).toBe('Bearer gho_tok');
+  });
+
+  it('401 → auth_failed', async () => {
+    stubFetchStatus(401);
+    await expect(unstarRepo('bad', 'a/b')).resolves.toBe('auth_failed');
+  });
+
+  it('其他状态码（500）→ failed，不抛错', async () => {
+    stubFetchStatus(500);
+    await expect(unstarRepo('gho_tok', 'a/b')).resolves.toBe('failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleFavorite：收藏 N
+// ---------------------------------------------------------------------------
+describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
+  it('未绑定（无订阅者行）→ 回复引导绑定，不写库、不打 GitHub', async () => {
+    const fetchMock = stubFetchStatus(204);
+    dbMock.selectQueue.push([]); // subscribers 无行
+
+    await handleFavorite(makeMsg({ content: '收藏 1' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(UNBOUND_REPLY);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(dbMock.insertCalls).toHaveLength(0);
+    // 第二次 select（search_caches）也不会发生。
+    expect(dbMock.selectCalls).toHaveLength(1);
+  });
+
+  it('未绑定（行存在但 github_token_enc 为 NULL）→ 同样引导绑定', async () => {
+    stubFetchStatus(204);
+    dbMock.selectQueue.push([{ githubTokenEnc: null }]);
+
+    await handleFavorite(makeMsg({ content: '收藏 1' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(UNBOUND_REPLY);
+    expect(dbMock.insertCalls).toHaveLength(0);
+  });
+
+  it('成功：解密 token → star 204 → upsert favorites（starred_on_github=true）→ 中文成功回复', async () => {
+    const fetchMock = stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    seedSearchCache([
+      makeItem({ fullName: 'rust-lang/rust' }),
+      makeItem({ fullName: 'vercel/next.js' }),
+    ]);
+
+    await handleFavorite(makeMsg({ content: '收藏 2' }));
+
+    // GitHub star 打在缓存第 2 条上。
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/user/starred/vercel/next.js');
+    expect(init.method).toBe('PUT');
+    const headers = init.headers as Record<string, string>;
+    expect(headers.authorization).toMatch(/^Bearer /);
+
+    // favorites upsert：目标表 + 值 + onConflictDoUpdate（唯一约束幂等）。
+    expect(dbMock.insertCalls).toHaveLength(1);
+    const upsert = dbMock.insertCalls[0];
+    expect(upsert.table).toBe(favorites);
+    expect(upsert.values).toMatchObject({
+      wecomUserid: 'alice',
+      fullName: 'vercel/next.js',
+      starredOnGithub: true,
+    });
+    expect(upsert.onConflict).toBeTruthy();
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('✅ 已收藏 vercel/next.js，已同步到你的 GitHub');
+  });
+
+  it('auth_failed（GitHub 401）→ 回复授权已过期，不写 favorites', async () => {
+    stubFetchStatus(401);
+    dbMock.selectQueue.push([boundSubscriberRow('expired-token')]);
+    seedSearchCache([makeItem()]);
+
+    await handleFavorite(makeMsg({ content: '收藏 1' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(AUTH_EXPIRED_REPLY);
+    expect(dbMock.insertCalls).toHaveLength(0);
+  });
+
+  it('GitHub 其他失败状态（500）→ 回复通用失败，不写 favorites，不抛错', async () => {
+    stubFetchStatus(500);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    seedSearchCache([makeItem()]);
+
+    await expect(handleFavorite(makeMsg({ content: '收藏 1' }))).resolves.toBeUndefined();
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(STAR_FAILURE_REPLY);
+    expect(dbMock.insertCalls).toHaveLength(0);
+  });
+
+  it('N 越界（缓存只有 2 条，收藏 5）→ 回复「没有第 5 条」，不打 GitHub、不写库', async () => {
+    const fetchMock = stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    seedSearchCache([makeItem(), makeItem({ fullName: 'a/b' })]);
+
+    await handleFavorite(makeMsg({ content: '收藏 5' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('没有第 5 条');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(dbMock.insertCalls).toHaveLength(0);
+  });
+
+  it('无搜索缓存行 → 回复「没有第 1 条」', async () => {
+    stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()]); // subscribers 有行；cache 队列为空
+
+    await handleFavorite(makeMsg({ content: '收藏 1' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('没有第 1 条');
+    expect(dbMock.insertCalls).toHaveLength(0);
+  });
+
+  it('已收藏幂等：GitHub 无法区分"已 starred"，重复收藏走同一 upsert（唯一约束兜底）', async () => {
+    stubFetchStatus(204);
+    dbMock.selectQueue.push(
+      [boundSubscriberRow()],
+      [{ results: [makeItem()] }],
+      [boundSubscriberRow()],
+      [{ results: [makeItem()] }],
+    );
+
+    await handleFavorite(makeMsg({ content: '收藏 1' }));
+    await handleFavorite(makeMsg({ content: '收藏1' }));
+
+    expect(dbMock.insertCalls).toHaveLength(2);
+    for (const call of dbMock.insertCalls) {
+      expect(call.table).toBe(favorites);
+      expect(call.onConflict).toBeTruthy(); // onConflictDoUpdate → 重复收藏不炸唯一约束
+    }
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
+    const [, second] = apiMock.sendWeComText.mock.calls[1] as [string, string];
+    expect(second).toBe('✅ 已收藏 vercel/next.js，已同步到你的 GitHub');
+  });
+
+  it('「收藏」后跟非数字不进 handler（router 层拦截，直接调用静默返回）', async () => {
+    const fetchMock = stubFetchStatus(204);
+    await handleFavorite(makeMsg({ content: '收藏夹怎么用' }));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleUnfavorite：取消收藏 N
+// ---------------------------------------------------------------------------
+describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
+  /** 入队"我的收藏"列表行（handleUnfavorite 第一次 select）。 */
+  function seedFavorites(rows: Array<{ fullName: string; createdAt: Date }>): void {
+    dbMock.selectQueue.push(rows);
+  }
+
+  it('成功：按序号取行 → DELETE unstar 204 → 删 favorites 行 → 回复已取消', async () => {
+    const fetchMock = stubFetchStatus(204);
+    seedFavorites([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+      { fullName: 'b/two', createdAt: new Date('2026-10-02T00:00:00Z') },
+    ]);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 2' }));
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/user/starred/b/two');
+    expect(init.method).toBe('DELETE');
+
+    expect(dbMock.deleteCalls).toHaveLength(1);
+    const del = dbMock.deleteCalls[0];
+    expect(del.table).toBe(favorites);
+    const compiled = compileQuery(del.condition);
+    expect(compiled.sql).toContain('"favorites"."wecom_userid"');
+    expect(compiled.sql).toContain('"favorites"."full_name"');
+    expect(compiled.params).toContain('alice');
+    expect(compiled.params).toContain('b/two');
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('已取消收藏 b/two');
+  });
+
+  it('N 越界（2 条收藏，取消第 3 条）→ 回复「没有第 3 条」，不打 GitHub、不删行', async () => {
+    const fetchMock = stubFetchStatus(204);
+    seedFavorites([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+      { fullName: 'b/two', createdAt: new Date('2026-10-02T00:00:00Z') },
+    ]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 3' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('没有第 3 条');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(dbMock.deleteCalls).toHaveLength(0);
+  });
+
+  it('auth_failed（GitHub 401）→ 回复授权已过期，不删 favorites 行', async () => {
+    stubFetchStatus(401);
+    seedFavorites([{ fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') }]);
+    dbMock.selectQueue.push([boundSubscriberRow('expired')]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 1' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(AUTH_EXPIRED_REPLY);
+    expect(dbMock.deleteCalls).toHaveLength(0);
+  });
+
+  it('GitHub 其他失败状态（500）→ 回复通用失败，不删行，不抛错', async () => {
+    stubFetchStatus(500);
+    seedFavorites([{ fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') }]);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+
+    await expect(
+      handleUnfavorite(makeMsg({ content: '取消收藏 1' })),
+    ).resolves.toBeUndefined();
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(UNSTAR_FAILURE_REPLY);
+    expect(dbMock.deleteCalls).toHaveLength(0);
+  });
+
+  it('未绑定 → 引导绑定，不打 GitHub、不删行', async () => {
+    const fetchMock = stubFetchStatus(204);
+    seedFavorites([{ fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') }]);
+    dbMock.selectQueue.push([{ githubTokenEnc: null }]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 1' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(UNBOUND_REPLY);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(dbMock.deleteCalls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleList：我的收藏
+// ---------------------------------------------------------------------------
+describe('handleList（我的收藏 → 编号列表）', () => {
+  it('按 created_at 升序列出：编号 + owner/repo + 创建日期', async () => {
+    dbMock.selectQueue.push([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T13:00:00Z') },
+      { fullName: 'b/two', createdAt: new Date('2026-10-05T08:30:00Z') },
+    ]);
+
+    await handleList(makeMsg({ content: '我的收藏' }));
+
+    // 查询按 created_at asc 排序。
+    expect(dbMock.orderByCalls).toHaveLength(1);
+    const compiled = compileQuery(dbMock.orderByCalls[0][0]);
+    expect(compiled.sql).toContain('"favorites"."created_at"');
+    expect(compiled.sql).toContain('asc');
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    const lines = content.split('\n');
+    expect(lines).toHaveLength(3);
+    expect(lines[1]).toBe('1. a/one（2026-10-01）');
+    expect(lines[2]).toBe('2. b/two（2026-10-05）');
+  });
+
+  it('空收藏 → 友好中文空态回复（不含编号列表）', async () => {
+    dbMock.selectQueue.push([]);
+
+    await handleList(makeMsg({ content: '我的收藏' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('收藏');
+    expect(content).not.toMatch(/^\d+\./m);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// router 分发顺序：帮助 → 取消收藏 N → 收藏 N → 我的收藏 → 绑定 → search 兜底
+// ---------------------------------------------------------------------------
+describe('router 分发顺序（五路由 + search 兜底）', () => {
+  const helpHandler = vi.fn();
+  const unfavoriteHandler = vi.fn();
+  const favoriteHandler = vi.fn();
+  const listHandler = vi.fn();
+  const bindHandlerMock = vi.fn();
+  const searchHandler = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetHandlers();
+    registerHandlers({
+      help: helpHandler,
+      unfavorite: unfavoriteHandler,
+      favorite: favoriteHandler,
+      list: listHandler,
+      bind: bindHandlerMock,
+      search: searchHandler,
+    });
+  });
+
+  it('「帮助」→ help', async () => {
+    await routeMessage(makeMsg({ content: '帮助' }));
+    expect(helpHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「取消收藏 1」→ unfavorite（不误入 favorite，尽管顺序上收藏在后）', async () => {
+    await routeMessage(makeMsg({ content: '取消收藏 1' }));
+    expect(unfavoriteHandler).toHaveBeenCalledTimes(1);
+    expect(favoriteHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「收藏 1」→ favorite', async () => {
+    await routeMessage(makeMsg({ content: '收藏 1' }));
+    expect(favoriteHandler).toHaveBeenCalledTimes(1);
+    expect(unfavoriteHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「我的收藏」（精确）→ list', async () => {
+    await routeMessage(makeMsg({ content: '我的收藏' }));
+    expect(listHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「绑定」（精确）→ bind', async () => {
+    await routeMessage(makeMsg({ content: '绑定' }));
+    expect(bindHandlerMock).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('其他文本 → search 兜底仍然完好', async () => {
+    await routeMessage(makeMsg({ content: 'python 热榜' }));
+    expect(searchHandler).toHaveBeenCalledTimes(1);
+    expect(helpHandler).not.toHaveBeenCalled();
+    expect(favoriteHandler).not.toHaveBeenCalled();
+    expect(unfavoriteHandler).not.toHaveBeenCalled();
+    expect(listHandler).not.toHaveBeenCalled();
+    expect(bindHandlerMock).not.toHaveBeenCalled();
+  });
+
+  it('「我的收藏夹」（非精确）、「取消收藏」（无数字）→ 落 search 兜底', async () => {
+    await routeMessage(makeMsg({ content: '我的收藏夹' }));
+    await routeMessage(makeMsg({ content: '取消收藏' }));
+    expect(searchHandler).toHaveBeenCalledTimes(2);
+    expect(listHandler).not.toHaveBeenCalled();
+    expect(unfavoriteHandler).not.toHaveBeenCalled();
+  });
+});

@@ -65,10 +65,13 @@ jobs:
         env:
           # 填生产域名（如 myapp.vercel.app），不要带 https:// 前缀
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
-        # -f：非 2xx 时 curl 退出非零，使本步骤失败并触发下方告警
+        # 记录响应体与状态码再断言：-f 会吞掉 5xx 的响应体，排障时看不到服务端 detail
         run: |
-          curl -sS -f -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
-            -H "Authorization: Bearer ${CRON_SECRET}"
+          CODE=$(curl -sS -o digest-resp.json -w "%{http_code}" -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
+            -H "Authorization: Bearer ${CRON_SECRET}")
+          echo "HTTP ${CODE}"
+          cat digest-resp.json; echo
+          [ "${CODE}" = 200 ]
 
       - name: 失败告警到企业微信管理员
         if: failure() && env.WECOM_ADMIN_USERID != ''

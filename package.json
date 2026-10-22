@@ -2,7 +2,6 @@
   "name": "github-trending-agent",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "description": "基于企业微信的对话式 GitHub Trending 助手",
   "engines": {
     "node": ">=22"

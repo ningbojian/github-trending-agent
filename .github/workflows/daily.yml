@@ -1,0 +1,90 @@
+# 每日管线：抓取 GitHub Trending → 补全 topics → 触发简报推送。
+# cron 0 1 * * * 为 UTC（= 北京时间 09:00）；也可 workflow_dispatch 手动跑全链路。
+name: 每日热榜管线
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  daily:
+    name: 抓取 → 补全 → 推送
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # 注意：src/config.ts 的 zod 校验要求全量必填变量——即便 scraper/enrich CLI
+      # 只实际用到 NEON_DATABASE_URL 与 GITHUB_TOKEN，缺任一必填项都会在
+      # `db()` 初始化时抛错并触发失败告警。Actions secrets 须按此清单配置。
+      NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      # 可选：未配置时 enrich 步骤告警并跳过，不视为失败
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      WECOM_CORP_ID: ${{ secrets.WECOM_CORP_ID }}
+      WECOM_AGENT_ID: ${{ secrets.WECOM_AGENT_ID }}
+      WECOM_SECRET: ${{ secrets.WECOM_SECRET }}
+      WECOM_CALLBACK_TOKEN: ${{ secrets.WECOM_CALLBACK_TOKEN }}
+      WECOM_CALLBACK_AES_KEY: ${{ secrets.WECOM_CALLBACK_AES_KEY }}
+      # 可选：未配置时失败告警步骤跳过（仅打 warning）
+      WECOM_ADMIN_USERID: ${{ secrets.WECOM_ADMIN_USERID }}
+      GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
+      GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
+      GITHUB_OAUTH_REDIRECT_URI: ${{ secrets.GITHUB_OAUTH_REDIRECT_URI }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      TOKEN_ENCRYPT_KEY: ${{ secrets.TOKEN_ENCRYPT_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: 抓取 Trending 并入库
+        run: npx tsx src/scraper/run-scraper.ts
+
+      - name: 补全仓库 topics（GitHub API）
+        run: npx tsx src/github/run-enrich.ts
+
+      - name: 触发简报推送（Vercel cron 端点）
+        env:
+          # 填生产域名（如 myapp.vercel.app），不要带 https:// 前缀
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+        # -f：非 2xx 时 curl 退出非零，使本步骤失败并触发下方告警
+        run: |
+          curl -sS -f -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
+            -H "Authorization: Bearer ${CRON_SECRET}"
+
+      - name: 失败告警到企业微信管理员
+        if: failure() && env.WECOM_ADMIN_USERID != ''
+        env:
+          ALERT_WORKFLOW: ${{ github.workflow }}
+          ALERT_RUN_ID: ${{ github.run_id }}
+          ALERT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TOKEN=$(curl -sS "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${WECOM_CORP_ID}&corpsecret=${WECOM_SECRET}" | jq -r '.access_token // empty')
+          if [ -z "${TOKEN}" ]; then
+            echo "::warning::获取企业微信 access_token 失败，跳过告警"
+            exit 0
+          fi
+          curl -sS -X POST "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${TOKEN}" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n \
+              --arg touser "${WECOM_ADMIN_USERID}" \
+              --arg content "⚠️ GitHub Trending 每日管线失败：工作流 ${ALERT_WORKFLOW}，Run ID ${ALERT_RUN_ID}，详情 ${ALERT_RUN_URL}" \
+              '{touser: $touser, msgtype: "text", text: {content: $content}}')"
+
+      - name: 未配置管理员时跳过告警
+        if: failure() && env.WECOM_ADMIN_USERID == ''
+        run: echo "::warning::WECOM_ADMIN_USERID 未配置，跳过失败告警"

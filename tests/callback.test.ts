@@ -36,7 +36,7 @@ vi.mock('../src/config', () => ({
  */
 const dbState = vi.hoisted(() => ({
   selectCalls: 0,
-  selectRows: [] as Array<{ key: string; value: unknown; expiresAt: Date }>,
+  selectRows: [] as Array<Record<string, unknown>>,
   insertValues: [] as Array<Record<string, unknown>>,
 }));
 
@@ -198,6 +198,12 @@ describe('GET /api/wecom-callback — URL 验证', () => {
 });
 
 describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
+  beforeEach(() => {
+    // Task 13：路由前会先 ensureSubscriber；钉一行「已开通」的订阅者，
+    // 让分发测试不走新用户欢迎语路径（欢迎语推送不得在单测中触网）。
+    dbState.selectRows = [{ wecomUserid: 'alice', active: true }];
+  });
+
   it('先返回 200 空串，handler 在响应返回之后才被调用（5 秒规则关键时序）', async () => {
     const events: string[] = [];
     searchHandler.mockImplementation(() => {

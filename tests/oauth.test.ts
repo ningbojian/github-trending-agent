@@ -290,6 +290,16 @@ beforeEach(() => {
 });
 
 describe('bindHandler', () => {
+  beforeEach(() => {
+    // Task 13：router 分发前会先 ensureSubscriber；钉一行「已开通」的订阅者
+    // （select 桩返回非空即视为已存在），避免触发新用户欢迎语与多余 insert。
+    dbState.kvSelectRows.push({
+      key: 'subscriber-placeholder',
+      value: {},
+      expiresAt: new Date(0),
+    });
+  });
+
   it('content 为「绑定」→ 回复含授权链接的文本（state=随机 nonce，userid 落 kv_cache）', async () => {
     await routeMessage(makeMsg());
 

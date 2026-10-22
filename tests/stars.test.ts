@@ -193,6 +193,18 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
+// 交互文案常量：字面量逐字固定（防止仅引用常量自证、文案漂移无人察觉）
+// ---------------------------------------------------------------------------
+describe('交互文案常量（字面量固定）', () => {
+  it('四条失败/引导文案与产品文案逐字一致', () => {
+    expect(UNBOUND_REPLY).toBe("先发'绑定'授权 GitHub");
+    expect(AUTH_EXPIRED_REPLY).toBe("授权已过期，请重新发'绑定'");
+    expect(STAR_FAILURE_REPLY).toBe('收藏失败，请稍后再试');
+    expect(UNSTAR_FAILURE_REPLY).toBe('取消收藏失败，请稍后再试');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // starRepo：PUT /user/starred/{owner}/{repo} 三分支
 // ---------------------------------------------------------------------------
 describe('starRepo（GitHub star，三分支）', () => {
@@ -279,6 +291,38 @@ describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
 
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     expect(content).toBe(UNBOUND_REPLY);
+    expect(dbMock.insertCalls).toHaveLength(0);
+  });
+
+  it('SELECT 按调用方 wecom_userid 过滤（per-user isolation，SELECT 与 DELETE 同样按用户隔离）', async () => {
+    stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()], [{ results: [makeItem()] }]);
+
+    await handleFavorite(makeMsg({ fromUserName: 'bob', content: '收藏 1' }));
+
+    // 第一次 SELECT（subscribers）的条件必须带上调用方的 userid。
+    expect(dbMock.selectCalls[0]?.table).toBe(subscribers);
+    const compiled = compileQuery(dbMock.selectCalls[0]?.condition);
+    expect(compiled.sql).toContain('"subscribers"."wecom_userid"');
+    expect(compiled.params).toContain('bob');
+
+    // 第二次 SELECT（search_caches）同样按调用方隔离。
+    const cacheCompiled = compileQuery(dbMock.selectCalls[1]?.condition);
+    expect(cacheCompiled.sql).toContain('"search_caches"."wecom_userid"');
+    expect(cacheCompiled.params).toContain('bob');
+  });
+
+  it('密文损坏（github_token_enc 为垃圾数据）→ 回复授权已过期，不打 GitHub、不写库', async () => {
+    const fetchMock = stubFetchStatus(204);
+    dbMock.selectQueue.push([{ githubTokenEnc: '!!!corrupt-ciphertext!!!' }]);
+    seedSearchCache([makeItem()]);
+
+    await handleFavorite(makeMsg({ content: '收藏 1' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(AUTH_EXPIRED_REPLY);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(dbMock.insertCalls).toHaveLength(0);
   });
 

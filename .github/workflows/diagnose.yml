@@ -1,0 +1,21 @@
+name: 临时诊断（跑完即删）
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 探测三个端点
+        env:
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          for path in "/api/cron-push-digest" "/api/wecom-callback" "/api/oauth-github"; do
+            echo "===== GET ${path} ====="
+            CODE=$(curl -sS -o probe-body.txt -w "%{http_code}" -m 30 "https://${VERCEL_URL}${path}")
+            echo "HTTP ${CODE}"; cat probe-body.txt; echo
+          done
+          echo "===== POST /api/cron-push-digest (authed) ====="
+          CODE=$(curl -sS -o probe-body.txt -w "%{http_code}" -m 60 -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
+            -H "Authorization: Bearer ${CRON_SECRET}")
+          echo "HTTP ${CODE}"; cat probe-body.txt; echo

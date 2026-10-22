@@ -1,19 +1,15 @@
-name: 临时诊断2（跑完即删）
+name: 临时诊断3（跑完即删）
 on:
   workflow_dispatch:
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: 逐代探测部署 URL
+      - name: 调用 _diag 端点
+        env:
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          for host in \
-            "github-trending-agent-8meggvq4y-ningbojians-projects.vercel.app" \
-            "github-trending-agent-izbrlpnmo-ningbojians-projects.vercel.app" \
-            "github-trending-agent-jg6q0z9jl-ningbojians-projects.vercel.app" \
-            "github-trending-agent-kfgfc89w2-ningbojians-projects.vercel.app" \
-            "github-trending-agent.vercel.app"; do
-            echo "===== ${host} ====="
-            CODE=$(curl -sS -o probe-body.txt -w "%{http_code}" -m 30 "https://${host}/api/cron-push-digest")
-            echo "HTTP ${CODE}"; head -c 300 probe-body.txt; echo
-          done
+          CODE=$(curl -sS -o probe-body.txt -w "%{http_code}" -m 60 "https://${VERCEL_URL}/api/_diag?token=${CRON_SECRET}")
+          echo "HTTP ${CODE}"
+          cat probe-body.txt; echo

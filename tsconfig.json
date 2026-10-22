@@ -14,5 +14,5 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["src", "tests", "drizzle.config.ts", "vitest.config.ts"]
+  "include": ["src", "api", "tests", "drizzle.config.ts", "vitest.config.ts"]
 }

@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
-import { env } from '../config';
-import { db } from '../db/client';
-import { kvCache } from '../db/schema';
+import { env } from '../config.js';
+import { db } from '../db/client.js';
+import { kvCache } from '../db/schema.js';
 
 /**
  * 企业微信 access_token 获取与消息推送。

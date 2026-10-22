@@ -1,11 +1,11 @@
 import { eq } from 'drizzle-orm';
-import { db } from '../src/db/client';
-import { kvCache, subscribers } from '../src/db/schema';
+import { db } from '../src/db/client.js';
+import { kvCache, subscribers } from '../src/db/schema.js';
 import {
   encryptSecret,
   exchangeCode,
   OAUTH_STATE_PREFIX,
-} from '../src/github/oauth';
+} from '../src/github/oauth.js';
 
 /**
  * GitHub OAuth 回调端点（Vercel Node function，GET）。

@@ -8,17 +8,17 @@ import {
   handleFavorite,
   handleList,
   handleUnfavorite,
-} from '../github/stars';
-import { bindHandler } from '../github/oauth';
+} from '../github/stars.js';
+import { bindHandler } from '../github/oauth.js';
 import {
   ensureSubscriber,
   handleHelp,
   handleSubscribe,
   handleUnsubscribe,
   WELCOME_MESSAGE,
-} from './onboarding';
-import { sendWeComText } from './api';
-import { handleSearch } from './reply';
+} from './onboarding.js';
+import { sendWeComText } from './api.js';
+import { handleSearch } from './reply.js';
 
 export interface InboundMessage {
   toUserName: string;

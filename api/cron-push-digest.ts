@@ -1,5 +1,5 @@
-import { pushDigests } from '../src/agent/digest';
-import { env } from '../src/config';
+import { pushDigests } from '../src/agent/digest.js';
+import { env } from '../src/config.js';
 
 /**
  * 定时推送每日简报端点（Vercel Node function）。

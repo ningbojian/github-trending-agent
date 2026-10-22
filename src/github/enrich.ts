@@ -1,6 +1,6 @@
 import { eq, inArray } from 'drizzle-orm';
-import { db } from '../db/client';
-import { repos } from '../db/schema';
+import { db } from '../db/client.js';
+import { repos } from '../db/schema.js';
 
 const API_BASE = 'https://api.github.com';
 const API_VERSION = '2022-11-28';

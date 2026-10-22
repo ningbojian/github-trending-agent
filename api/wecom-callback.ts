@@ -1,7 +1,7 @@
-import { env } from '../src/config';
-import { WxbizMsgCrypt } from '../src/wecom/crypto';
-import { routeMessage } from '../src/wecom/router';
-import { extractTag, parseInboundXml } from '../src/wecom/xml';
+import { env } from '../src/config.js';
+import { WxbizMsgCrypt } from '../src/wecom/crypto.js';
+import { routeMessage } from '../src/wecom/router.js';
+import { extractTag, parseInboundXml } from '../src/wecom/xml.js';
 
 /**
  * 企业微信回调端点（Vercel Node function）。

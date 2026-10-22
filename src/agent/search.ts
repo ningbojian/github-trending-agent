@@ -1,8 +1,8 @@
 import { eq, sql, type SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { db } from '../db/client';
-import { repos, searchCaches, trendingEntries } from '../db/schema';
-import type { SearchQuery } from './parse-query';
+import { db } from '../db/client.js';
+import { repos, searchCaches, trendingEntries } from '../db/schema.js';
+import type { SearchQuery } from './parse-query.js';
 
 /** 检索单条结果：Task 9 格式化展示，"收藏 N" 按数组序号引用。 */
 export interface SearchResultItem {

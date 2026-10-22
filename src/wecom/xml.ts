@@ -1,4 +1,4 @@
-import type { InboundMessage } from './router';
+import type { InboundMessage } from './router.js';
 
 /**
  * 企微回调 XML 的轻量提取器。

@@ -1,8 +1,8 @@
 import { eq } from 'drizzle-orm';
-import { db } from '../db/client';
-import { subscribers } from '../db/schema';
-import { sendWeComText } from './api';
-import type { InboundMessage } from './router';
+import { db } from '../db/client.js';
+import { subscribers } from '../db/schema.js';
+import { sendWeComText } from './api.js';
+import type { InboundMessage } from './router.js';
 
 /**
  * 订阅开通与偏好设置（Task 13）：

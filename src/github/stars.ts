@@ -1,9 +1,9 @@
 import { and, asc, desc, eq } from 'drizzle-orm';
-import { db } from '../db/client';
-import { favorites, searchCaches, subscribers } from '../db/schema';
-import { sendWeComText } from '../wecom/api';
-import type { InboundMessage } from '../wecom/router';
-import { decryptSecret } from './oauth';
+import { db } from '../db/client.js';
+import { favorites, searchCaches, subscribers } from '../db/schema.js';
+import { sendWeComText } from '../wecom/api.js';
+import type { InboundMessage } from '../wecom/router.js';
+import { decryptSecret } from './oauth.js';
 
 /**
  * 收藏与 GitHub star 同步（Task 12）：

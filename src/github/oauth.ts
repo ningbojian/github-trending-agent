@@ -5,11 +5,11 @@ import {
   randomBytes,
 } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { env } from '../config';
-import { db } from '../db/client';
-import { kvCache } from '../db/schema';
-import { sendWeComText } from '../wecom/api';
-import type { InboundMessage } from '../wecom/router';
+import { env } from '../config.js';
+import { db } from '../db/client.js';
+import { kvCache } from '../db/schema.js';
+import { sendWeComText } from '../wecom/api.js';
+import type { InboundMessage } from '../wecom/router.js';
 
 /**
  * GitHub OAuth 绑定：

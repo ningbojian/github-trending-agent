@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url';
-import { scrapeAndUpsert } from './trending';
+import { scrapeAndUpsert } from './trending.js';
 
 /**
  * CLI 入口：抓取 GitHub Trending 并入库。

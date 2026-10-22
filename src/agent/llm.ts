@@ -4,7 +4,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
 import { generateObject, type LanguageModel } from 'ai';
 import type { ZodSchema } from 'zod';
-import { env } from '../config';
+import { env } from '../config.js';
 
 /** env.LLM_PROVIDER 的合法取值。 */
 const LLM_PROVIDERS = ['anthropic', 'openai', 'deepseek', 'ali', 'mimo'] as const;

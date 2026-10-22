@@ -1,8 +1,8 @@
 import { sql } from 'drizzle-orm';
 import { parse } from 'node-html-parser';
-import { db } from '../db/client';
-import { repos, trendingEntries } from '../db/schema';
-import { SCRAPER_LANGUAGES } from '../config';
+import { db } from '../db/client.js';
+import { repos, trendingEntries } from '../db/schema.js';
+import { SCRAPER_LANGUAGES } from '../config.js';
 
 /** 解析出的单条 trending 仓库。 */
 export interface ParsedRepo {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { generateObjectSafe } from './llm';
+import { generateObjectSafe } from './llm.js';
 
 /** LLM 结构化解析的输出契约（检索服务 Task 8 消费）。 */
 export const SearchQuerySchema = z.object({

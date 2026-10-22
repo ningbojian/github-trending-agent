@@ -1,8 +1,8 @@
 import { pathToFileURL } from 'node:url';
-import { env } from '../config';
-import { db } from '../db/client';
-import { repos } from '../db/schema';
-import { enrichMissingTopics } from './enrich';
+import { env } from '../config.js';
+import { db } from '../db/client.js';
+import { repos } from '../db/schema.js';
+import { enrichMissingTopics } from './enrich.js';
 
 /**
  * CLI 入口：查询 repos 表中 topics 为空的仓库，调 GitHub API 补全元数据。

@@ -1,9 +1,9 @@
 import { eq, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { db } from '../db/client';
-import { repos, subscribers, trendingEntries } from '../db/schema';
-import { sendWeComText } from '../wecom/api';
-import { generateObjectSafe } from './llm';
+import { db } from '../db/client.js';
+import { repos, subscribers, trendingEntries } from '../db/schema.js';
+import { sendWeComText } from '../wecom/api.js';
+import { generateObjectSafe } from './llm.js';
 
 /**
  * 每日简报：按订阅者偏好取近 7 天 top10 热榜条目，LLM 为每条生成一句

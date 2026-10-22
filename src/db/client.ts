@@ -1,7 +1,7 @@
 import { neon } from '@neondatabase/serverless';
 import { drizzle, type NeonHttpDatabase } from 'drizzle-orm/neon-http';
-import { env } from '../config';
-import * as schema from './schema';
+import { env } from '../config.js';
+import * as schema from './schema.js';
 
 /**
  * 创建 Drizzle Neon HTTP 客户端（无长连接，适配 serverless / Actions）。

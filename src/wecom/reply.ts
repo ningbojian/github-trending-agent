@@ -1,7 +1,7 @@
-import { parseSearchQuery } from '../agent/parse-query';
-import { searchTrending, type SearchResultItem } from '../agent/search';
-import { sendWeComText } from './api';
-import type { InboundMessage } from './router';
+import { parseSearchQuery } from '../agent/parse-query.js';
+import { searchTrending, type SearchResultItem } from '../agent/search.js';
+import { sendWeComText } from './api.js';
+import type { InboundMessage } from './router.js';
 
 /**
  * 消息回复引擎：把检索结果格式化成企微文本并推送。

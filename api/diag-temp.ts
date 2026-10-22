@@ -16,18 +16,18 @@ export default async function handler(req: DiagReq, res: DiagRes): Promise<void>
   }
   const results: Record<string, string> = {};
   const modules: Record<string, () => Promise<unknown>> = {
-    'src/config': () => import('../src/config'),
-    'src/db/client': () => import('../src/db/client'),
+    'src/config': () => import('../src/config.js'),
+    'src/db/client': () => import('../src/db/client.js'),
     '@neondatabase/serverless': () => import('@neondatabase/serverless'),
     'drizzle-orm/neon-http': () => import('drizzle-orm/neon-http'),
     'ai': () => import('ai'),
     '@ai-sdk/anthropic': () => import('@ai-sdk/anthropic'),
-    'src/agent/llm': () => import('../src/agent/llm'),
-    'src/agent/digest': () => import('../src/agent/digest'),
-    'src/wecom/api': () => import('../src/wecom/api'),
-    'api/cron-push-digest': () => import('./cron-push-digest'),
-    'api/wecom-callback': () => import('./wecom-callback'),
-    'api/oauth-github': () => import('./oauth-github'),
+    'src/agent/llm': () => import('../src/agent/llm.js'),
+    'src/agent/digest': () => import('../src/agent/digest.js'),
+    'src/wecom/api': () => import('../src/wecom/api.js'),
+    'api/cron-push-digest': () => import('./cron-push-digest.js'),
+    'api/wecom-callback': () => import('./wecom-callback.js'),
+    'api/oauth-github': () => import('./oauth-github.js'),
   };
   for (const [name, load] of Object.entries(modules)) {
     try {

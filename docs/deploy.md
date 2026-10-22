@@ -47,7 +47,7 @@ select table_name from information_schema.tables
 | 环境变量 | 必填/可选 | 归属服务与取值 |
 | --- | --- | --- |
 | `NEON_DATABASE_URL` | 必填 | Neon：第 1 步的连接串 |
-| `LLM_PROVIDER` | 必填 | LLM：`anthropic` \| `openai` \| `deepseek` \| `ali` |
+| `LLM_PROVIDER` | 必填 | LLM：`anthropic` \| `openai` \| `deepseek` \| `ali` \| `mimo`（小米 MiMo，Anthropic 兼容协议，baseURL 内置 `api.xiaomimimo.com/anthropic`） |
 | `LLM_API_KEY` | 必填 | LLM：提供商 API Key |
 | `LLM_MODEL` | 必填 | LLM：模型 ID（如 `claude-sonnet-4-5`） |
 | `WECOM_CORP_ID` | 必填 | 企业微信：企业 ID（第 3 步记录） |

@@ -99,6 +99,21 @@ describe('llm provider branching', () => {
     expect(mocks.createDeepSeek).not.toHaveBeenCalled();
   });
 
+  it('mimo: reuses the Anthropic client with the MiMo baseURL override', () => {
+    mocks.env.LLM_PROVIDER = 'mimo';
+    mocks.createAnthropic.mockImplementation(() => fakeProvider('mimo'));
+
+    expect(llm()).toEqual({ provider: 'mimo', modelId: 'test-model' });
+    expect(mocks.createAnthropic).toHaveBeenCalledTimes(1);
+    expect(mocks.createAnthropic).toHaveBeenCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://api.xiaomimimo.com/anthropic',
+    });
+    expect(mocks.createOpenAI).not.toHaveBeenCalled();
+    expect(mocks.createDeepSeek).not.toHaveBeenCalled();
+    expect(mocks.createAlibaba).not.toHaveBeenCalled();
+  });
+
   it('reads env at call time so a changed LLM_PROVIDER switches the branch', () => {
     expect(llm()).toEqual({ provider: 'anthropic', modelId: 'test-model' });
     mocks.env.LLM_PROVIDER = 'deepseek';
@@ -111,7 +126,7 @@ describe('llm provider branching', () => {
     mocks.env.LLM_PROVIDER = 'vertex';
 
     expect(() => llm()).toThrow(/vertex/);
-    expect(() => llm()).toThrow(/anthropic, openai, deepseek, ali/);
+    expect(() => llm()).toThrow(/anthropic, openai, deepseek, ali, mimo/);
     expect(mocks.createAnthropic).not.toHaveBeenCalled();
     expect(mocks.createOpenAI).not.toHaveBeenCalled();
     expect(mocks.createDeepSeek).not.toHaveBeenCalled();

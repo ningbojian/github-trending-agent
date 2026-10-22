@@ -7,7 +7,10 @@ import type { ZodSchema } from 'zod';
 import { env } from '../config';
 
 /** env.LLM_PROVIDER 的合法取值。 */
-const LLM_PROVIDERS = ['anthropic', 'openai', 'deepseek', 'ali'] as const;
+const LLM_PROVIDERS = ['anthropic', 'openai', 'deepseek', 'ali', 'mimo'] as const;
+
+/** 小米 MiMo 开放平台：Anthropic 兼容协议 endpoint。 */
+const MIMO_BASE_URL = 'https://api.xiaomimimo.com/anthropic';
 
 /**
  * 按 env.LLM_PROVIDER 实例化对应提供商，返回 env.LLM_MODEL 的模型实例。
@@ -28,6 +31,9 @@ export function llm(): LanguageModel {
     case 'ali':
       // @ai-sdk/ali 在 npm 不存在；官方阿里云提供商包为 @ai-sdk/alibaba（导出 alibaba）。
       return createAlibaba({ apiKey })(modelId);
+    case 'mimo':
+      // 小米 MiMo 提供 Anthropic 兼容协议，复用 Anthropic 客户端并覆盖 baseURL。
+      return createAnthropic({ apiKey, baseURL: MIMO_BASE_URL })(modelId);
     default:
       throw new Error(
         `Unknown LLM_PROVIDER "${provider}". Allowed providers: ${LLM_PROVIDERS.join(', ')}`,

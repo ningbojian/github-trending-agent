@@ -14,7 +14,12 @@
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
+    "@ai-sdk/alibaba": "^2.0.73",
+    "@ai-sdk/anthropic": "^4.0.85",
+    "@ai-sdk/deepseek": "^3.0.70",
+    "@ai-sdk/openai": "^4.0.99",
     "@neondatabase/serverless": "^1.2.0",
+    "ai": "^7.0.148",
     "drizzle-orm": "^0.45.4",
     "node-html-parser": "^9.0.5",
     "zod": "^4.6.7"

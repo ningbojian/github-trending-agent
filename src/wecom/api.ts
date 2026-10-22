@@ -21,10 +21,13 @@ interface MemoryCache {
 }
 
 let memoryCache: MemoryCache | undefined;
+/** 进行中的取 token 操作：并发冷启动共享同一次 gettoken，避免打爆企微应用级配额。 */
+let inflight: Promise<MemoryCache> | undefined;
 
-/** 测试隔离用：清空进程内 token 缓存。 */
+/** 测试隔离用：清空进程内 token 缓存与 in-flight 备忘。 */
 export function resetAccessTokenCache(): void {
   memoryCache = undefined;
+  inflight = undefined;
 }
 
 interface TokenResponse {
@@ -58,12 +61,22 @@ function isFresh(entry: MemoryCache): boolean {
 /**
  * 获取 access_token：内存缓存 → kv_cache → 企微接口（并回写 kv_cache）。
  * 距过期 < 5 分钟即刷新。
+ * 并发冷启动经 inflight 备忘去重：kv 读 + gettoken + 回写全链路只执行一次，
+ * 失败后清空备忘以便下次调用重试。
  */
 export async function getWeComAccessToken(): Promise<string> {
   if (memoryCache && isFresh(memoryCache)) {
     return memoryCache.token;
   }
 
+  inflight ??= resolveAccessToken().finally(() => {
+    inflight = undefined;
+  });
+
+  return (await inflight).token;
+}
+
+async function resolveAccessToken(): Promise<MemoryCache> {
   const rows = await db()
     .select()
     .from(kvCache)
@@ -78,7 +91,7 @@ export async function getWeComAccessToken(): Promise<string> {
       };
       if (isFresh(entry)) {
         memoryCache = entry;
-        return entry.token;
+        return entry;
       }
     }
   }
@@ -96,7 +109,7 @@ export async function getWeComAccessToken(): Promise<string> {
       target: kvCache.key,
       set: { value: { token: fresh.token }, expiresAt: new Date(fresh.expiresAt) },
     });
-  return fresh.token;
+  return fresh;
 }
 
 interface SendResponse {

@@ -23,6 +23,10 @@ function pkcs7Pad(data: Buffer): Buffer {
 }
 
 function pkcs7Unpad(data: Buffer): Buffer {
+  // 合法 PKCS#7 密文长度必为块长整数倍；先断言再读尾字节，防畸形输入
+  if (data.length % PKCS7_BLOCK_SIZE !== 0) {
+    throw new Error('WxbizMsgCrypt: invalid PKCS#7 padding');
+  }
   const padLen = data.length > 0 ? data[data.length - 1] : 0;
   if (padLen < 1 || padLen > PKCS7_BLOCK_SIZE || padLen > data.length) {
     throw new Error('WxbizMsgCrypt: invalid PKCS#7 padding');

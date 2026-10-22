@@ -391,6 +391,33 @@ describe('getWeComAccessToken — kv_cache + 内存缓存', () => {
     expect(dbState.insertValues[0]?.value).toEqual({ token: 'brand-new' });
   });
 
+  it('并发冷启动：两个并发调用只触发一次 gettoken 并共享同一 token', async () => {
+    // 让 fetch 挂起，模拟慢网络窗口内的并发到达
+    let releaseFetch!: () => void;
+    fetchMock.mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          releaseFetch = () => resolve(tokenResponse('shared-token'));
+        }),
+    );
+
+    const p1 = getWeComAccessToken();
+    const p2 = getWeComAccessToken();
+    // kv 读是微任务：等 fetch 真正发起后再放行，确保两个调用都落在挂起窗口内
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+    releaseFetch();
+
+    const [t1, t2] = await Promise.all([p1, p2]);
+
+    expect(t1).toBe('shared-token');
+    expect(t2).toBe('shared-token');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(dbState.selectCalls).toBe(1); // 第二个调用方共享同一 in-flight，不重复读 kv
+    expect(dbState.insertValues).toHaveLength(1);
+  });
+
   it('gettoken 返回 errcode 非 0 时抛错', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify({ errcode: 40013, errmsg: 'invalid corpid' }), {

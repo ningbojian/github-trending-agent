@@ -4,6 +4,8 @@
  * 无需修改本文件的分发逻辑。
  */
 
+import { handleSearch } from './reply';
+
 export interface InboundMessage {
   toUserName: string;
   fromUserName: string;
@@ -66,3 +68,6 @@ export function routeMessage(msg: InboundMessage): Promise<void> {
   }
   return dispatch(handlers.search, msg);
 }
+
+// Task 9：搜索 handler 默认挂接真实实现（测试可用 resetHandlers 恢复 stub）。
+registerHandlers({ search: handleSearch });

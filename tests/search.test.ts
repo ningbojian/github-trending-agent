@@ -76,7 +76,20 @@ describe('buildSearchSql（SQL/参数组装，不触库）', () => {
       '"trending_entries"."date" >= now() - make_interval(days => $1)',
     );
     expect(params[0]).toBe(7);
-    expect(sql).toContain('order by "trending_entries"."stars_delta" desc');
+    expect(sql).toContain(
+      'order by "trending_entries"."full_name", "trending_entries"."stars_delta" desc',
+    );
+    expect(sql.trimEnd()).toMatch(/limit \$\d+$/);
+    expect(params.at(-1)).toBe(10);
+  });
+
+  it('去重：distinct on (full_name)，内层按 full_name+原排序取首行，外层恢复原排序', () => {
+    const { sql, params } = buildSearchSql(makeQuery({ sortBy: 'stars_delta' }));
+    expect(sql).toContain('distinct on ("trending_entries"."full_name")');
+    expect(sql).toContain(
+      'order by "trending_entries"."full_name", "trending_entries"."stars_delta" desc',
+    );
+    expect(sql).toContain('order by "starsDelta" desc');
     expect(sql.trimEnd()).toMatch(/limit \$\d+$/);
     expect(params.at(-1)).toBe(10);
   });
@@ -169,17 +182,24 @@ describe('buildSearchSql（SQL/参数组装，不触库）', () => {
     expect(filtered.params).toContain(5000);
   });
 
-  it('sortBy → 排序子句：stars_delta / stars / new（is_new 优先、rank 次之）', () => {
-    expect(buildSearchSql(makeQuery({ sortBy: 'stars_delta' })).sql).toContain(
-      'order by "trending_entries"."stars_delta" desc',
+  it('sortBy → 排序子句：stars_delta / stars / new（内层 full_name 打头，外层按别名恢复原语义）', () => {
+    const delta = buildSearchSql(makeQuery({ sortBy: 'stars_delta' })).sql;
+    expect(delta).toContain(
+      'order by "trending_entries"."full_name", "trending_entries"."stars_delta" desc',
     );
-    expect(buildSearchSql(makeQuery({ sortBy: 'stars' })).sql).toContain(
-      'order by "repos"."stars" desc',
+    expect(delta).toContain('order by "starsDelta" desc');
+
+    const stars = buildSearchSql(makeQuery({ sortBy: 'stars' })).sql;
+    expect(stars).toContain(
+      'order by "trending_entries"."full_name", "repos"."stars" desc',
     );
-    const fresh = buildSearchSql(makeQuery({ sortBy: 'new' }));
-    expect(fresh.sql).toContain(
-      'order by "trending_entries"."is_new" desc, "trending_entries"."rank" asc',
+    expect(stars).toContain('order by "stars" desc');
+
+    const fresh = buildSearchSql(makeQuery({ sortBy: 'new' })).sql;
+    expect(fresh).toContain(
+      'order by "trending_entries"."full_name", "trending_entries"."is_new" desc, "trending_entries"."rank" asc',
     );
+    expect(fresh).toContain('order by "isNew" desc, "rank" asc');
   });
 
   it('topN 以参数出现在 limit 中', () => {
@@ -259,6 +279,28 @@ describe('searchTrending（db mock，无真实数据库）', () => {
       description: null,
       language: null,
     });
+  });
+
+  it('同一 full_name 出现在多个日期/语言行时只返回 1 条（按 full_name 去重）', async () => {
+    dbMock.executeRows.push(
+      { ...row, date: '2026-10-20', language: 'TypeScript', rank: 3 },
+      { ...row, date: '2026-10-22', language: 'JavaScript', rank: 1 },
+    );
+    const items = await searchTrending(makeQuery(), 'alice');
+    expect(items).toHaveLength(1);
+    expect(items.filter((i) => i.fullName === 'vercel/next.js')).toHaveLength(1);
+    // 去重后的结果同样写入缓存（不多不少，等于返回值）
+    expect(dbMock.insertCalls[0]?.values['results']).toEqual(items);
+  });
+
+  it('不同 full_name 互不影响：2 个不同仓库返回 2 条', async () => {
+    dbMock.executeRows.push({ ...row }, { ...row, fullName: 'other/repo' });
+    const items = await searchTrending(makeQuery(), 'alice');
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.fullName)).toEqual([
+      'vercel/next.js',
+      'other/repo',
+    ]);
   });
 
   it('查询无结果时返回 []', async () => {

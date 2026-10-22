@@ -36,7 +36,9 @@ function escapeLike(value: string): string {
  * - period：`date >= now() - make_interval(days => $n)`（today 1 / week 7 / month 30）
  * - languages：匹配 trending_entries.language（IN）
  * - keywords：每个关键词在 full_name / description / topics::text 上 ILIKE（字段间 OR，关键词间 AND）
- * - sortBy：stars_delta → stars_delta desc；stars → repos.stars desc；new → is_new desc, rank asc
+ * - 去重：内层 `distinct on (full_name)`，order by full_name + 原排序语义（组内取首行）；
+ *   外层按同样的排序语义（列别名）恢复排名后再 limit topN
+ * - sortBy：stars_delta → stars_delta desc；stars → stars desc；new → is_new desc, rank asc
  */
 function composeSearchSql(q: SearchQuery): SQL {
   const conditions: SQL[] = [];
@@ -70,30 +72,39 @@ function composeSearchSql(q: SearchQuery): SQL {
   const where =
     conditions.length > 0 ? sql`where ${sql.join(conditions, sql` and `)}` : sql``;
 
-  let orderBy: SQL;
+  // 内层：distinct on (full_name) 要求 order by 以 full_name 开头，
+  // 原排序语义作为组内取首行的 tiebreak；外层：按同样语义（列别名）恢复排名。
+  let orderTerms: SQL;
+  let outerOrderTerms: SQL;
   if (q.sortBy === 'stars_delta') {
-    orderBy = sql`order by ${trendingEntries.starsDelta} desc`;
+    orderTerms = sql`${trendingEntries.starsDelta} desc`;
+    outerOrderTerms = sql`${sql.identifier('starsDelta')} desc`;
   } else if (q.sortBy === 'stars') {
-    orderBy = sql`order by ${repos.stars} desc`;
+    orderTerms = sql`${repos.stars} desc`;
+    outerOrderTerms = sql`${sql.identifier('stars')} desc`;
   } else {
-    orderBy = sql`order by ${trendingEntries.isNew} desc, ${trendingEntries.rank} asc`;
+    orderTerms = sql`${trendingEntries.isNew} desc, ${trendingEntries.rank} asc`;
+    outerOrderTerms = sql`${sql.identifier('isNew')} desc, ${sql.identifier('rank')} asc`;
   }
 
   return sql`
-    select
-      ${trendingEntries.fullName} as ${sql.identifier('fullName')},
-      ${repos.description} as ${sql.identifier('description')},
-      ${repos.language} as ${sql.identifier('language')},
-      ${repos.stars} as ${sql.identifier('stars')},
-      ${trendingEntries.starsDelta} as ${sql.identifier('starsDelta')},
-      ${trendingEntries.isNew} as ${sql.identifier('isNew')},
-      ${trendingEntries.date} as ${sql.identifier('date')},
-      ${repos.htmlUrl} as ${sql.identifier('htmlUrl')},
-      ${trendingEntries.rank} as ${sql.identifier('rank')}
-    from ${trendingEntries}
-    join ${repos} on ${repos.fullName} = ${trendingEntries.fullName}
-    ${where}
-    ${orderBy}
+    select * from (
+      select distinct on (${trendingEntries.fullName})
+        ${trendingEntries.fullName} as ${sql.identifier('fullName')},
+        ${repos.description} as ${sql.identifier('description')},
+        ${repos.language} as ${sql.identifier('language')},
+        ${repos.stars} as ${sql.identifier('stars')},
+        ${trendingEntries.starsDelta} as ${sql.identifier('starsDelta')},
+        ${trendingEntries.isNew} as ${sql.identifier('isNew')},
+        ${trendingEntries.date} as ${sql.identifier('date')},
+        ${repos.htmlUrl} as ${sql.identifier('htmlUrl')},
+        ${trendingEntries.rank} as ${sql.identifier('rank')}
+      from ${trendingEntries}
+      join ${repos} on ${repos.fullName} = ${trendingEntries.fullName}
+      ${where}
+      order by ${trendingEntries.fullName}, ${orderTerms}
+    ) as ${sql.identifier('deduped')}
+    order by ${outerOrderTerms}
     limit ${q.topN}
   `;
 }
@@ -118,17 +129,29 @@ export async function searchTrending(
   const database = db();
   const { rows } = await database.execute(composeSearchSql(q));
 
-  const items: SearchResultItem[] = rows.map((row) => ({
-    fullName: String(row.fullName),
-    description: row.description == null ? null : String(row.description),
-    language: row.language == null ? null : String(row.language),
-    stars: Number(row.stars),
-    starsDelta: Number(row.starsDelta),
-    isNew: Boolean(row.isNew),
-    date: String(row.date),
-    htmlUrl: String(row.htmlUrl),
-    rank: Number(row.rank),
-  }));
+  // SQL 已 distinct on (full_name)；此处再按 full_name 兜底去重（首行优先，
+  // 与内层 order by 的 tiebreak 一致），保证同一仓库多日期/多语言行绝不重复
+  // 出现在返回值与 search_caches 缓存中。
+  const seen = new Set<string>();
+  const items: SearchResultItem[] = [];
+  for (const row of rows) {
+    const item: SearchResultItem = {
+      fullName: String(row.fullName),
+      description: row.description == null ? null : String(row.description),
+      language: row.language == null ? null : String(row.language),
+      stars: Number(row.stars),
+      starsDelta: Number(row.starsDelta),
+      isNew: Boolean(row.isNew),
+      date: String(row.date),
+      htmlUrl: String(row.htmlUrl),
+      rank: Number(row.rank),
+    };
+    if (seen.has(item.fullName)) {
+      continue;
+    }
+    seen.add(item.fullName);
+    items.push(item);
+  }
 
   await database
     .delete(searchCaches)

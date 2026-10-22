@@ -1,21 +1,19 @@
-name: 临时诊断（跑完即删）
+name: 临时诊断2（跑完即删）
 on:
   workflow_dispatch:
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: 探测三个端点
-        env:
-          VERCEL_URL: ${{ secrets.VERCEL_URL }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+      - name: 逐代探测部署 URL
         run: |
-          for path in "/api/cron-push-digest" "/api/wecom-callback" "/api/oauth-github"; do
-            echo "===== GET ${path} ====="
-            CODE=$(curl -sS -o probe-body.txt -w "%{http_code}" -m 30 "https://${VERCEL_URL}${path}")
-            echo "HTTP ${CODE}"; cat probe-body.txt; echo
+          for host in \
+            "github-trending-agent-8meggvq4y-ningbojians-projects.vercel.app" \
+            "github-trending-agent-izbrlpnmo-ningbojians-projects.vercel.app" \
+            "github-trending-agent-jg6q0z9jl-ningbojians-projects.vercel.app" \
+            "github-trending-agent-kfgfc89w2-ningbojians-projects.vercel.app" \
+            "github-trending-agent.vercel.app"; do
+            echo "===== ${host} ====="
+            CODE=$(curl -sS -o probe-body.txt -w "%{http_code}" -m 30 "https://${host}/api/cron-push-digest")
+            echo "HTTP ${CODE}"; head -c 300 probe-body.txt; echo
           done
-          echo "===== POST /api/cron-push-digest (authed) ====="
-          CODE=$(curl -sS -o probe-body.txt -w "%{http_code}" -m 60 -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
-            -H "Authorization: Bearer ${CRON_SECRET}")
-          echo "HTTP ${CODE}"; cat probe-body.txt; echo

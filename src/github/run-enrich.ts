@@ -37,7 +37,7 @@ export async function main(): Promise<void> {
     );
   } catch (error) {
     console.error('[enrich] failed:', error);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 

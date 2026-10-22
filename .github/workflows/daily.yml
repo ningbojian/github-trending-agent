@@ -18,25 +18,29 @@ jobs:
     env:
       # 注意：src/config.ts 的 zod 校验要求全量必填变量——即便 scraper/enrich CLI
       # 只实际用到 NEON_DATABASE_URL 与 GITHUB_TOKEN，缺任一必填项都会在
-      # `db()` 初始化时抛错并触发失败告警。Actions secrets 须按此清单配置。
+      # `db()` 初始化时抛错并触发失败告警。未被本管线消费的必填项用下方
+      # 占位字面量满足校验，避免把真实密钥暴露给 CI 作业（缩小泄露面）。
       NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       # 可选：未配置时 enrich 步骤告警并跳过，不视为失败
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
-      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      # 以下仅用于通过 zod min(1) 校验，本管线不消费，故不用 secrets
+      LLM_PROVIDER: "placeholder-not-used-in-ci"
+      LLM_API_KEY: "placeholder-not-used-in-ci"
+      LLM_MODEL: "placeholder-not-used-in-ci"
+      # 以下为失败告警/推送实际消费的真实 secrets
       WECOM_CORP_ID: ${{ secrets.WECOM_CORP_ID }}
       WECOM_AGENT_ID: ${{ secrets.WECOM_AGENT_ID }}
       WECOM_SECRET: ${{ secrets.WECOM_SECRET }}
-      WECOM_CALLBACK_TOKEN: ${{ secrets.WECOM_CALLBACK_TOKEN }}
-      WECOM_CALLBACK_AES_KEY: ${{ secrets.WECOM_CALLBACK_AES_KEY }}
       # 可选：未配置时失败告警步骤跳过（仅打 warning）
       WECOM_ADMIN_USERID: ${{ secrets.WECOM_ADMIN_USERID }}
-      GITHUB_CLIENT_ID: ${{ secrets.GITHUB_CLIENT_ID }}
-      GITHUB_CLIENT_SECRET: ${{ secrets.GITHUB_CLIENT_SECRET }}
-      GITHUB_OAUTH_REDIRECT_URI: ${{ secrets.GITHUB_OAUTH_REDIRECT_URI }}
+      # 以下占位：OAuth/回调/加密密钥仅 Vercel 端点使用，绝不下放到 CI
+      WECOM_CALLBACK_TOKEN: "placeholder-not-used-in-ci"
+      WECOM_CALLBACK_AES_KEY: "placeholder-not-used-in-ci"
+      GITHUB_CLIENT_ID: "placeholder-not-used-in-ci"
+      GITHUB_CLIENT_SECRET: "placeholder-not-used-in-ci"
+      GITHUB_OAUTH_REDIRECT_URI: "placeholder-not-used-in-ci"
+      TOKEN_ENCRYPT_KEY: "placeholder-not-used-in-ci"
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
-      TOKEN_ENCRYPT_KEY: ${{ secrets.TOKEN_ENCRYPT_KEY }}
 
     steps:
       - name: Checkout
@@ -73,17 +77,24 @@ jobs:
           ALERT_RUN_ID: ${{ github.run_id }}
           ALERT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          TOKEN=$(curl -sS "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${WECOM_CORP_ID}&corpsecret=${WECOM_SECRET}" | jq -r '.access_token // empty')
+          TOKEN=$(curl -sS "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${WECOM_CORP_ID}&corpsecret=${WECOM_SECRET}" | jq -r '.access_token // empty' || true)
           if [ -z "${TOKEN}" ]; then
             echo "::warning::获取企业微信 access_token 失败，跳过告警"
             exit 0
           fi
-          curl -sS -X POST "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${TOKEN}" \
+          # agentid 为自建应用 message/send 的必填字段；errcode 断言防止发送被静默拒绝
+          RESP=$(curl -sS -X POST "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${TOKEN}" \
             -H 'Content-Type: application/json' \
             -d "$(jq -n \
               --arg touser "${WECOM_ADMIN_USERID}" \
+              --arg agentid "${WECOM_AGENT_ID}" \
               --arg content "⚠️ GitHub Trending 每日管线失败：工作流 ${ALERT_WORKFLOW}，Run ID ${ALERT_RUN_ID}，详情 ${ALERT_RUN_URL}" \
-              '{touser: $touser, msgtype: "text", text: {content: $content}}')"
+              '{touser: $touser, agentid: ($agentid | tonumber), msgtype: "text", text: {content: $content}}')")
+          echo "${RESP}"
+          echo "${RESP}" | jq -e '.errcode == 0' > /dev/null || {
+            echo "::error::企业微信告警发送失败：${RESP}"
+            exit 1
+          }
 
       - name: 未配置管理员时跳过告警
         if: failure() && env.WECOM_ADMIN_USERID == ''

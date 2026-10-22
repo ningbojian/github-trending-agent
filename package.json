@@ -5,7 +5,7 @@
   "type": "module",
   "description": "基于企业微信的对话式 GitHub Trending 助手",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "test": "vitest run",

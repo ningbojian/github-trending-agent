@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- Node ≥ 20，TypeScript `strict: true`，ESM。
+- Node ≥ 22（Task 6 裁定：AI SDK v7 依赖要求 node >=22，Node 20 已弃用），TypeScript `strict: true`，ESM。
 - 所有密钥仅经环境变量；仓库内出现任何 secret 视为 bug。
 - **企业微信回调必须 < 5s 响应**：收到 POST 后先完成验签/解密/路由分发并返回空串，LLM 调用与回复发送一律在响应之后执行。
 - GitHub OAuth 仅申请 `public_repo` scope（最小权限，竞品 Diffmatic 因权限过宽流失用户的教训）。

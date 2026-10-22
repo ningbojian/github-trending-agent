@@ -56,6 +56,8 @@ export default async function handler(
     sendJson(res, 200, result);
   } catch (err) {
     console.error('cron-push-digest failed:', err);
-    sendJson(res, 500, { error: 'push failed' });
+    // detail 供 Bearer 鉴权后的调用方排障（端点不公开，不引入暴露面）
+    const detail = err instanceof Error ? err.message : String(err);
+    sendJson(res, 500, { error: 'push failed', detail });
   }
 }

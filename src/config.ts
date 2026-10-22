@@ -34,6 +34,18 @@ const envSchema = z.object({
   TOKEN_ENCRYPT_KEY: z.string().min(1),
 });
 
+/**
+ * Trending 抓取器覆盖的 per-language 榜单（URL slug，小写）。
+ * 总榜（无语言过滤）单独抓取，语言哨兵值为 'all'。
+ */
+export const SCRAPER_LANGUAGES = [
+  'python',
+  'typescript',
+  'go',
+  'rust',
+  'java',
+] as const;
+
 export type Env = z.infer<typeof envSchema>;
 
 /**

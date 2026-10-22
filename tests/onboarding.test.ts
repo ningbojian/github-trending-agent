@@ -85,8 +85,10 @@ vi.mock('../src/db/client', () => {
 import { subscribers } from '../src/db/schema';
 import {
   ensureSubscriber,
+  handleHelp,
   handleSubscribe,
   handleUnsubscribe,
+  HELP_MESSAGE,
   WELCOME_MESSAGE,
 } from '../src/wecom/onboarding';
 import {
@@ -404,5 +406,59 @@ describe('handleUnsubscribe（退订 → active=false）', () => {
     expect(compiled.params).toContain('alice');
     // digest.ts 的 pushDigests 固化 WHERE active = true（tests/digest.test.ts 已钉），
     // active=false 写入后该订阅者即被排除。
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 帮助命令
+// ---------------------------------------------------------------------------
+describe('handleHelp（帮助 → 完整用法说明）', () => {
+  it('老用户发「帮助」→ 只发帮助文案（覆盖全部用户指令；无欢迎语、无其他 handler、无写库）', async () => {
+    dbMock.selectQueue.push([existingSub()]);
+    // 挂接真实 help handler（其余 handler 保持 mock，绝不触发真实实现）。
+    registerHandlers({ help: handleHelp });
+
+    await routeMessage(makeMsg({ content: '帮助' }));
+
+    // 恰好一条回复：发给发送者的帮助文案（老用户路径，无欢迎语）。
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [to, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(to).toBe('alice');
+    expect(content).toBe(HELP_MESSAGE);
+    // 帮助文案为全中文，覆盖全部用户指令。
+    expect(content).toContain('自然语言搜索');
+    expect(content).toContain('本周 python 的 ai 项目');
+    expect(content).toContain('收藏 N');
+    expect(content).toContain('取消收藏 N');
+    expect(content).toContain('我的收藏');
+    expect(content).toContain('绑定');
+    expect(content).toContain('订阅 <偏好>');
+    expect(content).toContain('退订');
+
+    // 老用户路径：ensureSubscriber 只 select，不 insert；帮助不写任何库表。
+    expect(dbMock.selectCalls).toHaveLength(1);
+    expect(dbMock.insertCalls).toHaveLength(0);
+    expect(dbMock.updateCalls).toHaveLength(0);
+
+    // 其余 handler 一律未被调用。
+    expect(helpHandler).not.toHaveBeenCalled();
+    expect(unfavoriteHandler).not.toHaveBeenCalled();
+    expect(favoriteHandler).not.toHaveBeenCalled();
+    expect(listHandler).not.toHaveBeenCalled();
+    expect(bindHandlerMock).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(subscribeHandler).not.toHaveBeenCalled();
+    expect(unsubscribeHandler).not.toHaveBeenCalled();
+  });
+
+  it('「帮助」为精确匹配：「帮助中心」「帮」不触发 help，落入 search 兜底', async () => {
+    dbMock.selectQueue.push([existingSub()], [existingSub()]);
+
+    await routeMessage(makeMsg({ content: '帮助中心' }));
+    await routeMessage(makeMsg({ content: '帮' }));
+
+    expect(helpHandler).not.toHaveBeenCalled();
+    expect(searchHandler).toHaveBeenCalledTimes(2);
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
   });
 });

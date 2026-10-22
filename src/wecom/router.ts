@@ -12,6 +12,7 @@ import {
 import { bindHandler } from '../github/oauth';
 import {
   ensureSubscriber,
+  handleHelp,
   handleSubscribe,
   handleUnsubscribe,
   WELCOME_MESSAGE,
@@ -145,10 +146,11 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
   return dispatch(handlers.search, msg);
 }
 
-// Task 9：搜索 handler、Task 11：绑定 handler、Task 12：收藏/取消收藏/我的收藏
+// Task 9：帮助/搜索 handler、Task 11：绑定 handler、Task 12：收藏/取消收藏/我的收藏
 // handler、Task 13：订阅/退订 handler 默认挂接真实实现
 // （测试可用 resetHandlers 恢复 stub）。
 registerHandlers({
+  help: handleHelp,
   search: handleSearch,
   bind: bindHandler,
   favorite: handleFavorite,

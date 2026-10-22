@@ -25,8 +25,8 @@ vi.mock('../src/wecom/api', () => ({
 }));
 
 const dbMock = vi.hoisted(() => ({
-  /** select 队列：每次 await select 链弹出一行数组作为结果集。 */
-  selectQueue: [] as Record<string, unknown>[][],
+  /** select 队列：每次 await select 链弹出一行数组作为结果集；Error 实例表示该次查询失败。 */
+  selectQueue: [] as unknown[],
   selectCalls: [] as { table: unknown; condition: unknown }[],
   orderByCalls: [] as unknown[][],
   insertCalls: [] as {
@@ -55,7 +55,11 @@ vi.mock('../src/db/client', () => {
         onRejected?: (reason: unknown) => unknown,
       ) => {
         dbMock.events.push('select');
-        return Promise.resolve(dbMock.selectQueue.shift() ?? []).then(
+        const next = dbMock.selectQueue.shift() ?? [];
+        if (next instanceof Error) {
+          return Promise.reject(next).then(onFulfilled, onRejected);
+        }
+        return Promise.resolve(next as Record<string, unknown>[]).then(
           onFulfilled,
           onRejected,
         );
@@ -96,9 +100,11 @@ vi.mock('../src/db/client', () => {
 import { encryptSecret } from '../src/github/oauth';
 import {
   AUTH_EXPIRED_REPLY,
+  EMPTY_FAVORITES_REPLY,
   handleFavorite,
   handleList,
   handleUnfavorite,
+  LIST_FAILURE_REPLY,
   STAR_FAILURE_REPLY,
   starRepo,
   UNBOUND_REPLY,
@@ -185,6 +191,7 @@ beforeEach(() => {
   dbMock.events.length = 0;
   apiMock.sendWeComText.mockResolvedValue(undefined);
   vi.spyOn(console, 'warn').mockImplementation(() => {});
+  vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -201,6 +208,13 @@ describe('交互文案常量（字面量固定）', () => {
     expect(AUTH_EXPIRED_REPLY).toBe("授权已过期，请重新发'绑定'");
     expect(STAR_FAILURE_REPLY).toBe('收藏失败，请稍后再试');
     expect(UNSTAR_FAILURE_REPLY).toBe('取消收藏失败，请稍后再试');
+  });
+
+  it('「我的收藏」失败兜底与空态文案逐字固定（发送失败绝不冒充空态）', () => {
+    expect(LIST_FAILURE_REPLY).toBe('加载失败，请稍后再试');
+    expect(EMPTY_FAVORITES_REPLY).toBe(
+      "你还没有收藏任何项目。先搜索一下，再回复'收藏 N'即可收藏并同步 star。",
+    );
   });
 });
 
@@ -563,8 +577,67 @@ describe('handleList（我的收藏 → 编号列表）', () => {
 
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(EMPTY_FAVORITES_REPLY);
     expect(content).toContain('收藏');
     expect(content).not.toMatch(/^\d+\./m);
+  });
+
+  it('长列表截断：总字节 ≤1800、保留靠前条目、末尾标注「（内容过长，已截断）」', async () => {
+    // 40+ 条收藏：每行约 55 字节，整列表远超企微 ~2048 字节文本上限。
+    dbMock.selectQueue.push(
+      Array.from({ length: 45 }, (_, i) => ({
+        fullName: `owner${i}/repo-with-a-fairly-long-name-${i}`,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+      })),
+    );
+
+    await handleList(makeMsg({ content: '我的收藏' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThanOrEqual(1800);
+    expect(content).toContain('（内容过长，已截断）');
+    // 靠前条目保留、靠后条目丢弃（drop-tail）。
+    expect(content).toContain('1. owner0/repo-with-a-fairly-long-name-0');
+    expect(content).toContain('（2026-10-01）');
+    expect(content).not.toContain(
+      '45. owner44/repo-with-a-fairly-long-name-44',
+    );
+  });
+
+  it('非空列表发送失败 → 回「加载失败」兜底，绝不回空态文案（不再谎报"没有收藏"）', async () => {
+    dbMock.selectQueue.push([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+    ]);
+    // 第一次发送（列表本体）失败，兜底发送成功。
+    apiMock.sendWeComText.mockRejectedValueOnce(new Error('wecom down'));
+
+    await expect(
+      handleList(makeMsg({ content: '我的收藏' })),
+    ).resolves.toBeUndefined();
+
+    expect(console.error).toHaveBeenCalled();
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
+    const contents = apiMock.sendWeComText.mock.calls.map(
+      ([, text]) => text as string,
+    );
+    expect(contents[0]).toContain('1. a/one');
+    expect(contents[1]).toBe(LIST_FAILURE_REPLY);
+    // 空态文案在任何一次发送中都不得出现。
+    expect(contents.every((text) => text !== EMPTY_FAVORITES_REPLY)).toBe(true);
+  });
+
+  it('DB 读取失败 → 回「加载失败」，不冒充空态', async () => {
+    dbMock.selectQueue.push(new Error('db down'));
+
+    await expect(
+      handleList(makeMsg({ content: '我的收藏' })),
+    ).resolves.toBeUndefined();
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(LIST_FAILURE_REPLY);
+    expect(content).not.toBe(EMPTY_FAVORITES_REPLY);
   });
 });
 

@@ -301,6 +301,31 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
     expect(content).toContain('llm');
   });
 
+  it('退订后再订阅（active=false + 旧偏好）→ 同时写 preferences 与 active: true，恢复每日简报', async () => {
+    // 场景：先「退订」（handleUnsubscribe 写 active=false，见下方退订 describe），
+    // 再「订阅 python,ai」——README/HELP/UNSUBSCRIBE_REPLY 均承诺可随时重新订阅，
+    // 若 update 只写 preferences，active 仍为 false，简报永远恢复不了。
+    await handleSubscribe(makeMsg({ content: '订阅 python,ai' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    const update = dbMock.updateCalls[0]!;
+    expect(update.table).toBe(subscribers);
+    expect(update.values).toEqual({
+      preferences: { languages: [], keywords: ['python', 'ai'] },
+      active: true,
+    });
+    const compiled = compileQuery(update.condition);
+    expect(compiled.sql).toContain('"subscribers"."wecom_userid"');
+    expect(compiled.params).toContain('alice');
+
+    // 确认回执照常发出（老用户订阅路径的其他行为不受影响）。
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('已订阅');
+    expect(content).toContain('python');
+    expect(content).toContain('ai');
+  });
+
   it('分隔符规则：中英文逗号、顿号、空格混合 + 多余空白 → 全部拆分并 trim', async () => {
     await handleSubscribe(makeMsg({ content: '订阅 python，rust、 go,,  web' }));
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import handler, {
   type CallbackRequest,
   type CallbackResponse,
+  maxDuration,
 } from '../api/wecom-callback';
 import { WxbizMsgCrypt } from '../src/wecom/crypto';
 import {
@@ -482,5 +483,14 @@ describe('sendWeComText', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(sendWeComText('nobody', 'hi')).rejects.toThrow('81013');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Vercel Node 函数配置：maxDuration 经 export 生效（不引入 vercel.json）
+// ---------------------------------------------------------------------------
+describe('api/wecom-callback — 函数时长上限', () => {
+  it('导出 maxDuration = 300（秒）', () => {
+    expect(maxDuration).toBe(300);
   });
 });

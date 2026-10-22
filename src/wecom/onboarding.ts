@@ -9,7 +9,8 @@ import type { InboundMessage } from './router';
  * - ensureSubscriber：首条消息自动开通订阅者行（新用户返回 true，router 据此先发欢迎语）；
  *   DB 错误 log warn 后 fail-open 返回 false —— 一条坏 insert 绝不阻塞聊天分发
  * - handleSubscribe：「订阅 <偏好>」→ preferences = { languages: [], keywords: tokens }
- *   整体替换（简单可预期；tokens 与 Task 10 简报的 keywords 提升同形）
+ *   整体替换（简单可预期；tokens 与 Task 10 简报的 keywords 提升同形），
+ *   并同写 active: true —— 退订后再次订阅即恢复每日简报
  * - handleUnsubscribe：「退订」（精确匹配）→ active=false；不触碰 GitHub 绑定与收藏
  */
 
@@ -128,6 +129,8 @@ function subscribedReply(keywords: string[]): string {
  * - 前缀不匹配 → 静默返回（router 层已拦；直接调用同此守卫）
  * - 无可解析关键词（裸「订阅」）→ 用法提示，不写库
  * - tokens 整体替换 preferences（languages 重置为空数组）→ 中文确认回显当前偏好
+ * - 同时写 active: true：退订（active=false）后再次订阅即恢复每日简报，
+ *   与 UNSUBSCRIBE_REPLY / HELP / README 承诺的「可随时重新订阅」一致
  */
 export async function handleSubscribe(msg: InboundMessage): Promise<void> {
   try {
@@ -146,7 +149,7 @@ export async function handleSubscribe(msg: InboundMessage): Promise<void> {
     };
     await db()
       .update(subscribers)
-      .set({ preferences })
+      .set({ preferences, active: true })
       .where(eq(subscribers.wecomUserid, msg.fromUserName));
     await sendWeComText(msg.fromUserName, subscribedReply(tokens));
   } catch (err) {

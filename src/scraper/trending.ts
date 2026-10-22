@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { parse } from 'node-html-parser';
 import { db } from '../db/client';
 import { repos, trendingEntries } from '../db/schema';
@@ -140,8 +141,11 @@ export async function scrapeAndUpsert(): Promise<{
             target: repos.fullName,
             set: {
               stars: repo.stars,
-              description: repo.description,
-              language: repo.language,
+              // coalesce(excluded.x, repos.x)：页面漂移给出 null 时保留行内已有值
+              // （enrich 补全的 description/language 不被每日 upsert 清空），
+              // 非 null 时仍以页面值覆盖。静态 SQL，无用户输入。
+              description: sql`coalesce(excluded.description, ${repos.description})`,
+              language: sql`coalesce(excluded.language, ${repos.language})`,
             },
           }),
       ),

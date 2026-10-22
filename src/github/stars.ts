@@ -12,7 +12,8 @@ import { decryptSecret } from './oauth';
  * - handleFavorite：「收藏 N」→ 从最近一次 search_caches 取第 N 条 →
  *   star → upsert favorites（唯一约束幂等）
  * - handleUnfavorite：「取消收藏 N」→ 取"我的收藏"第 N 条 → unstar → 删行
- * - handleList：「我的收藏」→ 编号列表（owner/repo + 创建日期）
+ * - handleList：「我的收藏」→ 编号列表（owner/repo + 创建日期），
+ *   ≤1800 字节截断；读取/发送失败回「加载失败」，绝不借用空态文案
  * 未绑定（无 github_token_enc）一律引导发「绑定」，绝不写库。
  */
 
@@ -38,6 +39,15 @@ export const UNSTAR_FAILURE_REPLY = '取消收藏失败，请稍后再试';
 /** 「我的收藏」为空时的友好空态文案。 */
 export const EMPTY_FAVORITES_REPLY =
   "你还没有收藏任何项目。先搜索一下，再回复'收藏 N'即可收藏并同步 star。";
+
+/** 「我的收藏」读取/发送失败的兜底文案（绝不冒充空态，不谎报"没有收藏"）。 */
+export const LIST_FAILURE_REPLY = '加载失败，请稍后再试';
+
+/** 企微文本消息上限 ~2048 字节；1800 字节为安全阈值，超出即从尾部丢弃条目。 */
+const MAX_LIST_BYTES = 1800;
+
+/** 列表截断标注（与 reply.ts 的截断纪律一致，文案区分场景）。 */
+const LIST_TRUNCATION_NOTE = '（内容过长，已截断）';
 
 /** 序号越界文案（没有第 N 条）。 */
 function outOfRangeReply(n: number): string {
@@ -313,8 +323,46 @@ function formatDate(value: Date): string {
   return `${d.getFullYear()}-${month}-${day}`;
 }
 
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, 'utf8');
+}
+
+function buildListReply(lines: string[], truncated: boolean): string {
+  const note = truncated ? `\n${LIST_TRUNCATION_NOTE}` : '';
+  return `你的收藏：\n${lines.join('\n')}${note}`;
+}
+
 /**
- * 「我的收藏」handler：编号列表（owner/repo + 创建日期）；空列表回友好空态文案。
+ * 把「我的收藏」编号列表格式化为 ≤1800 字节（企微 ~2048 字节上限的安全阈值）的文本。
+ * 超限时从尾部逐条丢弃，并追加「（内容过长，已截断）」标注——与 reply.ts 的
+ * formatSearchReply 同一截断纪律（保靠前、丢靠后）。
+ */
+function formatFavoritesList(
+  rows: Array<{ fullName: string; createdAt: Date }>,
+): string {
+  const allLines = rows.map(
+    (row, i) => `${i + 1}. ${row.fullName}（${formatDate(row.createdAt)}）`,
+  );
+  let lines = allLines;
+  let text = buildListReply(lines, false);
+  if (byteLength(text) <= MAX_LIST_BYTES) {
+    return text;
+  }
+  while (lines.length > 0) {
+    lines = lines.slice(0, -1);
+    text = buildListReply(lines, true);
+    if (byteLength(text) <= MAX_LIST_BYTES) {
+      return text;
+    }
+  }
+  // 理论不可达：表头 + 截断标注本身远小于 1800 字节。
+  return text;
+}
+
+/**
+ * 「我的收藏」handler：编号列表（owner/repo + 创建日期），≤1800 字节截断；
+ * 空列表回友好空态文案；读取或发送失败回「加载失败，请稍后再试」——
+ * 失败兜底绝不借用空态文案（用户有收藏却被告知"一个都没有"是谎报）。
  */
 export async function handleList(msg: InboundMessage): Promise<void> {
   try {
@@ -323,15 +371,12 @@ export async function handleList(msg: InboundMessage): Promise<void> {
       await sendWeComText(msg.fromUserName, EMPTY_FAVORITES_REPLY);
       return;
     }
-    const lines = rows.map(
-      (row, i) => `${i + 1}. ${row.fullName}（${formatDate(row.createdAt)}）`,
-    );
-    await sendWeComText(msg.fromUserName, `你的收藏：\n${lines.join('\n')}`);
+    await sendWeComText(msg.fromUserName, formatFavoritesList(rows));
   } catch (err) {
     console.error('handleList failed:', err);
-    // 空态文案兼作兜底：保证用户总能收到某种中文回复。
+    // 失败兜底：与空态文案严格区分，保证用户收到的是"稍后再试"而非"没有收藏"。
     try {
-      await sendWeComText(msg.fromUserName, EMPTY_FAVORITES_REPLY);
+      await sendWeComText(msg.fromUserName, LIST_FAILURE_REPLY);
     } catch {
       // 吞掉兜底发送失败。
     }

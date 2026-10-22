@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import handler, {
   type CronRequest,
   type CronResponse,
+  maxDuration,
 } from '../api/cron-push-digest';
 import { subscribers } from '../src/db/schema';
 
@@ -447,5 +448,14 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
     expect(JSON.parse(res.body ?? '')).toEqual({ sent: 2, failed: 0 });
     expect(res.headers['content-type']).toContain('application/json');
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Vercel Node 函数配置：maxDuration 经 export 生效（不引入 vercel.json）
+// ---------------------------------------------------------------------------
+describe('api/cron-push-digest — 函数时长上限', () => {
+  it('导出 maxDuration = 300（秒；串行 LLM 简报超过默认上限会尾部丢消息）', () => {
+    expect(maxDuration).toBe(300);
   });
 });

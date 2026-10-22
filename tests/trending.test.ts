@@ -1,7 +1,14 @@
 import { readFileSync } from 'node:fs';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { repos, trendingEntries } from '../src/db/schema';
 import { SCRAPER_LANGUAGES } from '../src/config';
+
+/** 把 drizzle SQL 片段编译为 { sql, params }（与其余测试文件的 compileQuery 同形）。 */
+function compileQuery(wrapper: unknown): { sql: string; params: unknown[] } {
+  return new PgDialect().sqlToQuery(wrapper as SQL);
+}
 
 /**
  * 真实页面快照（2026-10-22 抓取 https://github.com/trending?since=daily）。
@@ -258,6 +265,49 @@ describe('scrapeAndUpsert（fetch + db mock）', () => {
       language: 'Python',
       stars: 62662,
     });
+  });
+
+  it('repos 冲突更新集用 coalesce 保留已有 description/language（页面漂移 null 不再清空 enrich 补全的字段）', async () => {
+    // 无描述、无语言的页面条目：incoming description/language 均为 null。
+    const nullEnrichedHtml = `<article class="Box-row">
+  <h2 class="h3 lh-condensed">
+    <a href="/acme/no-desc-lang">acme / no-desc-lang</a>
+  </h2>
+  <a href="/acme/no-desc-lang/stargazers">1,000</a>
+  <span class="d-inline-block float-sm-right">7 stars today</span>
+</article>`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        fetchedUrls.push(url);
+        return { ok: true, status: 200, text: async () => nullEnrichedHtml };
+      }),
+    );
+
+    await scrapeAndUpsert();
+
+    const call = repoInserts().find(
+      (c) => c.values?.['fullName'] === 'acme/no-desc-lang',
+    );
+    expect(call).toBeTruthy();
+    // 写入值本身仍是 null（页面没给就是 null），断言的是冲突更新集的保留语义。
+    expect(call?.values?.['description']).toBeNull();
+    expect(call?.values?.['language']).toBeNull();
+    expect(call?.conflict?.target).toEqual(repos.fullName);
+
+    const set = call?.conflict?.set ?? {};
+    // coalesce(excluded.x, repos.x)：incoming 为 null 时保留行内已有值（enrich 补全过），
+    // 非 null 时仍以页面值覆盖。
+    const descriptionSql = compileQuery(set['description']).sql.toLowerCase();
+    expect(descriptionSql).toContain('coalesce');
+    expect(descriptionSql).toContain('excluded.description');
+    expect(descriptionSql).toContain('"repos"."description"');
+    const languageSql = compileQuery(set['language']).sql.toLowerCase();
+    expect(languageSql).toContain('coalesce');
+    expect(languageSql).toContain('excluded.language');
+    expect(languageSql).toContain('"repos"."language"');
+    // stars 仍直接覆盖为页面最新值（不参与 coalesce）。
+    expect(set['stars']).toBe(1000);
   });
 
   it('单页失败时跳过该页继续，其余页照常入库', async () => {

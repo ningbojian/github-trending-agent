@@ -8,6 +8,9 @@ import { env } from '../src/config';
  * 请求/响应最小形态与 api/wecom-callback.ts 保持一致（不引入 @vercel/node 依赖）。
  */
 
+/** Vercel Node 函数时长上限（秒）：串行 LLM 简报可能超过默认上限，经 export 生效（无需 vercel.json）。 */
+export const maxDuration = 300;
+
 /** Vercel req 的最小形态。 */
 export interface CronRequest {
   method?: string;

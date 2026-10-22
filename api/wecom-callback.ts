@@ -11,6 +11,9 @@ import { extractTag, parseInboundXml } from '../src/wecom/xml';
  * 验签/解密失败一律 401（企微据此重试/告警），不回显任何内部细节。
  */
 
+/** Vercel Node 函数时长上限（秒）：响应后仍在跑的异步分发（LLM/DB）需要余量，经 export 生效（无需 vercel.json）。 */
+export const maxDuration = 300;
+
 /** Vercel req 的最小形态（不引入 @vercel/node 依赖）。 */
 export interface CallbackRequest {
   method?: string;

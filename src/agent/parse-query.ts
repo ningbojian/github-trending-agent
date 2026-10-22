@@ -1,0 +1,219 @@
+import { z } from 'zod';
+import { generateObjectSafe } from './llm';
+
+/** LLM 结构化解析的输出契约（检索服务 Task 8 消费）。 */
+export const SearchQuerySchema = z.object({
+  languages: z.array(z.string()),
+  keywords: z.array(z.string()),
+  period: z.enum(['today', 'week', 'month', 'all']),
+  minStars: z.number().nullable(),
+  sortBy: z.enum(['stars_delta', 'stars', 'new']),
+  topN: z.number(),
+});
+
+export type SearchQuery = z.infer<typeof SearchQuerySchema>;
+
+/** 文本无任何信号时的默认查询。 */
+const DEFAULT_SEARCH_QUERY: SearchQuery = {
+  languages: [],
+  keywords: [],
+  period: 'week',
+  minStars: null,
+  sortBy: 'stars_delta',
+  topN: 10,
+};
+
+const TOP_N_MIN = 1;
+const TOP_N_MAX = 25;
+
+/**
+ * LLM 输出不可信，统一归一化：语言小写去空白、topN 钳位到 1..25、minStars ≥ 0。
+ */
+function normalizeQuery(query: SearchQuery): SearchQuery {
+  const languages = query.languages.map((l) => l.trim().toLowerCase()).filter(Boolean);
+  const keywords = query.keywords.map((k) => k.trim()).filter(Boolean);
+  const minStars =
+    query.minStars === null || !Number.isFinite(query.minStars)
+      ? null
+      : Math.max(0, Math.round(query.minStars));
+  const topN = Number.isFinite(query.topN)
+    ? Math.min(TOP_N_MAX, Math.max(TOP_N_MIN, Math.round(query.topN)))
+    : DEFAULT_SEARCH_QUERY.topN;
+  return { ...query, languages, keywords, minStars, topN };
+}
+
+/**
+ * Few-shot 示例 ≥ 3 个；铁律：只允许从文本推断，禁止编造。
+ */
+function buildPrompt(text: string): string {
+  return [
+    '你是 GitHub Trending 查询解析器。把用户消息解析成结构化 JSON。',
+    '字段：languages（编程语言，小写）、keywords（主题词，文本未提及则为空数组）、',
+    "period（today|week|month|all）、minStars（star 数门槛，未提及为 null）、",
+    "sortBy（stars_delta|stars|new）、topN（返回条数，默认 10）。",
+    '铁律：只允许从给定文本推断，禁止编造文本中没有的信息；无信号的字段一律用默认值。',
+    '',
+    '示例 1',
+    '输入：本周 python 里 ai 相关的',
+    '输出：{"languages":["python"],"keywords":["ai"],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '',
+    '示例 2',
+    '输入：帮我看下最近 star 增长快的 rust 项目',
+    '输出：{"languages":["rust"],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '',
+    '示例 3',
+    '输入：本月 typescript star 超过 10k 的前 5 个新项目',
+    '输出：{"languages":["typescript"],"keywords":[],"period":"month","minStars":10000,"sortBy":"new","topN":5}',
+    '',
+    '示例 4',
+    '输入：啊',
+    '输出：{"languages":[],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '',
+    `输入：${text}`,
+    '输出：',
+  ].join('\n');
+}
+
+/** 归一化语言名：golang→go、js→javascript、ts→typescript 等。别名长的先匹配，避免误吞。 */
+const LANGUAGE_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
+  { canonical: 'typescript', aliases: ['typescript', 'ts'] },
+  { canonical: 'javascript', aliases: ['javascript', 'js'] },
+  { canonical: 'python', aliases: ['python', 'py'] },
+  { canonical: 'rust', aliases: ['rust'] },
+  { canonical: 'go', aliases: ['golang', 'go'] },
+  { canonical: 'c++', aliases: ['c++', 'cpp'] },
+  { canonical: 'c#', aliases: ['c#', 'csharp'] },
+  { canonical: 'c', aliases: ['c'] },
+  { canonical: 'java', aliases: ['java'] },
+  { canonical: 'kotlin', aliases: ['kotlin'] },
+  { canonical: 'swift', aliases: ['swift'] },
+  { canonical: 'ruby', aliases: ['ruby'] },
+  { canonical: 'php', aliases: ['php'] },
+  { canonical: 'scala', aliases: ['scala'] },
+  { canonical: 'dart', aliases: ['dart'] },
+  { canonical: 'lua', aliases: ['lua'] },
+  { canonical: 'shell', aliases: ['shell', 'bash'] },
+  { canonical: 'elixir', aliases: ['elixir'] },
+  { canonical: 'haskell', aliases: ['haskell'] },
+  { canonical: 'zig', aliases: ['zig'] },
+];
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 关键词剔除词表：虚词/时间词/排序词/平台词，按长度倒序拼成一个正则。 */
+const KEYWORD_FILLERS = [
+  '帮我看下', '帮我看看', '请问', '帮我', '我想', '看看', '看下', '请',
+  '这个星期', '这个月', '最近一周', '近一周', '最近', '近期', '本周', '这周', '本月', '今天', '今日',
+  '新上榜', '新项目', '增长快', '涨幅快', '涨得快', '飙升', '涨幅', '增长', '上升', '最多', '最高', '总数',
+  '最新', '新进', '新',
+  'star', 'stars', 'github', 'trending', 'top',
+  '代码库', '项目', '仓库', '代码', '开源',
+  '相关', '哪些', '什么', '怎么', '如何',
+  '超过', '大于', '不低于', '以上',
+  '的', '了', '在', '里', '和', '与', '或', '等',
+  '前', '个', '条', '篇', '款', '快',
+];
+
+const FILLER_RE = new RegExp(
+  [...KEYWORD_FILLERS]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegExp)
+    .join('|'),
+  'g',
+);
+
+/**
+ * 纯函数回退解析：LLM 不可用时按正则/词表推断。无 I/O、无 LLM。
+ * period：`本周|今天|本月` 等 → today|week|month|all；languages：别名表匹配；
+ * 其余剔除虚词后的词 → keywords。
+ */
+export function fallbackParse(text: string): SearchQuery {
+  const lower = text.toLowerCase();
+
+  // period
+  let period: SearchQuery['period'] = DEFAULT_SEARCH_QUERY.period;
+  if (/今天|今日|当天|tonight/.test(lower)) period = 'today';
+  else if (/本月|这个月|当月/.test(lower)) period = 'month';
+  else if (/所有时间|全部时间|历史榜单|历史/.test(lower)) period = 'all';
+  else if (/本周|这周|这个星期|最近一周|近一周|一周/.test(lower)) period = 'week';
+
+  // languages：长别名先匹配并从工作文本中剔除，避免 c 吞掉 c++
+  let working = lower;
+  const languages: string[] = [];
+  for (const { canonical, aliases } of LANGUAGE_ALIASES) {
+    for (const alias of [...aliases].sort((a, b) => b.length - a.length)) {
+      const re = new RegExp(`(?<![a-z0-9+#])${escapeRegExp(alias)}(?![a-z0-9])`, 'g');
+      const replaced = working.replace(re, ' ');
+      if (replaced !== working) {
+        if (!languages.includes(canonical)) languages.push(canonical);
+        working = replaced;
+      }
+    }
+  }
+
+  // minStars："5000 star"、"10k star"、"star 超过 1万"
+  let minStars: number | null = null;
+  const numStar = lower.match(/(\d+(?:\.\d+)?)\s*(k|w|万)?\s*(?:个)?\s*(?:stars?|星)/);
+  const starNum = lower.match(/(?:stars?|星)[^0-9]{0,8}(\d+(?:\.\d+)?)\s*(k|w|万)?/);
+  const numMatch = numStar ?? starNum;
+  if (numMatch?.[1] !== undefined) {
+    const unit = numMatch[2];
+    const mult = unit === 'k' ? 1000 : unit === 'w' || unit === '万' ? 10000 : 1;
+    minStars = Math.round(Number.parseFloat(numMatch[1]) * mult);
+  }
+
+  // topN："前 5"、"top 5"、"5 个"；数字两侧排除相邻数字，避免从 5000 里截出 00
+  let topN = DEFAULT_SEARCH_QUERY.topN;
+  const topMatch =
+    lower.match(/(?:前|top)\s*(\d{1,2})(?!\d)/) ?? lower.match(/(?<!\d)(\d{1,2})\s*(?:个|条|篇)(?!\d)/);
+  if (topMatch?.[1] !== undefined) {
+    const n = Number.parseInt(topMatch[1], 10);
+    topN = Math.min(TOP_N_MAX, Math.max(TOP_N_MIN, n));
+  }
+
+  // sortBy
+  let sortBy: SearchQuery['sortBy'] = DEFAULT_SEARCH_QUERY.sortBy;
+  if (/(?:star|星)[^,。;]{0,12}(?:最多|最高|总数)|(?:最多|最高)(?:star|星)/.test(lower)) {
+    sortBy = 'stars';
+  } else if (/最新|新上榜|新项目|新进/.test(lower)) {
+    sortBy = 'new';
+  } else if (
+    /(?:star|星)[^,。;]{0,12}(?:增长|涨幅|飙升|上升|变快|快)|(?:增长|涨幅|飙升)[^,。;]{0,12}(?:star|星)/.test(
+      lower,
+    )
+  ) {
+    sortBy = 'stars_delta';
+  }
+
+  // keywords：剔除语言后，再剔除虚词/时间词/排序词，剩下的词即主题词
+  const keywords: string[] = [];
+  const tokens = working.replace(FILLER_RE, ' ').match(/[a-z0-9+#][a-z0-9+#.\-]*|[一-鿿]+/g) ?? [];
+  for (const token of tokens) {
+    if (/^\d+$/.test(token)) continue; // 纯数字是 star 数/条数，不是关键词
+    if (token.length < 2) continue; // 单字噪声（的、里、前…）不入关键词
+    if (!keywords.includes(token)) keywords.push(token);
+  }
+
+  return {
+    languages,
+    keywords,
+    period,
+    minStars,
+    sortBy,
+    topN,
+  };
+}
+
+/**
+ * 先 LLM 结构化解析（严格 prompt：只允许从文本推断，禁止编造）；
+ * generateObjectSafe 返回 null（SDK 失败/校验失败/未知提供商）时回退 fallbackParse。
+ */
+export async function parseSearchQuery(text: string): Promise<SearchQuery> {
+  const result = await generateObjectSafe(SearchQuerySchema, buildPrompt(text));
+  if (result === null) {
+    return fallbackParse(text);
+  }
+  return normalizeQuery(result);
+}

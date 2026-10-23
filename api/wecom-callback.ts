@@ -2,12 +2,13 @@ import { waitUntil } from '@vercel/functions';
 import { env } from '../src/config.js';
 import { WxbizMsgCrypt } from '../src/wecom/crypto.js';
 import { routeMessage } from '../src/wecom/router.js';
-import { extractTag, parseInboundXml } from '../src/wecom/xml.js';
+import { buildReplyTextXml, extractTag, parseInboundXml } from '../src/wecom/xml.js';
 
 /**
  * 企业微信回调端点（Vercel Node function）。
  * - GET：URL 验证 —— 验签并解密 echostr，明文原样回传
- * - POST：验签解密 → 构造 InboundMessage → 异步分发（不 await）→ 立即 200 空串
+ * - POST：验签解密 → 构造 InboundMessage → 异步分发（不 await）→ 立即 200
+ *   （text 消息在响应体带被动回执 XML，非 text 保持空串）。
  *   微信要求 5 秒内响应，业务耗时（LLM/DB）必须在响应之后。
  * 验签/解密失败一律 401（企微据此重试/告警），不回显任何内部细节。
  */
@@ -92,7 +93,22 @@ function handlePost(req: CallbackRequest, res: CallbackResponse): void {
   );
 }
 
-/** 对已取得的原始 XML 报文：验签解密 → 200 空串 → 异步分发。 */
+/** 即时回执中入站内容的截断上限（码点）。 */
+export const ACK_MAX_CONTENT_CHARS = 20;
+
+/**
+ * 即时回执文案：响应发出时异步分发尚未执行，无法知道后续成败，
+ * 措辞只承诺「正在处理」不承诺结果。按码点截断（emoji 计 1 个），调用方可自定义上限。
+ */
+export function buildAckContent(
+  content: string,
+  maxChars: number = ACK_MAX_CONTENT_CHARS,
+): string {
+  const truncated = Array.from(content).slice(0, maxChars).join('');
+  return `🔍 收到，正在处理「${truncated}」…`;
+}
+
+/** 对已取得的原始 XML 报文：验签解密 → 200（text 带回执）→ 异步分发。 */
 function processPost(
   req: CallbackRequest,
   xml: string,
@@ -113,7 +129,7 @@ function processPost(
   }
 
   const msg = parseInboundXml(plain);
-  // 关键时序：不 await。先回 200 空串满足企微 5 秒规则，业务处理异步进行。
+  // 关键时序：不 await。先回 200 满足企微 5 秒规则，业务处理异步进行。
   // 响应发出后 Vercel 可能立刻回收实例——裸 fire-and-forget 会被掐死
   //（生产实测：200 返回但零写入），promise 必须经 waitUntil 交平台跟踪。
   waitUntil(
@@ -121,6 +137,21 @@ function processPost(
       console.error('routeMessage failed:', err);
     }),
   );
+  // text 的唯一被动回复机会就在这次响应体里：带回执让用户立刻知道 agent 在运行。
+  // 非 text（事件/图片等）不可被动回复，保持空串让企微静默处理。
+  if (msg.msgType === 'text') {
+    res.setHeader('content-type', 'text/xml; charset=utf-8');
+    res
+      .status(200)
+      .send(
+        buildReplyTextXml({
+          toUserName: msg.fromUserName,
+          fromUserName: msg.toUserName,
+          content: buildAckContent(msg.content),
+        }),
+      );
+    return;
+  }
   res.status(200).send('');
 }
 

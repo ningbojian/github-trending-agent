@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import handler, {
+  buildAckContent,
   type CallbackRequest,
   type CallbackResponse,
   maxDuration,
 } from '../api/wecom-callback';
 import { WxbizMsgCrypt } from '../src/wecom/crypto';
+import { extractTag } from '../src/wecom/xml';
 import {
   registerHandlers,
   resetHandlers,
@@ -221,7 +223,7 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
     dbState.selectRows = [{ wecomUserid: 'alice', active: true }];
   });
 
-  it('先返回 200 空串，handler 在响应返回之后才被调用（5 秒规则关键时序）', async () => {
+  it('先返回 200 回执 XML，handler 在响应返回之后才被调用（5 秒规则关键时序）', async () => {
     const events: string[] = [];
     searchHandler.mockImplementation(() => {
       events.push('handler');
@@ -231,9 +233,9 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
     // 不 await：模拟 serverless 直接拿到返回值。
     handler(req, res);
 
-    // 同步断言：响应已经发出，handler 尚未被调用。
+    // 同步断言：响应已经发出（回执 XML 已在响应体），handler 尚未被调用。
     expect(res.statusCode).toBe(200);
-    expect(res.body).toBe('');
+    expect(res.body).toContain('🔍 收到');
     expect(searchHandler).not.toHaveBeenCalled();
     events.push('response');
 
@@ -334,14 +336,14 @@ describe('POST 响应后的异步分发经 waitUntil 交给平台跟踪', () => 
     dbState.selectRows = [{ wecomUserid: 'alice', active: true }];
   });
 
-  it('dispatch promise 注册给 waitUntil 恰好一次，200 空串仍立即发出', async () => {
+  it('dispatch promise 注册给 waitUntil 恰好一次，200 回执仍立即发出', async () => {
     const { req, res } = postRequest(inboundXml({ content: 'anything' }));
 
     handler(req, res);
 
-    // 5 秒规则不变：同步断言响应已发出。
+    // 5 秒规则不变：同步断言响应已发出（回执 XML 已在响应体）。
     expect(res.statusCode).toBe(200);
-    expect(res.body).toBe('');
+    expect(res.body).toContain('🔍 收到');
     // 平台必须拿到 dispatch promise，才能在响应回收实例后让分发活到落定。
     expect(waitUntilState.calls).toHaveLength(1);
     expect(waitUntilState.calls[0]).toBeInstanceOf(Promise);
@@ -365,6 +367,72 @@ describe('POST 响应后的异步分发经 waitUntil 交给平台跟踪', () => 
       expect.objectContaining({ message: 'handler blew up' }),
     );
     errorSpy.mockRestore();
+  });
+});
+
+describe('buildAckContent — 即时回执文案', () => {
+  it('短内容完整回显', () => {
+    expect(buildAckContent('帮助')).toBe('🔍 收到，正在处理「帮助」…');
+  });
+
+  it('超过 20 码点截断到 20', () => {
+    expect(buildAckContent('x'.repeat(50))).toBe(
+      `🔍 收到，正在处理「${'x'.repeat(20)}」…`,
+    );
+  });
+
+  it('按码点截断：emoji 各计 1 个', () => {
+    expect(buildAckContent('🤖'.repeat(30))).toBe(
+      `🔍 收到，正在处理「${'🤖'.repeat(20)}」…`,
+    );
+  });
+
+  it('maxChars 可自定义截断长度', () => {
+    expect(buildAckContent('abcdefg', 3)).toBe('🔍 收到，正在处理「abc」…');
+  });
+});
+
+describe('POST text 消息的被动回执 XML（5 秒窗口）', () => {
+  beforeEach(() => {
+    dbState.selectRows = [{ wecomUserid: 'alice', active: true }];
+  });
+
+  it('text 消息响应体为回执 XML：To/From 对调、MsgType text、字段顺序、回执文案', () => {
+    const { req, res } = postRequest(
+      inboundXml({ fromUserName: 'bob', content: 'python 热榜' }),
+    );
+
+    handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    const body = res.body ?? '';
+    expect(extractTag(body, 'ToUserName')).toBe('bob');
+    expect(extractTag(body, 'FromUserName')).toBe(CORP_ID);
+    expect(extractTag(body, 'MsgType')).toBe('text');
+    expect(extractTag(body, 'Content')).toContain('🔍 收到，正在处理');
+    expect(extractTag(body, 'Content')).toContain('python 热榜');
+    expect(Number(extractTag(body, 'CreateTime'))).toBeGreaterThan(1700000000);
+    // 字段顺序钉死：ToUserName → FromUserName → CreateTime → MsgType → Content
+    expect(body.indexOf('<ToUserName>')).toBeLessThan(
+      body.indexOf('<FromUserName>'),
+    );
+    expect(body.indexOf('<FromUserName>')).toBeLessThan(
+      body.indexOf('<CreateTime>'),
+    );
+    expect(body.indexOf('<CreateTime>')).toBeLessThan(
+      body.indexOf('<MsgType>'),
+    );
+    expect(body.indexOf('<MsgType>')).toBeLessThan(body.indexOf('<Content>'));
+  });
+
+  it('入站内容超 20 码点时回执中截断', () => {
+    const { req, res } = postRequest(inboundXml({ content: 'x'.repeat(50) }));
+
+    handler(req, res);
+
+    const content = extractTag(res.body ?? '', 'Content');
+    expect(content).toContain('x'.repeat(20));
+    expect(content).not.toContain('x'.repeat(21));
   });
 });
 
@@ -402,7 +470,7 @@ describe('POST body 未被 Vercel 解析（text/xml → undefined，原始字节
     await flushAsync();
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toBe('');
+    expect(res.body).toContain('🔍 收到');
     expect(helpHandler).toHaveBeenCalledTimes(1);
     expect(searchHandler).not.toHaveBeenCalled();
   });

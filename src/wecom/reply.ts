@@ -87,11 +87,13 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
       return;
     }
     await sendWeComText(msg.fromUserName, formatSearchReply(items));
-  } catch {
+  } catch (err) {
+    console.error('handleSearch failed:', err);
     try {
       await sendWeComText(msg.fromUserName, ERROR_REPLY);
-    } catch {
-      // 连兜底发送也失败：吞掉不重试（防递归）。
+    } catch (fallbackErr) {
+      // 连兜底发送也失败：仅记日志，吞掉不重试（防递归）。
+      console.error('search error-reply send failed:', fallbackErr);
     }
   }
 }

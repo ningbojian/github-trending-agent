@@ -362,6 +362,24 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
     expect(apiMock.sendWeComText).not.toHaveBeenCalled();
   });
 
+  it('确认发送失败且兜底也失败 → 记两条日志，不向上传播', async () => {
+    apiMock.sendWeComText.mockRejectedValue(new Error('wecom down'));
+
+    await expect(
+      handleSubscribe(makeMsg({ content: '订阅 python' })),
+    ).resolves.toBeUndefined();
+
+    expect(dbMock.updateCalls).toHaveLength(1); // 写库已完成，仅发送失败
+    expect(console.error).toHaveBeenCalledWith(
+      'handleSubscribe failed:',
+      expect.objectContaining({ message: 'wecom down' }),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      'subscribe fallback reply failed:',
+      expect.objectContaining({ message: 'wecom down' }),
+    );
+  });
+
   it('router：「订阅 python」→ subscribe handler（不落 search 兜底）', async () => {
     dbMock.selectQueue.push([existingSub()]);
 
@@ -402,6 +420,24 @@ describe('handleUnsubscribe（退订 → active=false）', () => {
 
     expect(dbMock.updateCalls).toHaveLength(0);
     expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+  });
+
+  it('确认发送失败且兜底也失败 → 记两条日志，不向上传播', async () => {
+    apiMock.sendWeComText.mockRejectedValue(new Error('wecom down'));
+
+    await expect(
+      handleUnsubscribe(makeMsg({ content: '退订' })),
+    ).resolves.toBeUndefined();
+
+    expect(dbMock.updateCalls).toHaveLength(1); // 写库已完成，仅发送失败
+    expect(console.error).toHaveBeenCalledWith(
+      'handleUnsubscribe failed:',
+      expect.objectContaining({ message: 'wecom down' }),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      'unsubscribe fallback reply failed:',
+      expect.objectContaining({ message: 'wecom down' }),
+    );
   });
 
   it('router：「退订」→ unsubscribe handler，不被「订阅」前缀吞掉', async () => {

@@ -156,8 +156,9 @@ export async function handleSubscribe(msg: InboundMessage): Promise<void> {
     console.error('handleSubscribe failed:', err);
     try {
       await sendWeComText(msg.fromUserName, SUBSCRIBE_FAILURE_REPLY);
-    } catch {
-      // 吞掉兜底发送失败，不重试（防递归）。
+    } catch (fallbackErr) {
+      // 吞掉兜底发送失败：仅记日志，不重试（防递归）。
+      console.error('subscribe fallback reply failed:', fallbackErr);
     }
   }
 }
@@ -181,8 +182,9 @@ export async function handleUnsubscribe(msg: InboundMessage): Promise<void> {
     console.error('handleUnsubscribe failed:', err);
     try {
       await sendWeComText(msg.fromUserName, UNSUBSCRIBE_FAILURE_REPLY);
-    } catch {
-      // 吞掉兜底发送失败，不重试（防递归）。
+    } catch (fallbackErr) {
+      // 吞掉兜底发送失败：仅记日志，不重试（防递归）。
+      console.error('unsubscribe fallback reply failed:', fallbackErr);
     }
   }
 }

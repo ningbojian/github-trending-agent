@@ -715,3 +715,109 @@ describe('router 分发顺序（五路由 + search 兜底）', () => {
     expect(unfavoriteHandler).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 出站兜底日志：所有吞错路径必须留运维可见的痕迹（零日志盲区补齐）。
+// ---------------------------------------------------------------------------
+describe('出站兜底日志（零日志盲区补齐）', () => {
+  /** 入队"我的收藏"列表行（handleList / handleUnfavorite 的第一次 select）。 */
+  function seedFavorites(
+    rows: Array<{ fullName: string; createdAt: Date }>,
+  ): void {
+    dbMock.selectQueue.push(rows);
+  }
+
+  it('favorite：确认发送失败且兜底也失败 → 记两条日志，不重试不重入', async () => {
+    stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    seedSearchCache([makeItem()]);
+    apiMock.sendWeComText.mockRejectedValue(new Error('wecom down'));
+
+    await expect(
+      handleFavorite(makeMsg({ content: '收藏 1' })),
+    ).resolves.toBeUndefined();
+
+    // 确认 + 兜底各发一次，无重试。
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
+    expect(console.error).toHaveBeenCalledWith(
+      'favorite fallback reply failed:',
+      expect.objectContaining({ message: 'wecom down' }),
+    );
+  });
+
+  it('unfavorite：确认发送失败且兜底也失败 → 记两条日志', async () => {
+    stubFetchStatus(204);
+    seedFavorites([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+    ]);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    apiMock.sendWeComText.mockRejectedValue(new Error('wecom down'));
+
+    await expect(
+      handleUnfavorite(makeMsg({ content: '取消收藏 1' })),
+    ).resolves.toBeUndefined();
+
+    expect(console.error).toHaveBeenCalledWith(
+      'unfavorite fallback reply failed:',
+      expect.objectContaining({ message: 'wecom down' }),
+    );
+  });
+
+  it('list：首条发送失败且兜底也失败 → 记两条日志', async () => {
+    seedFavorites([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+    ]);
+    apiMock.sendWeComText.mockRejectedValue(new Error('wecom down'));
+
+    await expect(
+      handleList(makeMsg({ content: '我的收藏' })),
+    ).resolves.toBeUndefined();
+
+    expect(console.error).toHaveBeenCalledWith(
+      'handleList failed:',
+      expect.any(Error),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      'list fallback reply failed:',
+      expect.objectContaining({ message: 'wecom down' }),
+    );
+  });
+
+  it('favorite：tokenEnc 解密失败 → AUTH_EXPIRED + console.warn 解密日志', async () => {
+    dbMock.selectQueue.push([
+      { githubTokenEnc: 'garbage-not-encrypted', githubLogin: 'alice-gh' },
+    ]);
+    seedSearchCache([makeItem()]);
+
+    await handleFavorite(makeMsg({ content: '收藏 1' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith(
+      'alice',
+      AUTH_EXPIRED_REPLY,
+    );
+    expect(console.warn).toHaveBeenCalledWith(
+      'favorite token decrypt failed:',
+      expect.any(Error),
+    );
+  });
+
+  it('unfavorite：tokenEnc 解密失败 → AUTH_EXPIRED + console.warn 解密日志', async () => {
+    seedFavorites([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+    ]);
+    dbMock.selectQueue.push([
+      { githubTokenEnc: 'garbage-not-encrypted', githubLogin: 'alice-gh' },
+    ]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 1' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith(
+      'alice',
+      AUTH_EXPIRED_REPLY,
+    );
+    expect(console.warn).toHaveBeenCalledWith(
+      'unfavorite token decrypt failed:',
+      expect.any(Error),
+    );
+  });
+});

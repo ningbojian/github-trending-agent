@@ -226,8 +226,9 @@ export async function handleFavorite(msg: InboundMessage): Promise<void> {
     let token: string;
     try {
       token = decryptSecret(tokenEnc);
-    } catch {
+    } catch (err) {
       // 密文损坏 / 密钥轮换：按授权失效引导重新绑定。
+      console.warn('favorite token decrypt failed:', err);
       await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
       return;
     }
@@ -251,8 +252,9 @@ export async function handleFavorite(msg: InboundMessage): Promise<void> {
     console.error('handleFavorite failed:', err);
     try {
       await sendWeComText(msg.fromUserName, STAR_FAILURE_REPLY);
-    } catch {
-      // 连兜底发送也失败：吞掉不重试（防递归）。
+    } catch (fallbackErr) {
+      // 连兜底发送也失败：仅记日志，吞掉不重试（防递归）。
+      console.error('favorite fallback reply failed:', fallbackErr);
     }
   }
 }
@@ -288,7 +290,8 @@ export async function handleUnfavorite(msg: InboundMessage): Promise<void> {
     let token: string;
     try {
       token = decryptSecret(tokenEnc);
-    } catch {
+    } catch (err) {
+      console.warn('unfavorite token decrypt failed:', err);
       await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
       return;
     }
@@ -309,8 +312,9 @@ export async function handleUnfavorite(msg: InboundMessage): Promise<void> {
     console.error('handleUnfavorite failed:', err);
     try {
       await sendWeComText(msg.fromUserName, UNSTAR_FAILURE_REPLY);
-    } catch {
-      // 吞掉兜底发送失败，不重试（防递归）。
+    } catch (fallbackErr) {
+      // 吞掉兜底发送失败：仅记日志，不重试（防递归）。
+      console.error('unfavorite fallback reply failed:', fallbackErr);
     }
   }
 }
@@ -377,8 +381,9 @@ export async function handleList(msg: InboundMessage): Promise<void> {
     // 失败兜底：与空态文案严格区分，保证用户收到的是"稍后再试"而非"没有收藏"。
     try {
       await sendWeComText(msg.fromUserName, LIST_FAILURE_REPLY);
-    } catch {
-      // 吞掉兜底发送失败。
+    } catch (fallbackErr) {
+      // 吞掉兜底发送失败：仅记日志，不重试（防递归）。
+      console.error('list fallback reply failed:', fallbackErr);
     }
   }
 }

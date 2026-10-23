@@ -247,13 +247,19 @@ describe('handleSearch（全链：LLM → 回退解析 → 检索 → 格式化 
     expect(EMPTY_RESULT_REPLY).toContain('换个说法');
   });
 
-  it('检索抛错 → 发送友好错误文案，且不向上传播异常', async () => {
+  it('检索抛错 → 发送友好错误文案、记 handleSearch failed 日志，且不向上传播异常', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     dbMock.failExecute = true;
     await expect(
       handleSearch(makeMsg({ content: 'python' })),
     ).resolves.toBeUndefined();
     expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', ERROR_REPLY);
     expect(ERROR_REPLY).toContain('抱歉');
+    expect(errorSpy).toHaveBeenCalledWith(
+      'handleSearch failed:',
+      expect.any(Error),
+    );
+    errorSpy.mockRestore();
   });
 
   it('LLM 硬失败（generateObjectSafe reject）也被兜住 → 错误文案', async () => {
@@ -264,11 +270,22 @@ describe('handleSearch（全链：LLM → 回退解析 → 检索 → 格式化 
     expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', ERROR_REPLY);
   });
 
-  it('sendWeComText 本身也失败时静默吞掉，不向上传播', async () => {
+  it('sendWeComText 本身也失败时吞掉不向上传播，且两条日志都记（运维可见）', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMock.failExecute = true;
     apiMock.sendWeComText.mockRejectedValue(new Error('wecom down'));
     await expect(
       handleSearch(makeMsg({ content: 'python' })),
     ).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(
+      'handleSearch failed:',
+      expect.any(Error),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      'search error-reply send failed:',
+      expect.objectContaining({ message: 'wecom down' }),
+    );
+    errorSpy.mockRestore();
   });
 });
 

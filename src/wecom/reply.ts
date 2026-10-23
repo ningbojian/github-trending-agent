@@ -12,8 +12,9 @@ import type { InboundMessage } from './router.js';
 /** 企微文本消息上限 ~2048 字节；1800 字节为安全阈值，超出即截断列表。 */
 const MAX_REPLY_BYTES = 1800;
 
-/** 编号列表末尾的固定提示语。 */
-export const FAVORITE_HINT = "回复'收藏 N'可收藏并同步 star";
+/** 搜索结果页脚：拿到结果后的下一步指引（收藏任意一条 / 查看全部指令）。 */
+export const GUIDANCE_FOOTER =
+  '💡 直接回复「收藏 N」收藏任意一条；发「帮助」查看全部指令';
 
 /** 截断标注：出现在列表与提示语之间。 */
 const TRUNCATION_NOTE = '（结果过多，已截断）';
@@ -42,7 +43,9 @@ function formatItem(item: SearchResultItem, index: number): string {
 }
 
 function buildReply(lines: string[], truncated: boolean): string {
-  const tail = truncated ? `${TRUNCATION_NOTE}\n${FAVORITE_HINT}` : FAVORITE_HINT;
+  const tail = truncated
+    ? `${TRUNCATION_NOTE}\n${GUIDANCE_FOOTER}`
+    : GUIDANCE_FOOTER;
   return lines.length === 0 ? tail : `${lines.join('\n')}\n${tail}`;
 }
 

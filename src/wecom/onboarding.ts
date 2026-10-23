@@ -14,9 +14,9 @@ import type { InboundMessage } from './router.js';
  * - handleUnsubscribe：「退订」（精确匹配）→ active=false；不触碰 GitHub 绑定与收藏
  */
 
-/** 新用户欢迎语（全中文功能说明：简报 / 搜索 / 绑定 / 订阅退订）。 */
+/** 新用户欢迎语（首行即刻可试的示例引导 + 全中文功能说明：简报 / 搜索 / 绑定 / 订阅退订）。 */
 export const WELCOME_MESSAGE = [
-  '你好！我是 GitHub 热榜助手，已为你开通订阅。',
+  '你好！我是 GitHub 热榜助手，已为你开通订阅。试试直接发：本周 python 的 ai 项目',
   '每日简报：每天自动推送 GitHub 热榜精选。',
   '搜索：直接发自然语言即可，如「本周 python 的 ai 项目」。',
   "收藏：先发'绑定'授权 GitHub，搜索后回复'收藏 N'即可收藏并同步 star。",

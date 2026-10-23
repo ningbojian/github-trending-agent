@@ -267,9 +267,11 @@ describe('首条消息 onboarding — 欢迎语', () => {
     expect(searchHandler).not.toHaveBeenCalled();
   });
 
-  it('欢迎语为全中文功能说明：简报 / 搜索示例 / 绑定 / 订阅 / 退订', () => {
+  it('欢迎语首行即刻可试的示例引导，全文覆盖全部功能说明', () => {
+    expect(WELCOME_MESSAGE.split('\n')[0]).toContain(
+      '试试直接发：本周 python 的 ai 项目',
+    );
     expect(WELCOME_MESSAGE).toContain('简报');
-    expect(WELCOME_MESSAGE).toContain('本周 python 的 ai 项目');
     expect(WELCOME_MESSAGE).toContain('绑定');
     expect(WELCOME_MESSAGE).toContain('订阅');
     expect(WELCOME_MESSAGE).toContain('退订');
@@ -495,6 +497,8 @@ describe('handleHelp（帮助 → 完整用法说明）', () => {
     expect(content).toContain('绑定');
     expect(content).toContain('订阅 <偏好>');
     expect(content).toContain('退订');
+    // 帮助菜单不带搜索结果页脚（避免噪音——它本身就是指令目录）。
+    expect(content).not.toContain('💡');
 
     // 老用户路径：ensureSubscriber 只 select，不 insert；帮助不写任何库表。
     expect(dbMock.selectCalls).toHaveLength(1);

@@ -46,7 +46,7 @@ import type { SearchResultItem } from '../src/agent/search';
 import {
   EMPTY_RESULT_REPLY,
   ERROR_REPLY,
-  FAVORITE_HINT,
+  GUIDANCE_FOOTER,
   formatSearchReply,
   handleSearch,
 } from '../src/wecom/reply';
@@ -108,7 +108,7 @@ describe('formatSearchReply（编号列表 + 固定提示语）', () => {
       [
         '1. vercel/next.js ★128000 (+321) — The React Framework',
         '2. rust-lang/rust ★99000 (+123)（新上榜） — Empowering everyone',
-        "回复'收藏 N'可收藏并同步 star",
+        '💡 直接回复「收藏 N」收藏任意一条；发「帮助」查看全部指令',
       ].join('\n'),
     );
   });
@@ -117,7 +117,7 @@ describe('formatSearchReply（编号列表 + 固定提示语）', () => {
     const out = formatSearchReply([
       makeItem({ fullName: 'x/blank', description: null }),
     ]);
-    expect(out).toBe(['1. x/blank ★128000 (+321)', FAVORITE_HINT].join('\n'));
+    expect(out).toBe(['1. x/blank ★128000 (+321)', GUIDANCE_FOOTER].join('\n'));
     expect(out).not.toContain(' — ');
   });
 
@@ -137,10 +137,14 @@ describe('formatSearchReply（编号列表 + 固定提示语）', () => {
     expect(out).toContain('3. c/c');
   });
 
-  it('提示语固定在末尾', () => {
+  it('提示语固定在末尾，且含「收藏」「帮助」两个指引关键词', () => {
     const out = formatSearchReply([makeItem()]);
-    expect(out.endsWith(FAVORITE_HINT)).toBe(true);
-    expect(FAVORITE_HINT).toBe("回复'收藏 N'可收藏并同步 star");
+    expect(out.endsWith(GUIDANCE_FOOTER)).toBe(true);
+    expect(GUIDANCE_FOOTER).toBe(
+      '💡 直接回复「收藏 N」收藏任意一条；发「帮助」查看全部指令',
+    );
+    expect(GUIDANCE_FOOTER).toContain('收藏');
+    expect(GUIDANCE_FOOTER).toContain('帮助');
   });
 
   it('空列表返回空串（空结果引导文案由 handleSearch 负责）', () => {
@@ -167,7 +171,7 @@ describe('formatSearchReply 超长截断', () => {
     const out = formatSearchReply(makeManyItems(40));
     expect(Buffer.byteLength(out, 'utf8')).toBeLessThanOrEqual(1800);
     expect(out).toContain('已截断');
-    expect(out).toContain(FAVORITE_HINT);
+    expect(out).toContain(GUIDANCE_FOOTER);
   });
 
   it('截断保留靠前条目、丢弃靠后条目', () => {
@@ -230,7 +234,7 @@ describe('handleSearch（全链：LLM → 回退解析 → 检索 → 格式化 
       [
         '1. alice/py-ai ★1000 (+100) — Python AI framework',
         '2. bob/rs-ai ★2000 (+200)（新上榜） — Rust AI toolkit',
-        "回复'收藏 N'可收藏并同步 star",
+        '💡 直接回复「收藏 N」收藏任意一条；发「帮助」查看全部指令',
       ].join('\n'),
     );
   });

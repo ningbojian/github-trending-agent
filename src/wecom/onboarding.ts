@@ -63,7 +63,7 @@ export const HELP_MESSAGE = [
 /**
  * 「帮助」handler（router 精确匹配「帮助」后分发）：
  * 发送完整用法说明；不读不写 DB。发送失败以 rejected promise 传播，
- * 由回调端点统一 catch。
+ * 由 router 的 dispatchSafely 捕获并回发兜底文案。
  */
 export async function handleHelp(msg: InboundMessage): Promise<void> {
   await sendWeComText(msg.fromUserName, HELP_MESSAGE);
@@ -157,7 +157,7 @@ export async function handleSubscribe(msg: InboundMessage): Promise<void> {
     try {
       await sendWeComText(msg.fromUserName, SUBSCRIBE_FAILURE_REPLY);
     } catch {
-      // 吞掉兜底发送失败，避免异常传播到 router 的 catch。
+      // 吞掉兜底发送失败，不重试（防递归）。
     }
   }
 }
@@ -182,7 +182,7 @@ export async function handleUnsubscribe(msg: InboundMessage): Promise<void> {
     try {
       await sendWeComText(msg.fromUserName, UNSUBSCRIBE_FAILURE_REPLY);
     } catch {
-      // 吞掉兜底发送失败，避免异常传播到 router 的 catch。
+      // 吞掉兜底发送失败，不重试（防递归）。
     }
   }
 }

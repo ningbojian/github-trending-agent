@@ -76,7 +76,7 @@ export function formatSearchReply(items: SearchResultItem[]): string {
 /**
  * 搜索 handler：parse → search → format → sendWeComText。
  * 空结果回引导文案；任何异常（LLM/检索/发送）都被兜住，
- * 保证用户总能收到某种中文回复，绝不让异常裸奔到 router 的 catch。
+ * 保证用户总能收到某种中文回复；异常不外抛，router 的 dispatchSafely 只作第二道安全网。
  */
 export async function handleSearch(msg: InboundMessage): Promise<void> {
   try {
@@ -91,7 +91,7 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     try {
       await sendWeComText(msg.fromUserName, ERROR_REPLY);
     } catch {
-      // 连兜底发送也失败：吞掉，避免异常传播到 router 的 catch。
+      // 连兜底发送也失败：吞掉不重试（防递归）。
     }
   }
 }

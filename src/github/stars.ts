@@ -252,7 +252,7 @@ export async function handleFavorite(msg: InboundMessage): Promise<void> {
     try {
       await sendWeComText(msg.fromUserName, STAR_FAILURE_REPLY);
     } catch {
-      // 连兜底发送也失败：吞掉，避免异常传播到 router 的 catch。
+      // 连兜底发送也失败：吞掉不重试（防递归）。
     }
   }
 }
@@ -310,7 +310,7 @@ export async function handleUnfavorite(msg: InboundMessage): Promise<void> {
     try {
       await sendWeComText(msg.fromUserName, UNSTAR_FAILURE_REPLY);
     } catch {
-      // 吞掉兜底发送失败，避免异常传播到 router 的 catch。
+      // 吞掉兜底发送失败，不重试（防递归）。
     }
   }
 }

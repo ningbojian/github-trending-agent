@@ -313,19 +313,46 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
     expect(searchHandler).toHaveBeenCalledTimes(1);
   });
 
-  it('handler 抛错不影响已发出的 200 响应，错误被 catch 记录（不产生 unhandled rejection）', async () => {
+  it('handler 抛错：ack 已在响应体，兜底文案经 message/send 回发，routeMessage 不再 reject', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // 兜底回发走真实 sendWeComText 链路：kv token 命中 + fetch 返回 errcode 0。
+    dbState.selectRows = [
+      {
+        key: 'wecom_access_token',
+        value: { token: 'tok-123' },
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+      { wecomUserid: 'alice', active: true },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ errcode: 0, errmsg: 'ok' }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
     searchHandler.mockRejectedValue(new Error('handler blew up'));
     const { req, res } = postRequest(inboundXml({ content: 'anything' }));
 
     handler(req, res);
     expect(res.statusCode).toBe(200);
-    await flushAsync();
+    expect(res.body).toContain('🔍 收到');
+    await waitUntilState.calls[0];
 
     expect(errorSpy).toHaveBeenCalledWith(
-      'routeMessage failed:',
+      'handler failed:',
       expect.objectContaining({ message: 'handler blew up' }),
     );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      'https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=tok-123',
+    );
+    expect(JSON.parse(String(init.body))).toEqual({
+      touser: 'alice',
+      msgtype: 'text',
+      agentid: 1000002,
+      text: { content: '⚙️ 处理遇到问题，请稍后再试' },
+    });
     errorSpy.mockRestore();
   });
 });
@@ -353,8 +380,23 @@ describe('POST 响应后的异步分发经 waitUntil 交给平台跟踪', () => 
     expect(searchHandler).toHaveBeenCalledTimes(1);
   });
 
-  it('分发被 catch 后 waitUntil 收到的是永不 reject 的 promise（无 unhandled rejection）', async () => {
+  it('handler 抛错时 waitUntil 收到的仍是永不 reject 的 promise（兜底在 router 内完成）', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // 兜底回发需要真实 sendWeComText 链路：kv token 命中 + fetch 返回 errcode 0。
+    dbState.selectRows = [
+      {
+        key: 'wecom_access_token',
+        value: { token: 'tok-123' },
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+      { wecomUserid: 'alice', active: true },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ errcode: 0, errmsg: 'ok' }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
     searchHandler.mockRejectedValue(new Error('handler blew up'));
     const { req, res } = postRequest(inboundXml({ content: 'anything' }));
 
@@ -363,9 +405,10 @@ describe('POST 响应后的异步分发经 waitUntil 交给平台跟踪', () => 
     expect(waitUntilState.calls).toHaveLength(1);
     await expect(waitUntilState.calls[0]).resolves.toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith(
-      'routeMessage failed:',
+      'handler failed:',
       expect.objectContaining({ message: 'handler blew up' }),
     );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     errorSpy.mockRestore();
   });
 });

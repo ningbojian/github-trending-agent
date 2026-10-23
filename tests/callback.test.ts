@@ -284,7 +284,7 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
     expect(searchHandler).not.toHaveBeenCalled();
   });
 
-  it('body 为 Buffer 时也能解析（Vercel 对未知 content-type 的行为）', async () => {
+  it('body 为 Buffer 时也能解析（Vercel getBodyParser 对 application/octet-stream 的行为）', async () => {
     const { req, res } = postRequest(inboundXml());
     req.body = Buffer.from(req.body as string, 'utf8');
 
@@ -309,6 +309,114 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
       expect.objectContaining({ message: 'handler blew up' }),
     );
     errorSpy.mockRestore();
+  });
+});
+
+describe('POST body 未被 Vercel 解析（text/xml → undefined，原始字节在回放流上）', () => {
+  beforeEach(() => {
+    dbState.selectRows = [{ wecomUserid: 'alice', active: true }];
+  });
+
+  /**
+   * 模拟线上 Vercel addHelpers/restoreBody 的行为：
+   * getBodyParser 对 text/xml 返回 undefined，但原始 XML 字节已回放到
+   * req 的 data/end 事件上（企微真实 content-type 就是 text/xml）。
+   */
+  function replayRequest(plain: string) {
+    const { req, res } = postRequest(plain);
+    const xml = req.body as string;
+    req.body = undefined;
+    const fake = req as CallbackRequest & {
+      on?: (event: string, cb: (chunk?: Buffer) => void) => unknown;
+    };
+    fake.on = (event, cb) => {
+      if (event === 'data') queueMicrotask(() => cb(Buffer.from(xml, 'utf8')));
+      if (event === 'end') {
+        queueMicrotask(() => queueMicrotask(() => cb()));
+      }
+      return req;
+    };
+    return { req, res };
+  }
+
+  it('从回放流读回原文后完成验签与分发（线上 text/xml 的真实形态）', async () => {
+    const { req, res } = replayRequest(inboundXml({ content: '帮助' }));
+
+    handler(req, res);
+    await flushAsync();
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('');
+    expect(helpHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('body 未解析且流不可读（无 on 方法）时回 401 且不分发', async () => {
+    const { req, res } = postRequest(inboundXml());
+    req.body = undefined;
+
+    handler(req, res);
+    await flushAsync();
+
+    expect(res.statusCode).toBe(401);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('回放流 5 秒内不发声：超时回 401 不分发（防挂死兜底）', async () => {
+    // 只假 setTimeout/clearTimeout——连 setImmediate 一起假会让 flushAsync 永不触发。
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { req, res } = postRequest(inboundXml());
+      req.body = undefined;
+      const fake = req as CallbackRequest & {
+        on?: (event: string, cb: (chunk?: unknown) => void) => unknown;
+      };
+      fake.on = () => req; // 注册成功但永不 emit
+
+      handler(req, res);
+      expect(res.statusCode).toBe(0); // 挂起中，响应未发出
+
+      vi.advanceTimersByTime(5000);
+      await flushAsync();
+
+      expect(res.statusCode).toBe(401);
+      expect(searchHandler).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        'callback raw body read failed:',
+        expect.objectContaining({ message: 'callback body read timeout' }),
+      );
+    } finally {
+      vi.useRealTimers();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('回放出错（error 事件）：回 401 不分发', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { req, res } = postRequest(inboundXml());
+      req.body = undefined;
+      const fake = req as CallbackRequest & {
+        on?: (event: string, cb: (chunk?: unknown) => void) => unknown;
+      };
+      fake.on = (event, cb) => {
+        if (event === 'error') queueMicrotask(() => cb(new Error('stream boom')));
+        return req;
+      };
+
+      handler(req, res);
+      await flushAsync();
+
+      expect(res.statusCode).toBe(401);
+      expect(searchHandler).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        'callback raw body read failed:',
+        expect.objectContaining({ message: 'stream boom' }),
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 

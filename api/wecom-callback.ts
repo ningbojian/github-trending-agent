@@ -19,6 +19,12 @@ export interface CallbackRequest {
   method?: string;
   query: Record<string, string | string[] | undefined>;
   body: unknown;
+  /**
+   * Vercel addHelpers/restoreBody 会把原始请求字节回放到 data/end 事件上。
+   * getBodyParser 不认识的 content-type（如企微的 text/xml）→ body 为 undefined，
+   * 这个流是拿回原始报文的唯一入口。
+   */
+  on?(event: string, listener: (chunk?: unknown) => void): unknown;
 }
 
 /** Vercel res 的最小形态。 */
@@ -32,12 +38,6 @@ export interface CallbackResponse {
 function q(req: CallbackRequest, name: string): string {
   const value = req.query[name];
   return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
-}
-
-function bodyToXml(body: unknown): string {
-  if (typeof body === 'string') return body;
-  if (Buffer.isBuffer(body)) return body.toString('utf8');
-  return '';
 }
 
 export default function handler(req: CallbackRequest, res: CallbackResponse): void {
@@ -68,7 +68,35 @@ function handleVerify(req: CallbackRequest, res: CallbackResponse): void {
 }
 
 function handlePost(req: CallbackRequest, res: CallbackResponse): void {
-  const xml = bodyToXml(req.body);
+  const body = req.body;
+  // 已被 Vercel 解析成原始文本的路径（text/plain / 无 content-type）保持同步，
+  // 5 秒规则与既有单测的同步时序断言都依赖这一点。
+  if (typeof body === 'string') {
+    processPost(req, body, res);
+    return;
+  }
+  if (Buffer.isBuffer(body)) {
+    processPost(req, body.toString('utf8'), res);
+    return;
+  }
+  // Vercel getBodyParser 只解析 json / urlencoded / octet-stream / text/plain：
+  // 企微真实回调的 content-type 是 text/xml，落入 default → body === undefined。
+  // 原始字节没有丢——restoreBody 已把它回放到请求流上，从流读回原文再走同一条链路。
+  void readReplayedBody(req).then(
+    (xml) => processPost(req, xml, res),
+    (err: unknown) => {
+      console.error('callback raw body read failed:', err);
+      res.status(401).send('invalid signature');
+    },
+  );
+}
+
+/** 对已取得的原始 XML 报文：验签解密 → 200 空串 → 异步分发。 */
+function processPost(
+  req: CallbackRequest,
+  xml: string,
+  res: CallbackResponse,
+): void {
   let plain: string;
   try {
     const crypt = makeCrypt();
@@ -89,6 +117,41 @@ function handlePost(req: CallbackRequest, res: CallbackResponse): void {
     console.error('routeMessage failed:', err);
   });
   res.status(200).send('');
+}
+
+/**
+ * 从请求流读回原始 body（restoreBody 回放的原始字节）。
+ * 5 秒兜底超时——流不发声时宁可快速 401 让企微告警，也不挂到函数超时。
+ */
+function readReplayedBody(req: CallbackRequest): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (typeof req.on !== 'function') {
+      reject(new Error('callback body stream unavailable'));
+      return;
+    }
+    let data = '';
+    let settled = false;
+    const settle = (err?: Error): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve(data);
+    };
+    const timer = setTimeout(
+      () => settle(new Error('callback body read timeout')),
+      5000,
+    );
+    req.on?.('data', (chunk?: unknown) => {
+      data += chunk == null ? '' : String(chunk);
+    });
+    req.on?.('end', () => settle());
+    req.on?.('error', (err?: unknown) =>
+      settle(
+        err instanceof Error ? err : new Error('callback body stream error'),
+      ),
+    );
+  });
 }
 
 function makeCrypt(): WxbizMsgCrypt {

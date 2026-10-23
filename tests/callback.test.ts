@@ -66,6 +66,21 @@ const { getWeComAccessToken, resetAccessTokenCache, sendWeComText } = await impo
   '../src/wecom/api'
 );
 
+/**
+ * 平台 waitUntil 桩：生产上 Vercel 响应发出后可能回收实例，fire-and-forget 的
+ * 分发会被掐死（实测 200 返回但 subscribers/kv_cache 零写入）。dispatch promise
+ * 必须交给 @vercel/functions 的 waitUntil 由平台跟踪，实例才能活到落定。
+ */
+const waitUntilState = vi.hoisted(() => ({
+  calls: [] as Array<Promise<unknown>>,
+}));
+
+vi.mock('@vercel/functions', () => ({
+  waitUntil: (promise: Promise<unknown>) => {
+    waitUntilState.calls.push(promise);
+  },
+}));
+
 function crypt(): WxbizMsgCrypt {
   return new WxbizMsgCrypt(TOKEN, AES_KEY, CORP_ID);
 }
@@ -140,6 +155,7 @@ const searchHandler = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  waitUntilState.calls.length = 0;
   dbState.selectCalls = 0;
   dbState.selectRows = [];
   dbState.insertValues = [];
@@ -304,6 +320,46 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
     expect(res.statusCode).toBe(200);
     await flushAsync();
 
+    expect(errorSpy).toHaveBeenCalledWith(
+      'routeMessage failed:',
+      expect.objectContaining({ message: 'handler blew up' }),
+    );
+    errorSpy.mockRestore();
+  });
+});
+
+describe('POST 响应后的异步分发经 waitUntil 交给平台跟踪', () => {
+  beforeEach(() => {
+    // 与分发时序测试同理：钉「已开通」订阅者，走 search 直发路径。
+    dbState.selectRows = [{ wecomUserid: 'alice', active: true }];
+  });
+
+  it('dispatch promise 注册给 waitUntil 恰好一次，200 空串仍立即发出', async () => {
+    const { req, res } = postRequest(inboundXml({ content: 'anything' }));
+
+    handler(req, res);
+
+    // 5 秒规则不变：同步断言响应已发出。
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('');
+    // 平台必须拿到 dispatch promise，才能在响应回收实例后让分发活到落定。
+    expect(waitUntilState.calls).toHaveLength(1);
+    expect(waitUntilState.calls[0]).toBeInstanceOf(Promise);
+
+    // waitUntil 收到的就是分发 promise：等它落定，search 已被调用。
+    await waitUntilState.calls[0];
+    expect(searchHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('分发被 catch 后 waitUntil 收到的是永不 reject 的 promise（无 unhandled rejection）', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    searchHandler.mockRejectedValue(new Error('handler blew up'));
+    const { req, res } = postRequest(inboundXml({ content: 'anything' }));
+
+    handler(req, res);
+
+    expect(waitUntilState.calls).toHaveLength(1);
+    await expect(waitUntilState.calls[0]).resolves.toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith(
       'routeMessage failed:',
       expect.objectContaining({ message: 'handler blew up' }),

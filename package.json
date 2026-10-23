@@ -19,6 +19,7 @@
     "@ai-sdk/deepseek": "^3.0.70",
     "@ai-sdk/openai": "^4.0.99",
     "@neondatabase/serverless": "^1.2.0",
+    "@vercel/functions": "^3.10.3",
     "ai": "^7.0.148",
     "drizzle-orm": "^0.45.4",
     "node-html-parser": "^9.0.5",

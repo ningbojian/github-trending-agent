@@ -1,3 +1,4 @@
+import { waitUntil } from '@vercel/functions';
 import { env } from '../src/config.js';
 import { WxbizMsgCrypt } from '../src/wecom/crypto.js';
 import { routeMessage } from '../src/wecom/router.js';
@@ -113,9 +114,13 @@ function processPost(
 
   const msg = parseInboundXml(plain);
   // 关键时序：不 await。先回 200 空串满足企微 5 秒规则，业务处理异步进行。
-  void routeMessage(msg).catch((err) => {
-    console.error('routeMessage failed:', err);
-  });
+  // 响应发出后 Vercel 可能立刻回收实例——裸 fire-and-forget 会被掐死
+  //（生产实测：200 返回但零写入），promise 必须经 waitUntil 交平台跟踪。
+  waitUntil(
+    routeMessage(msg).catch((err) => {
+      console.error('routeMessage failed:', err);
+    }),
+  );
   res.status(200).send('');
 }
 

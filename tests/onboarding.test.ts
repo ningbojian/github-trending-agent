@@ -85,6 +85,7 @@ vi.mock('../src/db/client', () => {
 import { subscribers } from '../src/db/schema';
 import {
   ensureSubscriber,
+  handleDigestCount,
   handleHelp,
   handleSubscribe,
   handleUnsubscribe,
@@ -497,6 +498,7 @@ describe('handleHelp（帮助 → 完整用法说明）', () => {
     expect(content).toContain('绑定');
     expect(content).toContain('订阅 <偏好>');
     expect(content).toContain('退订');
+    expect(content).toContain('条数 N');
     // 帮助菜单不带搜索结果页脚（避免噪音——它本身就是指令目录）。
     expect(content).not.toContain('💡');
 
@@ -525,5 +527,62 @@ describe('handleHelp（帮助 → 完整用法说明）', () => {
     expect(helpHandler).not.toHaveBeenCalled();
     expect(searchHandler).toHaveBeenCalledTimes(2);
     expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handleDigestCount（「条数 N」→ preferences.digestCount）+ 订阅保留 digestCount
+// ---------------------------------------------------------------------------
+describe('handleDigestCount（条数 N → 简报条数自定义）', () => {
+  it('「条数 15」→ 写 digestCount=15，保留原 languages/keywords，确认回执', async () => {
+    dbMock.selectQueue.push([
+      {
+        wecomUserid: 'alice',
+        active: true,
+        preferences: { languages: [], keywords: ['ai'], digestCount: 5 },
+      },
+    ]);
+
+    await handleDigestCount(makeMsg({ content: '条数 15' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: ['ai'], digestCount: 15 },
+    });
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith(
+      'alice',
+      '✅ 每日简报条数已设为 15（1–20）',
+    );
+  });
+
+  it('「条数 0」「条数 99」「条数 abc」→ 用法提示，不写库', async () => {
+    await handleDigestCount(makeMsg({ content: '条数 0' }));
+    await handleDigestCount(makeMsg({ content: '条数 99' }));
+    await handleDigestCount(makeMsg({ content: '条数 abc' }));
+
+    expect(dbMock.updateCalls).toHaveLength(0);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(3);
+    for (const [, content] of apiMock.sendWeComText.mock.calls) {
+      expect(content as string).toContain('用法');
+      expect(content as string).toContain('条数 N');
+    }
+  });
+
+  it('「订阅 python」读-合并-写：原 digestCount 保留，keywords 整体替换', async () => {
+    dbMock.selectQueue.push([
+      {
+        wecomUserid: 'alice',
+        active: false,
+        preferences: { languages: [], keywords: ['ai'], digestCount: 7 },
+      },
+    ]);
+
+    await handleSubscribe(makeMsg({ content: '订阅 python' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: ['python'], digestCount: 7 },
+      active: true,
+    });
   });
 });

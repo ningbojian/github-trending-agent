@@ -182,6 +182,71 @@ describe('buildDigestForSubscriber — 偏好过滤', () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildDigestForSubscriber — digestCount 用户自定义条数（clamp 1–20，默认 10）
+// ---------------------------------------------------------------------------
+describe('buildDigestForSubscriber — digestCount 用户自定义', () => {
+  it('preferences.digestCount=3 → 简报恰 3 条', async () => {
+    for (let i = 1; i <= 5; i += 1) {
+      dbMock.executeRows.push(makeEntry(`o/r${i}`, { starsDelta: 1000 - i }));
+    }
+
+    const digest = await buildDigestForSubscriber(
+      makeSub({ preferences: { languages: [], keywords: [], digestCount: 3 } }),
+    );
+
+    expect(digest).toContain('3. o/r3');
+    expect(digest).not.toContain('o/r4');
+  });
+
+  it('digestCount=0 → clamp 到下限 1', async () => {
+    for (let i = 1; i <= 3; i += 1) {
+      dbMock.executeRows.push(makeEntry(`o/r${i}`, { starsDelta: 1000 - i }));
+    }
+
+    const digest = await buildDigestForSubscriber(
+      makeSub({ preferences: { languages: [], keywords: [], digestCount: 0 } }),
+    );
+
+    expect(digest).toContain('1. o/r1');
+    expect(digest).not.toContain('o/r2');
+  });
+
+  it('digestCount=99 → clamp 到上限 20（成本护栏，每条多一次 LLM 调用）', async () => {
+    for (let i = 1; i <= 21; i += 1) {
+      dbMock.executeRows.push(makeEntry(`o/r${i}`, { starsDelta: 1000 - i }));
+    }
+
+    const digest = await buildDigestForSubscriber(
+      makeSub({
+        preferences: { languages: [], keywords: [], digestCount: 99 },
+      }),
+    );
+
+    expect(digest).toContain('20. o/r20');
+    expect(digest).not.toContain('o/r21');
+  });
+
+  it('digestCount 为字符串等非法类型 → 回退默认 10', async () => {
+    for (let i = 1; i <= 12; i += 1) {
+      dbMock.executeRows.push(makeEntry(`o/r${i}`, { starsDelta: 1000 - i }));
+    }
+
+    const digest = await buildDigestForSubscriber(
+      makeSub({
+        preferences: {
+          languages: [],
+          keywords: [],
+          digestCount: '5' as unknown as number,
+        },
+      }),
+    );
+
+    expect(digest).toContain('10. o/r10');
+    expect(digest).not.toContain('o/r11');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildDigestForSubscriber —— 头部、LLM why、模板降级
 // ---------------------------------------------------------------------------
 describe('buildDigestForSubscriber — 简报内容', () => {

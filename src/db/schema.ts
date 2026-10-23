@@ -65,7 +65,11 @@ export const subscribers = pgTable(
     wecomUserid: text('wecom_userid').notNull(),
     displayName: text('display_name').notNull(),
     preferences: jsonb('preferences')
-      .$type<{ languages: string[]; keywords: string[] }>()
+      .$type<{
+        languages: string[];
+        keywords: string[];
+        digestCount?: number;
+      }>()
       .notNull()
       .default(sql`'{"languages":[],"keywords":[]}'`),
     githubLogin: text('github_login'),

@@ -17,10 +17,14 @@ import { generateObjectSafe } from './llm.js';
 
 /** 简报榜单周期：近 7 天（周榜）。 */
 const PERIOD_DAYS = 7;
-/** 候选池大小：关键词轻量排序后取前 TOP_N 条。 */
+/** 候选池大小：关键词轻量排序后取前 N 条。 */
 const POOL_SIZE = 20;
-/** 简报条数。 */
-const TOP_N = 10;
+/** 简报默认条数（用户未设置 digestCount 时）。 */
+export const DEFAULT_DIGEST_COUNT = 10;
+/** 简报条数下限（「条数 N」指令在 handler 层拦截 0/负数；此处 clamp 兜底脏数据）。 */
+export const MIN_DIGEST_COUNT = 1;
+/** 简报条数上限（成本护栏：每条多一次 LLM 调用，用户明确在意 token 成本）。 */
+export const MAX_DIGEST_COUNT = 20;
 /** 企微文本 ~2048 字节上限的安全阈值（与 Task 9 检索回复一致）。 */
 const MAX_DIGEST_BYTES = 1800;
 /** 「为什么上榜」最大字数（超出截断，避免撑爆字节上限）。 */
@@ -252,18 +256,28 @@ function assemble(header: string, blocks: string[]): string {
   return `${header}\n\n${firstLine}\n${TRUNCATION_NOTE}`;
 }
 
-/** preferences 运行时防御：字段缺失/非数组一律按空处理（languages 空 → 全量）。 */
+/**
+ * preferences 运行时防御：字段缺失/非数组一律按空处理（languages 空 → 全量）；
+ * digestCount 非有限数字（含字符串/NaN/缺失）→ 默认 10，有限数字 → clamp 1–20。
+ */
 function normalizePreferences(preferences: {
   languages?: unknown;
   keywords?: unknown;
-}): { languages: string[]; keywords: string[] } {
+  digestCount?: unknown;
+}): { languages: string[]; keywords: string[]; digestCount: number } {
   const list = (value: unknown): string[] =>
     Array.isArray(value)
       ? value.map((item) => String(item).trim().toLowerCase()).filter(Boolean)
       : [];
+  const rawCount = preferences.digestCount;
+  const digestCount =
+    typeof rawCount === 'number' && Number.isFinite(rawCount)
+      ? Math.min(MAX_DIGEST_COUNT, Math.max(MIN_DIGEST_COUNT, Math.floor(rawCount)))
+      : DEFAULT_DIGEST_COUNT;
   return {
     languages: list(preferences.languages),
     keywords: list(preferences.keywords),
+    digestCount,
   };
 }
 
@@ -271,15 +285,21 @@ function normalizePreferences(preferences: {
  * 构建单个订阅者的每日简报文本（全中文文案）。
  * - preferences.languages 为空/缺失 → 全量语言榜；非空 → language IN 过滤
  * - keywords 轻量提升排序（不丢弃条目）
- * - top10，每条可带一句 LLM 生成的「为什么上榜」
+ * - 条数按 preferences.digestCount（clamp 1–20，默认 10），每条可带一句 LLM 生成的「为什么上榜」
  * - LLM 失败（null 或抛错）→ 纯模板降级，repo 列表始终存在
  */
 export async function buildDigestForSubscriber(sub: {
-  preferences: { languages?: unknown; keywords?: unknown };
+  preferences: {
+    languages?: unknown;
+    keywords?: unknown;
+    digestCount?: unknown;
+  };
 }): Promise<string> {
-  const { languages, keywords } = normalizePreferences(sub.preferences);
+  const { languages, keywords, digestCount } = normalizePreferences(
+    sub.preferences,
+  );
   const pool = await fetchTopEntries(languages);
-  const entries = rankByPreferences(pool, keywords).slice(0, TOP_N);
+  const entries = rankByPreferences(pool, keywords).slice(0, digestCount);
   const date = utcToday();
   const whys = await generateWhys(date, entries);
   return assemble(headerLine(date), buildBlocks(entries, whys));

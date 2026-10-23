@@ -12,6 +12,7 @@ import {
 import { bindHandler } from '../github/oauth.js';
 import {
   ensureSubscriber,
+  handleDigestCount,
   handleHelp,
   handleSubscribe,
   handleUnsubscribe,
@@ -40,6 +41,7 @@ export interface Handlers {
   bind: MessageHandler;
   subscribe: MessageHandler;
   unsubscribe: MessageHandler;
+  digestCount: MessageHandler;
 }
 
 /** 未注册时的静默 stub（Task 5 阶段的默认行为）。 */
@@ -54,6 +56,7 @@ let handlers: Handlers = {
   bind: stub,
   subscribe: stub,
   unsubscribe: stub,
+  digestCount: stub,
 };
 
 /**
@@ -75,6 +78,7 @@ export function resetHandlers(): void {
     bind: stub,
     subscribe: stub,
     unsubscribe: stub,
+    digestCount: stub,
   };
 }
 
@@ -89,6 +93,9 @@ const SUBSCRIBE_PATTERN = /^订阅/;
 
 /** 「退订」——精确匹配（与「绑定」「我的收藏」同一纪律）。 */
 const UNSUBSCRIBE_PATTERN = /^退订$/;
+
+/** 「条数 …」——前缀匹配（裸「条数」/非法输入由 handler 回用法提示）。 */
+const DIGEST_COUNT_PATTERN = /^条数/;
 
 /** 把 handler 调用包成 promise（同步抛错也转为 rejected promise）。 */
 function dispatch(handler: MessageHandler, msg: InboundMessage): Promise<void> {
@@ -124,7 +131,7 @@ function dispatchSafely(
  * - text 先 ensureSubscriber（首条消息自动开通订阅者行；新用户先收欢迎语，
  *   再继续处理原消息 —— 欢迎语与 handler 回复可能同时到达，欢迎语在前）
  * - 分发顺序：「帮助」→「取消收藏 N」→「收藏 N」→「我的收藏」（精确）→
- *   「绑定」（精确）→「订阅 …」（前缀）→「退订」（精确）→ 其余 text → search
+ *   「绑定」（精确）→「订阅 …」（前缀）→「退订」（精确）→「条数 …」（前缀）→ 其余 text → search
  * handler 异常由 dispatchSafely 捕获并单次回发兜底文案（routeMessage 实际
  * 不再 reject；回调端点的 catch 仅作第二道安全网）。
  */
@@ -167,6 +174,9 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
   if (UNSUBSCRIBE_PATTERN.test(content)) {
     return dispatchSafely(handlers.unsubscribe, msg);
   }
+  if (DIGEST_COUNT_PATTERN.test(content)) {
+    return dispatchSafely(handlers.digestCount, msg);
+  }
   return dispatchSafely(handlers.search, msg);
 }
 
@@ -182,4 +192,5 @@ registerHandlers({
   list: handleList,
   subscribe: handleSubscribe,
   unsubscribe: handleUnsubscribe,
+  digestCount: handleDigestCount,
 });

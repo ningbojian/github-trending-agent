@@ -44,6 +44,19 @@ export const SUBSCRIBE_FAILURE_REPLY = '订阅失败，请稍后再试';
 /** 「退订」更新失败的兜底文案。 */
 export const UNSUBSCRIBE_FAILURE_REPLY = '退订失败，请稍后再试';
 
+/** 「条数 N」设置成功的确认文案前缀。 */
+export const DIGEST_COUNT_REPLY_PREFIX = '✅ 每日简报条数已设为 ';
+
+/** 「条数 N」确认文案尾句（同时声明合法范围）。 */
+export const DIGEST_COUNT_REPLY_SUFFIX = '（1–20）';
+
+/** 「条数 N」用法/非法输入提示（不写库）。 */
+export const DIGEST_COUNT_USAGE_REPLY =
+  '用法：「条数 N」，N 为 1–20 的整数，例如：条数 5';
+
+/** 「条数 N」更新失败的兜底文案。 */
+export const DIGEST_COUNT_FAILURE_REPLY = '条数设置失败，请稍后再试';
+
 // ---------------------------------------------------------------------------
 // handleHelp
 // ---------------------------------------------------------------------------
@@ -58,6 +71,7 @@ export const HELP_MESSAGE = [
   '· 绑定：回复「绑定」，跳转 GitHub 授权页完成授权。',
   '· 订阅：回复「订阅 <偏好>」设置每日简报偏好，如「订阅 python,ai」。',
   '· 退订：回复「退订」，停止每日简报（可随时重新订阅）。',
+  '· 条数：回复「条数 N」自定义每日简报条数（1–20），如「条数 5」。',
 ].join('\n');
 
 /**
@@ -128,7 +142,8 @@ function subscribedReply(keywords: string[]): string {
  * 「订阅 <偏好>」handler：
  * - 前缀不匹配 → 静默返回（router 层已拦；直接调用同此守卫）
  * - 无可解析关键词（裸「订阅」）→ 用法提示，不写库
- * - tokens 整体替换 preferences（languages 重置为空数组）→ 中文确认回显当前偏好
+ * - 读-合并-写：languages/keywords 整体替换（languages 重置为空数组），
+ *   但保留原 preferences.digestCount（「条数 N」设置不被订阅指令清掉）
  * - 同时写 active: true：退订（active=false）后再次订阅即恢复每日简报，
  *   与 UNSUBSCRIBE_REPLY / HELP / README 承诺的「可随时重新订阅」一致
  */
@@ -143,10 +158,22 @@ export async function handleSubscribe(msg: InboundMessage): Promise<void> {
       await sendWeComText(msg.fromUserName, SUBSCRIBE_USAGE_REPLY);
       return;
     }
-    const preferences: { languages: string[]; keywords: string[] } = {
+    const rows = await db()
+      .select()
+      .from(subscribers)
+      .where(eq(subscribers.wecomUserid, msg.fromUserName));
+    const previous = rows[0]?.preferences;
+    const preferences: {
+      languages: string[];
+      keywords: string[];
+      digestCount?: number;
+    } = {
       languages: [],
       keywords: tokens,
     };
+    if (typeof previous?.digestCount === 'number') {
+      preferences.digestCount = previous.digestCount;
+    }
     await db()
       .update(subscribers)
       .set({ preferences, active: true })
@@ -185,6 +212,57 @@ export async function handleUnsubscribe(msg: InboundMessage): Promise<void> {
     } catch (fallbackErr) {
       // 吞掉兜底发送失败：仅记日志，不重试（防递归）。
       console.error('unsubscribe fallback reply failed:', fallbackErr);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// handleDigestCount
+// ---------------------------------------------------------------------------
+
+/** 「条数」前缀（与 router 的分发正则保持一致）。 */
+const DIGEST_COUNT_PREFIX = '条数';
+
+/**
+ * 「条数 N」handler（router 按「条数」前缀分发）：
+ * - 解析「条数 N」：N 必须是 1–20 整数；裸「条数」/非数字/越界 → 用法提示，不写库
+ *   （越界 REJECTED 而非静默 clamp：用户显式输入了数字，静默改值会误导）
+ * - 读-合并-写：只更新 preferences.digestCount，保留原 languages/keywords
+ * - digest.ts 消费端再做 clamp 1–20 + 默认 10 兜底（脏数据防御双保险）
+ */
+export async function handleDigestCount(msg: InboundMessage): Promise<void> {
+  try {
+    const content = msg.content.trim();
+    const match = new RegExp(`^${DIGEST_COUNT_PREFIX}\\s*(\\d+)$`).exec(content);
+    const n = match === null ? Number.NaN : Number.parseInt(match[1] ?? '', 10);
+    if (!Number.isInteger(n) || n < 1 || n > 20) {
+      await sendWeComText(msg.fromUserName, DIGEST_COUNT_USAGE_REPLY);
+      return;
+    }
+    const rows = await db()
+      .select()
+      .from(subscribers)
+      .where(eq(subscribers.wecomUserid, msg.fromUserName));
+    const previous = rows[0]?.preferences;
+    const preferences = {
+      ...previous,
+      digestCount: n,
+    };
+    await db()
+      .update(subscribers)
+      .set({ preferences })
+      .where(eq(subscribers.wecomUserid, msg.fromUserName));
+    await sendWeComText(
+      msg.fromUserName,
+      `${DIGEST_COUNT_REPLY_PREFIX}${n}${DIGEST_COUNT_REPLY_SUFFIX}`,
+    );
+  } catch (err) {
+    console.error('handleDigestCount failed:', err);
+    try {
+      await sendWeComText(msg.fromUserName, DIGEST_COUNT_FAILURE_REPLY);
+    } catch (fallbackErr) {
+      // 吞掉兜底发送失败：仅记日志，不重试（防递归）。
+      console.error('digestCount fallback reply failed:', fallbackErr);
     }
   }
 }

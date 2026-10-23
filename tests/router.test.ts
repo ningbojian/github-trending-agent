@@ -143,6 +143,28 @@ describe('dispatchSafely — handler 异常兜底（用户零感知原则）', (
   });
 });
 
+describe('「条数 N」指令路由（前缀分发，用法校验在 handler 内）', () => {
+  it('「条数 5」→ digestCountHandler，不落 search', async () => {
+    const digestCountHandler = vi.fn();
+    registerHandlers({ digestCount: digestCountHandler });
+
+    await routeMessage(makeMsg({ content: '条数 5' }));
+
+    expect(digestCountHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「条数」前缀任意后续内容都进 digestCountHandler（裸指令/非法由 handler 回用法提示）', async () => {
+    const digestCountHandler = vi.fn();
+    registerHandlers({ digestCount: digestCountHandler });
+
+    await routeMessage(makeMsg({ content: '条数太多了' }));
+
+    expect(digestCountHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+});
+
 describe('默认 stub handlers（未注册时）', () => {
   it('不抛错、静默完成', async () => {
     resetHandlers();

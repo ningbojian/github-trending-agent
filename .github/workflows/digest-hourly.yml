@@ -1,0 +1,31 @@
+# 每小时触发 Vercel 简报端点（推送时间/间隔门控与并发抢占在 pushDigests 内完成）。
+# cron 0 * * * * 为 UTC 每小时整点（= 北京时间每小时整点）；也可 workflow_dispatch 手动触发。
+# 与 daily.yml 的分工：daily 只负责抓取入库，简报推送单由此工作流触发（避免双触发）。
+name: 简报小时触发
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    name: 触发简报推送
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 触发简报推送（Vercel cron 端点）
+        env:
+          # 填生产域名（如 myapp.vercel.app），不要带 https:// 前缀
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        # 记录响应体与状态码再断言：-f 会吞掉 5xx 的响应体，排障时看不到服务端 detail
+        run: |
+          CODE=$(curl -sS -o digest-resp.json -w "%{http_code}" -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
+            -H "Authorization: Bearer ${CRON_SECRET}")
+          echo "HTTP ${CODE}"
+          cat digest-resp.json; echo
+          [ "${CODE}" = 200 ]

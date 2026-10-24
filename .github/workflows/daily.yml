@@ -1,10 +1,11 @@
-# 每日管线：抓取 GitHub Trending → 补全 topics → 触发简报推送。
-# cron 0 1 * * * 为 UTC（= 北京时间 09:00）；也可 workflow_dispatch 手动跑全链路。
+# 每日管线：抓取 GitHub Trending → 补全 topics（简报推送由 digest-hourly.yml 每小时触发，
+# 推送时间/间隔门控在 pushDigests 内完成——本管线不再触发简报，避免双触发）。
+# cron 30 0 * * * 为 UTC（= 北京时间 08:30）；也可 workflow_dispatch 手动跑抓取全链路。
 name: 每日热榜管线
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '30 0 * * *'
   workflow_dispatch:
 
 permissions:
@@ -12,7 +13,7 @@ permissions:
 
 jobs:
   daily:
-    name: 抓取 → 补全 → 推送
+    name: 抓取 → 补全
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -27,7 +28,7 @@ jobs:
       LLM_PROVIDER: "placeholder-not-used-in-ci"
       LLM_API_KEY: "placeholder-not-used-in-ci"
       LLM_MODEL: "placeholder-not-used-in-ci"
-      # 以下为失败告警/推送实际消费的真实 secrets
+      # 以下为失败告警实际消费的真实 secrets
       WECOM_CORP_ID: ${{ secrets.WECOM_CORP_ID }}
       WECOM_AGENT_ID: ${{ secrets.WECOM_AGENT_ID }}
       WECOM_SECRET: ${{ secrets.WECOM_SECRET }}
@@ -40,7 +41,6 @@ jobs:
       GITHUB_CLIENT_SECRET: "placeholder-not-used-in-ci"
       GITHUB_OAUTH_REDIRECT_URI: "placeholder-not-used-in-ci"
       TOKEN_ENCRYPT_KEY: "placeholder-not-used-in-ci"
-      CRON_SECRET: ${{ secrets.CRON_SECRET }}
 
     steps:
       - name: Checkout
@@ -60,18 +60,6 @@ jobs:
 
       - name: 补全仓库 topics（GitHub API）
         run: npx tsx src/github/run-enrich.ts
-
-      - name: 触发简报推送（Vercel cron 端点）
-        env:
-          # 填生产域名（如 myapp.vercel.app），不要带 https:// 前缀
-          VERCEL_URL: ${{ secrets.VERCEL_URL }}
-        # 记录响应体与状态码再断言：-f 会吞掉 5xx 的响应体，排障时看不到服务端 detail
-        run: |
-          CODE=$(curl -sS -o digest-resp.json -w "%{http_code}" -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
-            -H "Authorization: Bearer ${CRON_SECRET}")
-          echo "HTTP ${CODE}"
-          cat digest-resp.json; echo
-          [ "${CODE}" = 200 ]
 
       - name: 失败告警到企业微信管理员
         if: failure() && env.WECOM_ADMIN_USERID != ''

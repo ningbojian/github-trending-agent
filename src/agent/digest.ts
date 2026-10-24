@@ -332,9 +332,10 @@ export async function saveRecentResults(
 }
 
 /**
- * 失效该用户 search_caches 行（best-effort 兜底，可能 reject，由调用方吞错）。
- * saveRecentResults 失败后调用：delete 成功但 insert 失败会留下陈旧非空行，
+ * 失效该用户 search_caches 行（best-effort 兜底，可能 reject，由调用方吞掉）。
+ * saveRecentResults 失败后调用：delete 步骤失败时旧行原样残留（insert 未执行），
  * 「收藏 N」会引用用户没收到的旧列表——失效后落回「无缓存」三态引导文案。
+ * （若 delete 成功而 insert 失败，本就没有行，失效是幂等的。）
  */
 export async function invalidateRecentResults(
   wecomUserid: string,

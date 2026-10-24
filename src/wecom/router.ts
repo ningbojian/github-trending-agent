@@ -17,6 +17,8 @@ import {
   ensureSubscriber,
   handleDigestCount,
   handleHelp,
+  handlePushInterval,
+  handlePushTime,
   handleSubscribe,
   handleUnsubscribe,
   WELCOME_MESSAGE,
@@ -45,9 +47,11 @@ export interface Handlers {
   subscribe: MessageHandler;
   unsubscribe: MessageHandler;
   digestCount: MessageHandler;
+  pushTime: MessageHandler;
+  pushInterval: MessageHandler;
 }
 
-/** 未注册时的静默 stub（Task 5 阶段的默认行为）。 */
+/** 未注册时的静默 stub。 */
 const stub: MessageHandler = () => {};
 
 let handlers: Handlers = {
@@ -60,6 +64,8 @@ let handlers: Handlers = {
   subscribe: stub,
   unsubscribe: stub,
   digestCount: stub,
+  pushTime: stub,
+  pushInterval: stub,
 };
 
 /**
@@ -82,6 +88,8 @@ export function resetHandlers(): void {
     subscribe: stub,
     unsubscribe: stub,
     digestCount: stub,
+    pushTime: stub,
+    pushInterval: stub,
   };
 }
 
@@ -96,6 +104,26 @@ const SUBSCRIBE_PATTERN = /^订阅/;
 
 /** 「条数 …」——前缀匹配（裸「条数」/非法输入由 handler 回用法提示）。 */
 const DIGEST_COUNT_PATTERN = /^条数/;
+
+/**
+ * 「每天 H 点」/「推送时间 HH:MM」——**锚定整句**（时间可省略：裸「推送时间」
+ * 由 handler 回用法提示）。「每天 star 最多的项目」是合法搜索，绝不能被吞。
+ * 尾标点在分发前已剥除（「每天 9 点。」同样命中）。
+ * 注意：分钟 token 必须写成 `(?:TOKEN)?` —— NUMBER_TOKEN_PATTERN 自带 `+`，
+ * 直接 `TOKEN?` 会变成惰性 `+?`（分钟变成必填），「每天 9 点」就永远不命中。
+ */
+const PUSH_TIME_PATTERN = new RegExp(
+  `^(每天|推送时间)(?:\\s*${NUMBER_TOKEN_PATTERN}(?:\\s*[:：点时]\\s*(?:${NUMBER_TOKEN_PATTERN})?)?\\s*分?)?\\s*$`,
+);
+
+/**
+ * 「每 N 天(推送|简报)?」——**锚定整句**（N 为阿拉伯/中文数字）。
+ * 「每两天更新的项目」等带后缀的句子不命中，照常落搜索。
+ * 与 PUSH_TIME_PATTERN 互斥：「每天」无 N 不命中本式；「每 2 天」无「每天」前缀不命中上式。
+ */
+const PUSH_INTERVAL_PATTERN = new RegExp(
+  `^每\\s*${NUMBER_TOKEN_PATTERN}\\s*天(推送|简报)?$`,
+);
 
 /** 尾部中英文标点（精确/前缀分发与疑似命令判定前统一剥除，「帮助。」也能命中）。 */
 const TRAILING_PUNCT_RE = /[。！？!?；;，,]+$/;
@@ -169,6 +197,7 @@ function dispatchSafely(
  *   再继续处理原消息 —— 欢迎语与 handler 回复可能同时到达，欢迎语在前）
  * - 分发顺序：「帮助」→「取消收藏 N」→「收藏 N」→「我的收藏」（精确）→
  *   「绑定」（精确）→「订阅 …」（前缀）→「退订」（精确）→「条数 …」（前缀）→
+ *   「每天 H 点/推送时间 …」「每 N 天」（锚定）→
  *   疑似命令（以命令词开头却非合法指令 → 用法提示）→ 其余 text → search。
  *   精确匹配允许尾部中英文标点（「帮助。」「收藏 1！」）；「帮助」只精确匹配，
  *   「帮助我找 python」等长句仍走搜索。handler 异常由 dispatchSafely 捕获并
@@ -223,6 +252,12 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
   if (DIGEST_COUNT_PATTERN.test(content)) {
     return dispatchSafely(handlers.digestCount, normalized);
   }
+  if (PUSH_TIME_PATTERN.test(content)) {
+    return dispatchSafely(handlers.pushTime, normalized);
+  }
+  if (PUSH_INTERVAL_PATTERN.test(content)) {
+    return dispatchSafely(handlers.pushInterval, normalized);
+  }
   // 疑似命令容错：以命令词开头却不是合法指令 → 回用法提示，绝不静默掉进搜索。
   const usage = suspectedCommandUsage(content);
   if (usage !== null) {
@@ -235,8 +270,8 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
 }
 
 // Task 9：帮助/搜索 handler、Task 11：绑定 handler、Task 12：收藏/取消收藏/我的收藏
-// handler、Task 13：订阅/退订 handler 默认挂接真实实现
-// （测试可用 resetHandlers 恢复 stub）。
+// handler、Task 13：订阅/退订 handler、Task 5：推送时间/推送间隔 handler
+// 默认挂接真实实现（测试可用 resetHandlers 恢复 stub）。
 registerHandlers({
   help: handleHelp,
   search: handleSearch,
@@ -247,4 +282,6 @@ registerHandlers({
   subscribe: handleSubscribe,
   unsubscribe: handleUnsubscribe,
   digestCount: handleDigestCount,
+  pushTime: handlePushTime,
+  pushInterval: handlePushInterval,
 });

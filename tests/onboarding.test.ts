@@ -87,6 +87,8 @@ import {
   ensureSubscriber,
   handleDigestCount,
   handleHelp,
+  handlePushInterval,
+  handlePushTime,
   handleSubscribe,
   handleUnsubscribe,
   HELP_MESSAGE,
@@ -425,6 +427,35 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
       content: '订阅 python',
     });
   });
+
+  it('「订阅 python」读-合并-写：原 pushTime / intervalDays 保留，不被订阅指令清掉', async () => {
+    dbMock.selectQueue.push([
+      {
+        wecomUserid: 'alice',
+        active: true,
+        preferences: {
+          languages: [],
+          keywords: ['ai'],
+          digestCount: 7,
+          pushTime: '21:30',
+          intervalDays: 2,
+        },
+      },
+    ]);
+
+    await handleSubscribe(makeMsg({ content: '订阅 python' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: {
+        languages: [],
+        keywords: ['python'],
+        digestCount: 7,
+        pushTime: '21:30',
+        intervalDays: 2,
+      },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -647,5 +678,232 @@ describe('handleDigestCount（条数 N → 简报条数自定义）', () => {
       preferences: { languages: [], keywords: ['python'], digestCount: 7 },
       active: true,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handlePushTime（「每天 H 点」/「推送时间 HH:MM」→ preferences.pushTime）
+// ---------------------------------------------------------------------------
+describe('handlePushTime（每天 H 点 / 推送时间 HH:MM → 简报推送时间）', () => {
+  /** 老用户行（含待保留的其他偏好字段）。 */
+  function subRow(preferences: Record<string, unknown>): Record<string, unknown> {
+    return { wecomUserid: 'alice', active: true, preferences };
+  }
+
+  it('「每天 9 点」→ pushTime="09:00"，回执注明北京时间，保留 digestCount/intervalDays', async () => {
+    dbMock.selectQueue.push([
+      subRow({
+        languages: [],
+        keywords: ['ai'],
+        digestCount: 5,
+        intervalDays: 3,
+      }),
+    ]);
+
+    await handlePushTime(makeMsg({ content: '每天 9 点' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.table).toBe(subscribers);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: {
+        languages: [],
+        keywords: ['ai'],
+        digestCount: 5,
+        intervalDays: 3,
+        pushTime: '09:00',
+      },
+    });
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('09:00');
+    expect(content).toContain('北京时间');
+  });
+
+  it('「推送时间 21:30」→ pushTime="21:30"', async () => {
+    dbMock.selectQueue.push([subRow({ languages: [], keywords: [] })]);
+
+    await handlePushTime(makeMsg({ content: '推送时间 21:30' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: [], pushTime: '21:30' },
+    });
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('21:30');
+    expect(content).toContain('北京时间');
+  });
+
+  it('「每天八点」（中文数字、无空格）→ pushTime="08:00"', async () => {
+    dbMock.selectQueue.push([subRow({ languages: [], keywords: [] })]);
+
+    await handlePushTime(makeMsg({ content: '每天八点' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: [], pushTime: '08:00' },
+    });
+  });
+
+  it('「推送时间 25:99」（越界）→ 用法提示，不写库', async () => {
+    await handlePushTime(makeMsg({ content: '推送时间 25:99' }));
+
+    expect(dbMock.updateCalls).toHaveLength(0);
+    expect(dbMock.selectCalls).toHaveLength(0);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('用法');
+    expect(content).toContain('推送时间');
+    expect(content).toContain('北京时间');
+  });
+
+  it('裸「推送时间」/ 裸「每天」（无时间）→ 用法提示，不写库', async () => {
+    await handlePushTime(makeMsg({ content: '推送时间' }));
+    await handlePushTime(makeMsg({ content: '每天' }));
+
+    expect(dbMock.updateCalls).toHaveLength(0);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
+    for (const [, content] of apiMock.sendWeComText.mock.calls) {
+      expect(content as string).toContain('用法');
+    }
+  });
+
+  it('端到端：「每天 9 点」经 router 分发到真实 handlePushTime（不落搜索）', async () => {
+    // 第一行给 ensureSubscriber（老用户），第二行给 handler 的读-合并-写。
+    dbMock.selectQueue.push([existingSub()], [existingSub()]);
+    resetHandlers();
+    registerHandlers({ pushTime: handlePushTime });
+
+    await routeMessage(makeMsg({ content: '每天 9 点' }));
+
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: [], pushTime: '09:00' },
+    });
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith(
+      'alice',
+      expect.stringContaining('北京时间'),
+    );
+  });
+
+  it('端到端：非法「推送时间 25:99」经 router → 用法提示，零 DB 写入', async () => {
+    dbMock.selectQueue.push([existingSub()]);
+    resetHandlers();
+    registerHandlers({ pushTime: handlePushTime });
+
+    await routeMessage(makeMsg({ content: '推送时间 25:99' }));
+
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(dbMock.updateCalls).toHaveLength(0);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('用法');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// handlePushInterval（「每 N 天」→ preferences.intervalDays）
+// ---------------------------------------------------------------------------
+describe('handlePushInterval（每 N 天 → 简报推送间隔）', () => {
+  function subRow(preferences: Record<string, unknown>): Record<string, unknown> {
+    return { wecomUserid: 'alice', active: true, preferences };
+  }
+
+  it('「每 2 天」→ intervalDays=2，保留 pushTime/digestCount，回执含天数', async () => {
+    dbMock.selectQueue.push([
+      subRow({
+        languages: [],
+        keywords: ['ai'],
+        digestCount: 5,
+        pushTime: '21:30',
+      }),
+    ]);
+
+    await handlePushInterval(makeMsg({ content: '每 2 天' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: {
+        languages: [],
+        keywords: ['ai'],
+        digestCount: 5,
+        pushTime: '21:30',
+        intervalDays: 2,
+      },
+    });
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('2');
+    expect(content).toContain('天');
+  });
+
+  it('「每两天推送」（中文数字 + 尾缀）→ intervalDays=2', async () => {
+    dbMock.selectQueue.push([subRow({ languages: [], keywords: [] })]);
+
+    await handlePushInterval(makeMsg({ content: '每两天推送' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: [], intervalDays: 2 },
+    });
+  });
+
+  it('「每 30 天简报」→ intervalDays=30（上限合法）', async () => {
+    dbMock.selectQueue.push([subRow({ languages: [], keywords: [] })]);
+
+    await handlePushInterval(makeMsg({ content: '每 30 天简报' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: [], intervalDays: 30 },
+    });
+  });
+
+  it('「每 31 天」「每 0 天」「每两天半」→ 用法提示，不写库', async () => {
+    await handlePushInterval(makeMsg({ content: '每 31 天' }));
+    await handlePushInterval(makeMsg({ content: '每 0 天' }));
+    await handlePushInterval(makeMsg({ content: '每两天半' }));
+
+    expect(dbMock.updateCalls).toHaveLength(0);
+    expect(dbMock.selectCalls).toHaveLength(0);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(3);
+    for (const [, content] of apiMock.sendWeComText.mock.calls) {
+      expect(content as string).toContain('用法');
+      expect(content as string).toContain('1–30');
+    }
+  });
+
+  it('端到端：「每两天」经 router 分发到真实 handlePushInterval（不落搜索）', async () => {
+    dbMock.selectQueue.push([existingSub()], [existingSub()]);
+    resetHandlers();
+    registerHandlers({ pushInterval: handlePushInterval });
+
+    await routeMessage(makeMsg({ content: '每两天' }));
+
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: [], intervalDays: 2 },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HELP_MESSAGE —— Task 5 新增两条指令（北京时间 / 1–30 天）
+// ---------------------------------------------------------------------------
+describe('HELP_MESSAGE —— 推送时间与推送间隔', () => {
+  it('含「推送时间」行（注明北京时间与示例）', () => {
+    const line = HELP_MESSAGE.split('\n').find((l) => l.includes('推送时间'));
+    expect(line).toBeDefined();
+    expect(line).toContain('北京时间');
+    expect(line).toContain('每天');
+    expect(line).toContain('HH:MM');
+  });
+
+  it('含「推送间隔」行（注明 1–30 天范围与示例）', () => {
+    const line = HELP_MESSAGE.split('\n').find((l) => l.includes('每 N 天'));
+    expect(line).toBeDefined();
+    expect(line).toContain('1–30');
+    expect(line).toContain('每天');
   });
 });

@@ -31,6 +31,9 @@ const bindHandlerMock = vi.fn();
 const searchHandler = vi.fn();
 const subscribeHandler = vi.fn();
 const unsubscribeHandler = vi.fn();
+const digestCountHandler = vi.fn();
+const pushTimeHandler = vi.fn();
+const pushIntervalHandler = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -46,6 +49,9 @@ beforeEach(() => {
     search: searchHandler,
     subscribe: subscribeHandler,
     unsubscribe: unsubscribeHandler,
+    digestCount: digestCountHandler,
+    pushTime: pushTimeHandler,
+    pushInterval: pushIntervalHandler,
   });
 });
 
@@ -277,6 +283,53 @@ describe('疑似命令容错（命令写错不再掉进搜索）', () => {
     await routeMessage(makeMsg({ content: '条数太多了' }));
     await routeMessage(makeMsg({ content: '订阅一下' }));
     expect(searchHandler).not.toHaveBeenCalled();
+    expect(sendWeComText).not.toHaveBeenCalled();
+  });
+});
+
+describe('「推送时间」「每 N 天」指令路由（锚定分发，用法校验在 handler 内）', () => {
+  it('「每天 9 点」「推送时间 21:30」「每天八点」→ pushTimeHandler，不落 search', async () => {
+    await routeMessage(makeMsg({ content: '每天 9 点' }));
+    await routeMessage(makeMsg({ content: '推送时间 21:30' }));
+    await routeMessage(makeMsg({ content: '每天八点' }));
+
+    expect(pushTimeHandler).toHaveBeenCalledTimes(3);
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(pushIntervalHandler).not.toHaveBeenCalled();
+  });
+
+  it('「每两天推送」「每 2 天」「每 30 天简报」→ pushIntervalHandler，不落 search', async () => {
+    await routeMessage(makeMsg({ content: '每两天推送' }));
+    await routeMessage(makeMsg({ content: '每 2 天' }));
+    await routeMessage(makeMsg({ content: '每 30 天简报' }));
+
+    expect(pushIntervalHandler).toHaveBeenCalledTimes(3);
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(pushTimeHandler).not.toHaveBeenCalled();
+  });
+
+  it('「每天 star 最多的项目」是合法搜索 → search，绝不进推送时间 handler', async () => {
+    await routeMessage(makeMsg({ content: '每天 star 最多的项目' }));
+
+    expect(searchHandler).toHaveBeenCalledTimes(1);
+    expect(pushTimeHandler).not.toHaveBeenCalled();
+    expect(sendWeComText).not.toHaveBeenCalled();
+  });
+
+  it('「每两天更新的项目」带后缀 → 锚定不命中，落 search', async () => {
+    await routeMessage(makeMsg({ content: '每两天更新的项目' }));
+
+    expect(searchHandler).toHaveBeenCalledTimes(1);
+    expect(pushIntervalHandler).not.toHaveBeenCalled();
+  });
+
+  it('非法时间（「推送时间 25:99」）与裸「推送时间」→ 进 pushTimeHandler（用法提示由 handler 回）', async () => {
+    await routeMessage(makeMsg({ content: '推送时间 25:99' }));
+    await routeMessage(makeMsg({ content: '推送时间' }));
+
+    expect(pushTimeHandler).toHaveBeenCalledTimes(2);
+    expect(searchHandler).not.toHaveBeenCalled();
+    // router 层不重复拦截（与「条数」一致：回执统一由 handler 负责）。
     expect(sendWeComText).not.toHaveBeenCalled();
   });
 });

@@ -220,9 +220,55 @@ describe('fallbackParse (direct, pure)', () => {
     expect(fallbackParse('想要热门流行的go项目').keywords).toEqual([]);
   });
 
-  it('不加裸单字填充词：复合词不被单字「找/火/要」截断', () => {
-    // 「火狐」若被单字「火」剔除会剩「狐」，再被 length<2 丢弃——单字填充词的直接危害
-    expect(fallbackParse('看看火狐项目').keywords).toContain('火狐');
+  it('"麻烦给我推荐一些go项目" → keywords=[]（纯请求虚词串整 token 丢弃）', () => {
+    expect(fallbackParse('麻烦给我推荐一些go项目')).toMatchObject({
+      languages: ['go'],
+      keywords: [],
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 复合词保护：填充词只做 token 级判定（完整覆盖→丢弃、尾剥、前导剥），
+  // 绝不做全局子串 replace——否则「比较器」被剥成空、「推荐系统」漏出「系统」。
+  // ---------------------------------------------------------------------------
+  it('「本周 rust 比较器」→ keywords 含「比较器」（不被「比较」剥空）', () => {
+    expect(fallbackParse('本周 rust 比较器')).toMatchObject({
+      languages: ['rust'],
+      keywords: ['比较器'],
+    });
+  });
+
+  it('「找一下推荐系统的python项目」→ keywords 含「推荐系统」（不漏出过宽的「系统」）', () => {
+    expect(fallbackParse('找一下推荐系统的python项目')).toMatchObject({
+      languages: ['python'],
+      keywords: ['推荐系统'],
+    });
+  });
+
+  it('「流行病学项目」→ keywords 含「流行病学」（「流行」不作中间插入式剔除）', () => {
+    expect(fallbackParse('流行病学项目').keywords).toEqual(['流行病学']);
+  });
+
+  it('「热门游戏 rust」→ keywords 含「热门游戏」（前导剥除后剩 2 字则整词保留）', () => {
+    expect(fallbackParse('热门游戏 rust')).toMatchObject({
+      languages: ['rust'],
+      keywords: ['热门游戏'],
+    });
+  });
+
+  it('尾部剥离规则：「好看的项目」→「好看」（每次剥完剩余 ≥2 才剥）', () => {
+    expect(fallbackParse('好看的项目').keywords).toContain('好看');
+  });
+
+  it('前导剥离规则：「帮我看看人工智能项目」→「人工智能」（剥完剩余 ≥3 才剥）', () => {
+    expect(fallbackParse('帮我看看人工智能项目').keywords).toContain('人工智能');
+  });
+
+  it('不加裸单字填充词且填充只做 token 级判定：复合词绝不中间挖空', () => {
+    // 「火狐」若被单字「火」剔除会剩「狐」，再被 length<2 丢弃——裸单字填充词的直接危害
+    expect(fallbackParse('火狐项目').keywords).toEqual(['火狐']);
+    // 前导「看看」剥除后剩「火狐」(2 < 3) 不剥，整词保留（无中间插入式剔除）
+    expect(fallbackParse('看看火狐项目').keywords).toEqual(['看看火狐']);
   });
 
   it('新增语言别名 html / css / vue 可识别且不入 keywords', () => {

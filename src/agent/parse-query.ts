@@ -120,9 +120,11 @@ function escapeRegExp(s: string): string {
 }
 
 /**
- * 关键词剔除词表：虚词/时间词/排序词/平台词，按长度倒序拼成一个正则。
- * 刻意不加裸单字填充词（找/火/要）：流程是先 replace 再按 [一-鿿]+ 切 token，
- * 单字填充会截断复合词（「火狐」→「狐」再被 length<2 丢弃）；独立单字本就被 length<2 过滤。
+ * 关键词剔除词表：虚词/时间词/排序词/平台词。
+ * 填充词只做 token 级判定（完整覆盖→丢弃、尾剥、前导剥），绝无全局子串 replace——
+ * 否则会把「比较器」剥空、「推荐系统」漏出过宽的「系统」。
+ * 刻意不加裸单字填充词（找/火/要）：独立单字 token 本就被 length<2 过滤，
+ * 裸单字入表只会在覆盖/剥除判定里增加误伤复合词（「火狐」类）的机会，无收益。
  */
 const KEYWORD_FILLERS = [
   '帮我看下', '帮我看看', '请问', '帮我', '我想', '看看', '看下', '请',
@@ -138,13 +140,57 @@ const KEYWORD_FILLERS = [
   '前', '个', '条', '篇', '款', '快',
 ];
 
-const FILLER_RE = new RegExp(
-  [...KEYWORD_FILLERS]
-    .sort((a, b) => b.length - a.length)
-    .map(escapeRegExp)
-    .join('|'),
-  'g',
-);
+/** 填充词按长度倒序（贪心匹配：长词先命中，「比较火」先于「比较」）。 */
+const FILLERS_LONGEST_FIRST = [...KEYWORD_FILLERS].sort((a, b) => b.length - a.length);
+
+/**
+ * 规则 a：贪心（长词优先）尝试用填充词完整覆盖 token；每个位置都命中才返回 true。
+ * 命中即整 token 丢弃——纯虚词串（「找一下本周比较火的」）的唯一出口。
+ */
+function isAllFillers(token: string): boolean {
+  let i = 0;
+  while (i < token.length) {
+    const filler = FILLERS_LONGEST_FIRST.find((f) => token.startsWith(f, i));
+    if (filler === undefined) return false;
+    i += filler.length;
+  }
+  return true;
+}
+
+/**
+ * 规则 b：只剥尾部填充词（最长优先、循环）；
+ * 每次剥完剩余长度须 ≥2，否则不剥——防止把 token 剥成单字残渣。
+ */
+function stripTrailingFillers(token: string): string {
+  let tok = token;
+  for (;;) {
+    const filler = FILLERS_LONGEST_FIRST.find(
+      (f) => f.length < tok.length && tok.endsWith(f),
+    );
+    if (filler === undefined) break;
+    if (tok.length - filler.length < 2) break; // 剩余 <2 不剥
+    tok = tok.slice(0, tok.length - filler.length);
+  }
+  return tok;
+}
+
+/**
+ * 规则 c：剥前导填充词（最长优先、循环）；
+ * 仅当剥完剩余长度 ≥3 才执行——「帮我看看人工智能」→「人工智能」，
+ * 而「比较器」「推荐系统」「流行病学」因剩余只有 1–2 字而整词保留。
+ */
+function stripLeadingFillers(token: string): string {
+  let tok = token;
+  for (;;) {
+    const filler = FILLERS_LONGEST_FIRST.find(
+      (f) => f.length < tok.length && tok.startsWith(f),
+    );
+    if (filler === undefined) break;
+    if (tok.length - filler.length < 3) break; // 剩余 <3 不剥
+    tok = tok.slice(filler.length);
+  }
+  return tok;
+}
 
 /**
  * 纯函数回退解析：LLM 不可用时按正则/词表推断。无 I/O、无 LLM。
@@ -209,15 +255,24 @@ export function fallbackParse(text: string): SearchQuery {
     sortBy = 'stars_delta';
   }
 
-  // keywords：剔除语言后，再剔除虚词/时间词/排序词，剩下的词清洗标点后即主题词
+  // keywords：先按现有正则分词（ASCII token 与 CJK run），填充词只做 token 级判定：
+  // a. 整 token 被填充词完整覆盖 → 丢弃；b. 尾部剥填充词（剩余 ≥2）；
+  // c. 前导剥填充词（剩余 ≥3）；d. 其余整词保留——绝不做中间插入式剔除。
   const keywords: string[] = [];
-  const tokens = working.replace(FILLER_RE, ' ').match(/[a-z0-9+#][a-z0-9+#.\-]*|[一-鿿]+/g) ?? [];
+  const tokens = working.match(/[a-z0-9+#][a-z0-9+#.\-]*|[一-鿿]+/g) ?? [];
   for (const raw of tokens) {
-    const token = cleanKeyword(raw);
-    if (!token) continue; // 清洗后为空的纯标点 token 丢弃
-    if (/^\d+$/.test(token)) continue; // 纯数字是 star 数/条数，不是关键词
-    if (token.length < 2) continue; // 单字噪声（的、里、前…）不入关键词
-    if (!keywords.includes(token)) keywords.push(token);
+    let token = raw;
+    if (isAllFillers(token)) continue; // a：纯虚词串整 token 丢弃
+    if (/^[一-鿿]+$/.test(token)) {
+      token = stripTrailingFillers(token); // b：只剥尾部
+      token = stripLeadingFillers(token); // c：剥前导（剩余 ≥3 才剥）
+    }
+    // d：其余原样保留，随后走统一过滤
+    const cleaned = cleanKeyword(token);
+    if (!cleaned) continue; // 清洗后为空的纯标点 token 丢弃
+    if (/^\d+$/.test(cleaned)) continue; // 纯数字是 star 数/条数，不是关键词
+    if (cleaned.length < 2) continue; // 单字噪声（的、里、前…）不入关键词
+    if (!keywords.includes(cleaned)) keywords.push(cleaned);
   }
 
   return {

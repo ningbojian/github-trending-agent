@@ -1,16 +1,19 @@
 import { parseSearchQuery } from '../agent/parse-query.js';
+import { loadRepoSummaries } from '../agent/repo-summary.js';
 import { searchTrending, type SearchResultItem } from '../agent/search.js';
-import { sendWeComText } from './api.js';
+import { sendWeComMarkdown, sendWeComText } from './api.js';
+import { formatEntryLine } from './markdown.js';
 import type { InboundMessage } from './router.js';
 
 /**
- * 消息回复引擎：把检索结果格式化成企微文本并推送。
- * - formatSearchReply：纯函数，编号列表 + 固定提示语，超长自动截断
- * - handleSearch：parse → search → format → sendWeComText，全链兜底异常
+ * 消息回复引擎：把检索结果格式化成企微 markdown 并推送。
+ * - formatSearchReply：纯函数，编号列表（链接 + 中文简介）+ 固定页脚，超长自动截断
+ * - handleSearch：parse → search（空结果去关键词重查一次）→ summaries → sendWeComMarkdown，
+ *   全链兜底异常
  */
 
-/** 企微文本消息上限 ~2048 字节；1800 字节为安全阈值，超出即截断列表。 */
-const MAX_REPLY_BYTES = 1800;
+/** 企微 markdown 消息上限 4096 字节；3800 字节为安全阈值，超出即截断列表。 */
+export const MAX_MARKDOWN_BYTES = 3800;
 
 /** 搜索结果页脚：拿到结果后的下一步指引（收藏任意一条 / 查看全部指令）。 */
 export const GUIDANCE_FOOTER =
@@ -30,18 +33,6 @@ function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8');
 }
 
-/** 单条：`1. owner/repo ★1234 (+567)（新上榜） — 描述`；description 缺失时省略破折号后段。 */
-function formatItem(item: SearchResultItem, index: number): string {
-  let line = `${index}. ${item.fullName} ★${item.stars} (+${item.starsDelta})`;
-  if (item.isNew) {
-    line += '（新上榜）';
-  }
-  if (item.description != null && item.description !== '') {
-    line += ` — ${item.description}`;
-  }
-  return line;
-}
-
 function buildReply(lines: string[], truncated: boolean): string {
   const tail = truncated
     ? `${TRUNCATION_NOTE}\n${GUIDANCE_FOOTER}`
@@ -50,46 +41,82 @@ function buildReply(lines: string[], truncated: boolean): string {
 }
 
 /**
- * 把检索结果格式化为编号列表 + 固定提示语（全中文交互文案）。
- * 超过 1800 字节（企微 ~2048 字节上限的安全阈值）时从尾部逐条丢弃，
- * 并在提示语前标注截断。空列表返回空串（空结果引导由 handleSearch 负责）。
+ * 把检索结果格式化为编号列表 + 固定页脚（全中文交互文案）。
+ * 每条一行：`1. [owner/repo](url) ★1234 (+567)（新上榜） — 中文简介`；
+ * 简介从 summaries 按 fullName 注入（Task 1 的 loadRepoSummaries 产物），
+ * 缺失即省略破折号后段（不回退英文 description）。
+ * 超过 3800 字节（企微 markdown 4096 字节上限的安全阈值）时从尾部逐条丢弃，
+ * 并在页脚前标注截断。空列表返回空串（空结果引导由 handleSearch 负责）。
  */
-export function formatSearchReply(items: SearchResultItem[]): string {
+export function formatSearchReply(
+  items: SearchResultItem[],
+  summaries: Map<string, string>,
+): string {
   if (items.length === 0) {
     return '';
   }
-  const allLines = items.map((item, i) => formatItem(item, i + 1));
+  const allLines = items.map((item, i) =>
+    formatEntryLine(i + 1, item, summaries.get(item.fullName)),
+  );
   const full = buildReply(allLines, false);
-  if (byteLength(full) <= MAX_REPLY_BYTES) {
+  if (byteLength(full) <= MAX_MARKDOWN_BYTES) {
     return full;
   }
-  // 从尾部逐条丢弃，直到 剩余列表 + 截断标注 + 提示语 放得下（topN ≤ 25，代价可忽略）。
+  // 从尾部逐条丢弃，直到 剩余列表 + 截断标注 + 页脚 放得下（topN ≤ 25，代价可忽略）。
   let lines = allLines;
   while (lines.length > 0) {
     lines = lines.slice(0, -1);
     const candidate = buildReply(lines, true);
-    if (byteLength(candidate) <= MAX_REPLY_BYTES) {
+    if (byteLength(candidate) <= MAX_MARKDOWN_BYTES) {
       return candidate;
     }
   }
-  // 理论不可达：截断标注 + 提示语本身远小于 1800 字节。
+  // 理论不可达：截断标注 + 页脚本身远小于 3800 字节。
   return buildReply([], true);
 }
 
 /**
- * 搜索 handler：parse → search → format → sendWeComText。
- * 空结果回引导文案；任何异常（LLM/检索/发送）都被兜住，
- * 保证用户总能收到某种中文回复；异常不外抛，router 的 dispatchSafely 只作第二道安全网。
+ * 加载仓库中文简介；失败时降级为空 Map（该批条目省略简介），
+ * 绝不因摘要失败丢掉已到手的搜索结果。
+ */
+async function loadSummariesSafe(
+  items: SearchResultItem[],
+): Promise<Map<string, string>> {
+  try {
+    return await loadRepoSummaries(items);
+  } catch (err) {
+    console.error('loadRepoSummaries failed (degrade to no-summary):', err);
+    return new Map();
+  }
+}
+
+/**
+ * 搜索 handler：parse → search → format → sendWeComMarkdown。
+ * 首次检索为空且 query 带关键词时，去掉 keywords 再查一次（关键词常是
+ * 用户主题词而非榜单词，ILIKE 易 0 命中，直接放弃等于「没找到」误伤）。
+ * 空结果回引导文案（text）；有结果加载中文简介后走 markdown 通道。
+ * 任何异常（LLM/检索/发送）都被兜住，保证用户总能收到某种中文回复；
+ * 异常不外抛，router 的 dispatchSafely 只作第二道安全网。
  */
 export async function handleSearch(msg: InboundMessage): Promise<void> {
   try {
     const query = await parseSearchQuery(msg.content);
-    const items = await searchTrending(query, msg.fromUserName);
+    let items = await searchTrending(query, msg.fromUserName);
+    if (items.length === 0 && query.keywords.length > 0) {
+      items = await searchTrending(
+        { ...query, keywords: [] },
+        msg.fromUserName,
+      );
+    }
     if (items.length === 0) {
       await sendWeComText(msg.fromUserName, EMPTY_RESULT_REPLY);
       return;
     }
-    await sendWeComText(msg.fromUserName, formatSearchReply(items));
+    const summaries = await loadSummariesSafe(items);
+    await sendWeComMarkdown(
+      msg.fromUserName,
+      formatSearchReply(items, summaries),
+    );
   } catch (err) {
     console.error('handleSearch failed:', err);
     try {

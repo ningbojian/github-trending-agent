@@ -117,8 +117,22 @@ interface SendResponse {
   errmsg?: string;
 }
 
-/** 以自建应用文本消息推送给指定成员。errcode 非 0 时抛错。 */
-export async function sendWeComText(userId: string, content: string): Promise<void> {
+/** 网络瞬断 / HTTP 5xx 的重试退避（仅重试一次，业务 errcode 不重试）。 */
+const RETRY_BACKOFF_MS = 250;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * message/send 统一出站：token 获取、出站中转头、errcode 校验、瞬断重试都集中在此。
+ * - 网络异常（fetch reject）/ HTTP 5xx：250ms 退避后重试一次；仍失败则抛错。
+ * - HTTP 4xx / 业务 errcode≠0：不重试，直接抛错（重试只会复现同样结果）。
+ */
+async function postMessage(
+  userId: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
   const token = await getWeComAccessToken();
   // 可选出站中转：配置了 WECOM_RELAY_URL 时 message/send 走固定 IP 中转（规避企微白名单），
   // 尾斜杠剥除防双斜杠路径；gettoken 不查白名单，仍直连。
@@ -127,24 +141,59 @@ export async function sendWeComText(userId: string, content: string): Promise<vo
   if (env.WECOM_RELAY_SECRET) {
     headers['X-Relay-Secret'] = env.WECOM_RELAY_SECRET;
   }
-  const res = await fetch(
-    `${relayUrl ?? 'https://qyapi.weixin.qq.com'}/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`,
-    {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        touser: userId,
-        msgtype: 'text',
-        agentid: Number(env.WECOM_AGENT_ID),
-        text: { content },
-      }),
-    },
-  );
-  if (!res.ok) {
-    throw new Error(`message/send HTTP ${res.status}`);
+  const url = `${relayUrl ?? 'https://qyapi.weixin.qq.com'}/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`;
+
+  for (let attempt = 0; ; attempt += 1) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      // 网络异常 / fetch reject：重试一次（主动发送单次瞬断是线上静默主因）。
+      if (attempt === 0) {
+        await sleep(RETRY_BACKOFF_MS);
+        continue;
+      }
+      throw err;
+    }
+    if (!res.ok) {
+      // 5xx 视为服务端瞬断可重试；4xx（鉴权/参数错误）重试无意义。
+      if (attempt === 0 && res.status >= 500) {
+        await sleep(RETRY_BACKOFF_MS);
+        continue;
+      }
+      throw new Error(`message/send HTTP ${res.status}`);
+    }
+    const body = (await res.json()) as SendResponse;
+    if (body.errcode !== 0) {
+      throw new Error(`message/send failed: errcode=${body.errcode} ${body.errmsg ?? ''}`);
+    }
+    return;
   }
-  const body = (await res.json()) as SendResponse;
-  if (body.errcode !== 0) {
-    throw new Error(`message/send failed: errcode=${body.errcode} ${body.errmsg ?? ''}`);
-  }
+}
+
+/** 以自建应用文本消息推送给指定成员。errcode 非 0 时抛错。 */
+export async function sendWeComText(userId: string, content: string): Promise<void> {
+  await postMessage(userId, {
+    touser: userId,
+    msgtype: 'text',
+    agentid: Number(env.WECOM_AGENT_ID),
+    text: { content },
+  });
+}
+
+/**
+ * 以自建应用 markdown 消息推送给指定成员（支持 [文字](url) 链接）。
+ * 供搜索结果与每日简报使用；短交互回执仍走 sendWeComText。
+ */
+export async function sendWeComMarkdown(userId: string, content: string): Promise<void> {
+  await postMessage(userId, {
+    touser: userId,
+    msgtype: 'markdown',
+    agentid: Number(env.WECOM_AGENT_ID),
+    markdown: { content },
+  });
 }

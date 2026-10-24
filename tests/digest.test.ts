@@ -9,14 +9,15 @@ import handler, {
 import { subscribers } from '../src/db/schema';
 
 // ---------------------------------------------------------------------------
-// Mocks：LLM / 企微推送 / db 层 / config —— 绝不触网、不连库、不调 LLM。
+// Mocks：企微推送（markdown）/ 仓库简介（loadRepoSummaries）/ db 层 / config —— 绝不触网、不连库、不调 LLM。
 // ---------------------------------------------------------------------------
-const llmMock = vi.hoisted(() => ({
-  generateObjectSafe: vi.fn(),
-}));
-
 const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
+  sendWeComMarkdown: vi.fn(),
+}));
+
+const summaryMock = vi.hoisted(() => ({
+  loadRepoSummaries: vi.fn(),
 }));
 
 const dbMock = vi.hoisted(() => ({
@@ -26,12 +27,13 @@ const dbMock = vi.hoisted(() => ({
   selectRows: [] as unknown[],
 }));
 
-vi.mock('../src/agent/llm', () => ({
-  generateObjectSafe: llmMock.generateObjectSafe,
-}));
-
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
+  sendWeComMarkdown: apiMock.sendWeComMarkdown,
+}));
+
+vi.mock('../src/agent/repo-summary', () => ({
+  loadRepoSummaries: summaryMock.loadRepoSummaries,
 }));
 
 vi.mock('../src/db/client', () => ({
@@ -55,7 +57,12 @@ vi.mock('../src/config', () => ({
   env: { CRON_SECRET: 'unit-test-cron-secret' },
 }));
 
-import { buildDigestForSubscriber, pushDigests } from '../src/agent/digest';
+import {
+  DIGEST_FOOTER,
+  buildDigestForSubscriber,
+  pushDigests,
+  shanghaiToday,
+} from '../src/agent/digest';
 
 type SubscriberRow = typeof subscribers.$inferSelect;
 
@@ -85,6 +92,7 @@ function makeEntry(
     stars: 1000,
     starsDelta: 100,
     isNew: false,
+    htmlUrl: `https://github.com/${fullName}`,
     ...overrides,
   };
 }
@@ -106,9 +114,27 @@ beforeEach(() => {
   dbMock.executeRows.length = 0;
   dbMock.selectConditions.length = 0;
   dbMock.selectRows.length = 0;
-  // 默认：LLM 不可用（返回 null），发送全部成功。
-  llmMock.generateObjectSafe.mockResolvedValue(null);
+  // 默认：简介降级（空 Map，等价 LLM 失败后的无简介输出），发送全部成功。
+  summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
   apiMock.sendWeComText.mockResolvedValue(undefined);
+  apiMock.sendWeComMarkdown.mockResolvedValue(undefined);
+});
+
+// ---------------------------------------------------------------------------
+// shanghaiToday —— 北京时间日期（Vercel 运行时为 UTC，直接 toISOString 会错一天）
+// ---------------------------------------------------------------------------
+describe('shanghaiToday — 北京时间日期', () => {
+  it('UTC 16:00（北京次日 00:00）→ 返回北京日期 YYYY-MM-DD', () => {
+    expect(shanghaiToday(new Date('2026-10-22T16:00:00Z'))).toBe('2026-10-23');
+  });
+
+  it('UTC 15:59:59（北京当日 23:59:59）→ 仍是当日', () => {
+    expect(shanghaiToday(new Date('2026-10-22T15:59:59Z'))).toBe('2026-10-22');
+  });
+
+  it('格式恒为 en-CA 风格 YYYY-MM-DD', () => {
+    expect(shanghaiToday(new Date('2026-01-01T20:00:00Z'))).toBe('2026-01-02');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -176,7 +202,7 @@ describe('buildDigestForSubscriber — 偏好过滤', () => {
 
     const digest = await buildDigestForSubscriber(makeSub());
 
-    expect(digest).toContain('10. o/r10');
+    expect(digest).toContain('10. [o/r10](https://github.com/o/r10)');
     expect(digest).not.toContain('o/r11');
   });
 });
@@ -194,7 +220,7 @@ describe('buildDigestForSubscriber — digestCount 用户自定义', () => {
       makeSub({ preferences: { languages: [], keywords: [], digestCount: 3 } }),
     );
 
-    expect(digest).toContain('3. o/r3');
+    expect(digest).toContain('3. [o/r3](https://github.com/o/r3)');
     expect(digest).not.toContain('o/r4');
   });
 
@@ -207,11 +233,11 @@ describe('buildDigestForSubscriber — digestCount 用户自定义', () => {
       makeSub({ preferences: { languages: [], keywords: [], digestCount: 0 } }),
     );
 
-    expect(digest).toContain('1. o/r1');
+    expect(digest).toContain('1. [o/r1](https://github.com/o/r1)');
     expect(digest).not.toContain('o/r2');
   });
 
-  it('digestCount=99 → clamp 到上限 20（成本护栏，每条多一次 LLM 调用）', async () => {
+  it('digestCount=99 → clamp 到上限 20（成本护栏）', async () => {
     for (let i = 1; i <= 21; i += 1) {
       dbMock.executeRows.push(makeEntry(`o/r${i}`, { starsDelta: 1000 - i }));
     }
@@ -222,7 +248,7 @@ describe('buildDigestForSubscriber — digestCount 用户自定义', () => {
       }),
     );
 
-    expect(digest).toContain('20. o/r20');
+    expect(digest).toContain('20. [o/r20](https://github.com/o/r20)');
     expect(digest).not.toContain('o/r21');
   });
 
@@ -241,54 +267,78 @@ describe('buildDigestForSubscriber — digestCount 用户自定义', () => {
       }),
     );
 
-    expect(digest).toContain('10. o/r10');
+    expect(digest).toContain('10. [o/r10](https://github.com/o/r10)');
     expect(digest).not.toContain('o/r11');
   });
 });
 
 // ---------------------------------------------------------------------------
-// buildDigestForSubscriber —— 头部、LLM why、模板降级
+// buildDigestForSubscriber —— 头部日期（北京时间）、单行格式、简介注入与降级
 // ---------------------------------------------------------------------------
 describe('buildDigestForSubscriber — 简报内容', () => {
-  it('头部固定为「📊 今日 GitHub 热榜简报（YYYY-MM-DD）」（UTC 日期）', async () => {
-    vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(new Date('2026-10-22T10:00:00Z'));
+  it('头部日期为北京时间：UTC 16:30 推送时日期已是北京次日', async () => {
     dbMock.executeRows.push(makeEntry('vercel/next.js'));
-    try {
-      const digest = await buildDigestForSubscriber(makeSub());
-      expect(digest.startsWith('📊 今日 GitHub 热榜简报（2026-10-22）\n')).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+
+    const digest = await buildDigestForSubscriber(
+      makeSub(),
+      new Date('2026-10-22T16:30:00Z'),
+    );
+
+    expect(digest.startsWith('📊 今日 GitHub 热榜简报（2026-10-23）\n')).toBe(true);
   });
 
-  it('LLM 成功：每条含一句「为什么上榜」；prompt 区分新上榜与持续霸榜', async () => {
+  it('页脚固定为「💡 回复「收藏 N」…」且位于消息末尾', async () => {
+    dbMock.executeRows.push(makeEntry('a/one'));
+
+    const digest = await buildDigestForSubscriber(makeSub());
+
+    expect(DIGEST_FOOTER).toBe(
+      '💡 回复「收藏 N」收藏任意一条；发「帮助」查看全部指令',
+    );
+    expect(digest.endsWith(DIGEST_FOOTER)).toBe(true);
+    expect(digest).toContain('收藏');
+  });
+
+  it('每条恰好一行（链接 + ★ + 增量 +（新上榜），不再有「为什么上榜」两行块）', async () => {
     dbMock.executeRows.push(
       makeEntry('a/fresh', { isNew: true, starsDelta: 500 }),
       makeEntry('b/veteran', { starsDelta: 800 }),
     );
-    llmMock.generateObjectSafe.mockResolvedValue({
-      reasons: [
-        { fullName: 'a/fresh', why: '首次进入热榜的新锐项目' },
-        { fullName: 'b/veteran', why: '本周 star 增长 800，持续霸榜' },
-      ],
-    });
 
     const digest = await buildDigestForSubscriber(makeSub());
 
-    expect(digest).toContain('   为什么上榜：首次进入热榜的新锐项目');
-    expect(digest).toContain('   为什么上榜：本周 star 增长 800，持续霸榜');
-
-    const call = llmMock.generateObjectSafe.mock.calls[0];
-    const prompt = String(call?.[1]);
-    expect(prompt).toContain('新上榜');
-    expect(prompt).toContain('持续霸榜');
-    expect(prompt).toContain('a/fresh');
-    expect(prompt).toContain('b/veteran');
+    expect(digest).toContain(
+      '1. [a/fresh](https://github.com/a/fresh) ★1000 (+500)（新上榜）',
+    );
+    expect(digest).toContain(
+      '2. [b/veteran](https://github.com/b/veteran) ★1000 (+800)',
+    );
+    expect(digest).not.toContain('为什么上榜');
+    // 单行纪律：除头部/空行/页脚外，每条条目不产生额外换行
+    expect(digest).not.toMatch(/\n\s{2,}\S/);
   });
 
-  it('LLM 返回 null → 模板降级：无「为什么上榜」，仍含完整 repo 列表（★与增量）', async () => {
-    llmMock.generateObjectSafe.mockResolvedValue(null);
+  it('loadRepoSummaries 注入：命中的仓库行尾追加「 — 中文简介」', async () => {
+    dbMock.executeRows.push(
+      makeEntry('a/fresh', { starsDelta: 500 }),
+      makeEntry('b/veteran', { starsDelta: 800 }),
+    );
+    summaryMock.loadRepoSummaries.mockResolvedValue(
+      new Map([['a/fresh', '新锐 AI 框架']]),
+    );
+
+    const digest = await buildDigestForSubscriber(makeSub());
+
+    expect(summaryMock.loadRepoSummaries).toHaveBeenCalledTimes(1);
+    expect(digest).toContain(
+      '1. [a/fresh](https://github.com/a/fresh) ★1000 (+500) — 新锐 AI 框架',
+    );
+    // 未命中的仓库省略破折号后段
+    expect(digest).toContain('2. [b/veteran](https://github.com/b/veteran) ★1000 (+800)\n');
+  });
+
+  it('简介降级（loadRepoSummaries 返回空 Map）→ 无破折号后段，仍含完整 repo 列表', async () => {
+    summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
     dbMock.executeRows.push(
       makeEntry('vercel/next.js', { stars: 128000, starsDelta: 321 }),
       makeEntry('rust-lang/rust', { isNew: true, stars: 99000, starsDelta: 100 }),
@@ -296,41 +346,52 @@ describe('buildDigestForSubscriber — 简报内容', () => {
 
     const digest = await buildDigestForSubscriber(makeSub());
 
-    expect(digest).toContain('1. vercel/next.js ★128000 (+321)');
-    expect(digest).toContain('2. rust-lang/rust ★99000 (+100)（新上榜）');
-    expect(digest).not.toContain('为什么上榜');
+    expect(digest).toContain(
+      '1. [vercel/next.js](https://github.com/vercel/next.js) ★128000 (+321)',
+    );
+    expect(digest).toContain(
+      '2. [rust-lang/rust](https://github.com/rust-lang/rust) ★99000 (+100)（新上榜）',
+    );
+    expect(digest).not.toContain(' — ');
     expect(digest).toContain('📊 今日 GitHub 热榜简报（');
   });
 
-  it('LLM 抛错（违反 never-reject 契约）时仍降级输出 repo 列表', async () => {
-    llmMock.generateObjectSafe.mockRejectedValue(new Error('llm exploded'));
+  it('loadRepoSummaries 抛错 → 降级输出 repo 列表（摘要失败不吞简报）', async () => {
+    summaryMock.loadRepoSummaries.mockRejectedValue(new Error('llm exploded'));
     dbMock.executeRows.push(makeEntry('x/y', { stars: 10, starsDelta: 5 }));
 
     const digest = await buildDigestForSubscriber(makeSub());
 
-    expect(digest).toContain('1. x/y ★10 (+5)');
+    expect(digest).toContain('1. [x/y](https://github.com/x/y) ★10 (+5)');
   });
 
-  it('超长内容截断到 1800 字节内并标注，首条保留', async () => {
-    const entries = Array.from({ length: 10 }, (_, i) =>
+  it('超长内容截断到 3800 字节内并标注，首条保留', async () => {
+    const entries = Array.from({ length: 20 }, (_, i) =>
       makeEntry(`owner${i}/repo-with-a-rather-long-name-${i}`, {
         stars: 123456,
         starsDelta: 2345,
       }),
     );
     dbMock.executeRows.push(...entries);
-    llmMock.generateObjectSafe.mockResolvedValue({
-      reasons: entries.map((e, i) => ({
-        fullName: String(e.fullName),
-        why: `这是一段很长的上榜理由编号${i}，用来撑爆字节上限。`.repeat(4),
-      })),
-    });
+    summaryMock.loadRepoSummaries.mockResolvedValue(
+      new Map(
+        entries.map((e, i) => [
+          String(e.fullName),
+          `这是一段很长的上榜理由编号${i}，用来撑爆字节上限。`.repeat(4),
+        ]),
+      ),
+    );
 
-    const digest = await buildDigestForSubscriber(makeSub());
+    const digest = await buildDigestForSubscriber(
+      makeSub({
+        preferences: { languages: [], keywords: [], digestCount: 20 },
+      }),
+    );
 
-    expect(Buffer.byteLength(digest, 'utf8')).toBeLessThanOrEqual(1800);
+    expect(Buffer.byteLength(digest, 'utf8')).toBeLessThanOrEqual(3800);
     expect(digest).toContain('（内容过长，已截断）');
     expect(digest).toContain('owner0/repo-with-a-rather-long-name-0');
+    expect(digest).not.toContain('owner19/repo-with-a-rather-long-name-19');
   });
 });
 
@@ -369,7 +430,7 @@ describe('buildDigestForSubscriber — keywords 轻量生效', () => {
 });
 
 // ---------------------------------------------------------------------------
-// pushDigests —— 遍历 active 订阅者，单个失败不中断
+// pushDigests —— 遍历 active 订阅者，单个失败不中断，走 markdown 通道
 // ---------------------------------------------------------------------------
 describe('pushDigests — 推送计数与容错', () => {
   it('订阅查询按 active = true 过滤', async () => {
@@ -379,7 +440,7 @@ describe('pushDigests — 推送计数与容错', () => {
     expect(compiled.sql).toMatch(/"subscribers"\."active"\s*=\s*(\$1|true)/);
   });
 
-  it('全部成功 → { sent: n, failed: 0 }，逐个发送对应 userid', async () => {
+  it('全部成功 → { sent: n, failed: 0 }，逐个经 sendWeComMarkdown 发送', async () => {
     dbMock.selectRows.push(
       makeSub(),
       makeSub({ id: 2, wecomUserid: 'bob' }),
@@ -389,12 +450,13 @@ describe('pushDigests — 推送计数与容错', () => {
     const result = await pushDigests();
 
     expect(result).toEqual({ sent: 2, failed: 0 });
-    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
-    expect(apiMock.sendWeComText.mock.calls.map((c) => c[0])).toEqual([
+    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(2);
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    expect(apiMock.sendWeComMarkdown.mock.calls.map((c) => c[0])).toEqual([
       'alice',
       'bob',
     ]);
-    expect(apiMock.sendWeComText).toHaveBeenLastCalledWith(
+    expect(apiMock.sendWeComMarkdown).toHaveBeenLastCalledWith(
       'bob',
       expect.stringContaining('a/one'),
     );
@@ -408,7 +470,7 @@ describe('pushDigests — 推送计数与容错', () => {
       makeSub({ id: 3, wecomUserid: 'carol' }),
     );
     dbMock.executeRows.push(makeEntry('a/one'));
-    apiMock.sendWeComText
+    apiMock.sendWeComMarkdown
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error('wecom down'))
       .mockResolvedValueOnce(undefined);
@@ -416,12 +478,12 @@ describe('pushDigests — 推送计数与容错', () => {
     const result = await pushDigests();
 
     expect(result).toEqual({ sent: 2, failed: 1 });
-    expect(apiMock.sendWeComText.mock.calls.map((c) => c[0])).toEqual([
+    expect(apiMock.sendWeComMarkdown.mock.calls.map((c) => c[0])).toEqual([
       'alice',
       'bob',
       'carol',
     ]);
-    expect(apiMock.sendWeComText).toHaveBeenLastCalledWith(
+    expect(apiMock.sendWeComMarkdown).toHaveBeenLastCalledWith(
       'carol',
       expect.stringContaining('a/one'),
     );
@@ -476,8 +538,8 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
     expect(res.statusCode).toBe(401);
     expect(JSON.parse(res.body ?? '')).toEqual({ error: 'unauthorized' });
     expect(dbMock.selectConditions).toHaveLength(0);
-    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
-    expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
+    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
+    expect(summaryMock.loadRepoSummaries).not.toHaveBeenCalled();
   });
 
   it('secret 错误 → 401，不做任何推送', async () => {
@@ -487,7 +549,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
 
     expect(res.statusCode).toBe(401);
     expect(dbMock.selectConditions).toHaveLength(0);
-    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
   });
 
   it('只有裸 secret 而无 Bearer 前缀 → 401', async () => {
@@ -512,7 +574,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body ?? '')).toEqual({ sent: 2, failed: 0 });
     expect(res.headers['content-type']).toContain('application/json');
-    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
+    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -520,7 +582,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
 // Vercel Node 函数配置：maxDuration 经 export 生效（不引入 vercel.json）
 // ---------------------------------------------------------------------------
 describe('api/cron-push-digest — 函数时长上限', () => {
-  it('导出 maxDuration = 300（秒；串行 LLM 简报超过默认上限会尾部丢消息）', () => {
+  it('导出 maxDuration = 300（秒；串行简报超过默认上限会尾部丢消息）', () => {
     expect(maxDuration).toBe(300);
   });
 });

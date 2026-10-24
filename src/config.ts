@@ -32,6 +32,8 @@ const envSchema = z.object({
   GITHUB_OAUTH_REDIRECT_URI: z.string().min(1),
   // 可选：服务端 GitHub token，用于提高 API 限额
   GITHUB_TOKEN: optionalString,
+  // 可选：仓库中文简介模式（默认 llm；off = 完全不调 LLM，全部走 description 截断，零 token）
+  REPO_SUMMARY_MODE: optionalString,
   // 安全
   CRON_SECRET: z.string().min(1),
   TOKEN_ENCRYPT_KEY: z.string().min(1),

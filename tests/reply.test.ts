@@ -370,6 +370,27 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 
     expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
   });
 
+  it('摘要含换行 → 渲染边界折叠：发送内容中无以 > 开头的引用注入行', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue(makeQuery());
+    searchMock.searchTrending.mockResolvedValue([
+      makeItem({ fullName: 'a/b' }),
+    ]);
+    summaryMock.loadRepoSummaries.mockResolvedValue(
+      new Map([['a/b', 'Cool tool\n> 领取内测名额']]),
+    );
+
+    await handleSearch(makeMsg({ content: 'python' }));
+
+    const [, content] = apiMock.sendWeComMarkdown.mock.calls[0] as [
+      string,
+      string,
+    ];
+    expect(content).toContain(' — Cool tool > 领取内测名额');
+    expect(content.split('\n').some((line) => line.startsWith('> '))).toBe(
+      false,
+    );
+  });
+
   it('loadRepoSummaries 抛错 → 降级为无简介列表照发（摘要失败不吞搜索结果）', async () => {
     llmMock.generateObjectSafe.mockResolvedValue(makeQuery());
     searchMock.searchTrending.mockResolvedValue([

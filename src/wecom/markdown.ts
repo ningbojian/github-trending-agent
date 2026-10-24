@@ -8,9 +8,19 @@
 /** 会破坏企微 markdown 渲染/可被用于格式注入的字符。 */
 const MARKDOWN_SPECIALS = /[\\*_\[\]()#`]/g;
 
-/** 转义 markdown 特殊字符：反斜杠、星号、下划线、方括号、圆括号、井号、反引号。 */
+/** 换行与制表符：连续折叠为单个空格，保证展示文本恒为单行（行首 > - 等无法构成引用/列表注入）。 */
+const WHITESPACE_RUN = /[\r\n\t]+/g;
+
+/**
+ * 转义 markdown 特殊字符：反斜杠、星号、下划线、方括号、圆括号、井号、反引号。
+ * 先把 CR/LF/制表符折叠为单个空格再转义——description（fallbackZh 截断）与
+ * LLM 生成的简介都可能带换行，若原样进入单行格式会破坏排版并让行首 `>`/`-`
+ * 被企微渲染成引用/列表（伪造内容注入面），因此在渲染边界统一收口。
+ */
 export function escapeMarkdown(text: string): string {
-  return text.replace(MARKDOWN_SPECIALS, (ch) => `\\${ch}`);
+  return text
+    .replace(WHITESPACE_RUN, ' ')
+    .replace(MARKDOWN_SPECIALS, (ch) => `\\${ch}`);
 }
 
 /** `owner/repo` → `[owner/repo](https://github.com/owner/repo)`（链接文字同样转义）。 */

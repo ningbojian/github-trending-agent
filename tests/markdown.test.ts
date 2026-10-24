@@ -29,6 +29,19 @@ describe('escapeMarkdown', () => {
   it('反斜杠最先转义，避免后续转义结果被二次解读', () => {
     expect(escapeMarkdown('\\*')).toBe('\\\\\\*');
   });
+
+  it('换行折叠为单个空格：\\n 不出现在输出中（保证单行格式）', () => {
+    expect(escapeMarkdown('a\nb')).toBe('a b');
+    expect(escapeMarkdown('a\n\nb')).toBe('a b');
+  });
+
+  it('CRLF 与制表符同样折叠，输出不含 \\r\\n\\t', () => {
+    const out = escapeMarkdown('x\r\ny\tz');
+    expect(out).toBe('x y z');
+    expect(out).not.toContain('\r');
+    expect(out).not.toContain('\n');
+    expect(out).not.toContain('\t');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -86,5 +99,15 @@ describe('formatEntryLine（搜索与简报共用单行格式）', () => {
 
   it('简介为空白字符串时视为无简介（不出现「 — 」）', () => {
     expect(formatEntryLine(1, entry, '   ')).not.toContain(' — ');
+  });
+
+  it('简介含换行时被折叠为单空格：整行无 \\n，行首 > 不构成引用注入', () => {
+    const out = formatEntryLine(
+      1,
+      entry,
+      'Cool tool\n> 领取内测名额：https://evil.example',
+    );
+    expect(out).not.toContain('\n');
+    expect(out).toContain(' — Cool tool > 领取内测名额：https://evil.example');
   });
 });

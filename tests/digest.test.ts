@@ -287,6 +287,21 @@ describe('buildDigestForSubscriber — 简报内容', () => {
     expect(digest.startsWith('📊 今日 GitHub 热榜简报（2026-10-23）\n')).toBe(true);
   });
 
+  it('空榜锁定：只有头部 + 占位文案，且不带收藏页脚（无可收藏条目）', async () => {
+    // characterization 测试：锁定 assemble 的 EMPTY_NOTICE 分支——
+    // 空榜时故意省略 DIGEST_FOOTER（「收藏 N」在无可收藏条目时是误导），
+    // 收藏链路写入 search_caches 属 Task 4，届时再统一评估页脚策略。
+    const digest = await buildDigestForSubscriber(
+      makeSub(),
+      new Date('2026-10-22T16:30:00Z'),
+    );
+
+    expect(digest).toBe(
+      '📊 今日 GitHub 热榜简报（2026-10-23）\n\n今日暂无符合条件的热榜项目。',
+    );
+    expect(digest).not.toContain(DIGEST_FOOTER);
+  });
+
   it('页脚固定为「💡 回复「收藏 N」…」且位于消息末尾', async () => {
     dbMock.executeRows.push(makeEntry('a/one'));
 

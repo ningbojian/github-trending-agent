@@ -1,0 +1,1 @@
+ALTER TABLE "subscribers" ADD COLUMN "last_digest_at" timestamp with time zone;

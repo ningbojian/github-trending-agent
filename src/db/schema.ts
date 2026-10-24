@@ -69,12 +69,19 @@ export const subscribers = pgTable(
         languages: string[];
         keywords: string[];
         digestCount?: number;
+        /** 每日推送时间「HH:MM」（北京时间；缺省按 09:00）。 */
+        pushTime?: string;
+        /** 推送间隔天数 1–30（缺省 1 = 每天）。 */
+        intervalDays?: number;
       }>()
       .notNull()
       .default(sql`'{"languages":[],"keywords":[]}'`),
     githubLogin: text('github_login'),
     githubTokenEnc: text('github_token_enc'),
     active: boolean('active').notNull().default(true),
+    // timestamptz（withTimezone: true）：门控 SQL 用 AT TIME ZONE 'Asia/Shanghai'
+    // 做北京时间日期比较——裸 timestamp 在 Neon 的 UTC 会话时区下会算错日期。
+    lastDigestAt: timestamp('last_digest_at', { withTimezone: true }),
     createdAt: timestamp('created_at').notNull().defaultNow(),
   },
   (t) => [unique('subscribers_wecom_userid_unique').on(t.wecomUserid)],

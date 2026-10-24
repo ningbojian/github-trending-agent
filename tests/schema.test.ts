@@ -104,9 +104,26 @@ describe('subscribers', () => {
       'github_login',
       'github_token_enc',
       'id',
+      'last_digest_at',
       'preferences',
       'wecom_userid',
     ]);
+  });
+
+  it('last_digest_at 为带时区 timestamptz（门控 SQL 的 AT TIME ZONE 比较依赖它）', () => {
+    const cfg = getTableConfig(subscribers);
+    const lastDigestAt = cfg.columns.find(
+      (column) => column.name === 'last_digest_at',
+    );
+    expect(lastDigestAt?.columnType).toBe('PgTimestamp');
+    // withTimezone: true → SQL 类型 timestamptz；裸 timestamp 在 Neon UTC 会话下
+    // AT TIME ZONE 'Asia/Shanghai' 日期比较会算错。
+    // （withTimezone 是运行时属性，drizzle 公开类型未声明，故断言时收窄。）
+    expect(
+      (lastDigestAt as unknown as { withTimezone?: boolean } | undefined)
+        ?.withTimezone,
+    ).toBe(true);
+    expect(lastDigestAt?.notNull).toBe(false); // 可空：从未推送过为 NULL
   });
 
   it('enforces unique(wecom_userid)', () => {

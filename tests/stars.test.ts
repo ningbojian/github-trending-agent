@@ -843,6 +843,38 @@ describe('router 分发顺序（五路由 + search 兜底）', () => {
     expect(contents[0]).toContain('我的收藏');
     expect(contents[1]).toBe(UNFAVORITE_USAGE_REPLY);
   });
+
+  it('端到端：「收藏 1。」经真实 handleFavorite 也成功（router 归一化尾标点后 handler 不再静默）', async () => {
+    stubFetchStatus(204);
+    dbMock.selectQueue.push([{ wecomUserid: 'alice' }]); // ensureSubscriber：老用户
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    seedSearchCache([makeItem({ fullName: 'a/one' })]);
+    resetHandlers();
+    registerHandlers({ favorite: handleFavorite });
+
+    await routeMessage(makeMsg({ content: '收藏 1。' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('✅ 已收藏 a/one，已同步到你的 GitHub');
+  });
+
+  it('端到端：「取消收藏一。」经真实 handleUnfavorite 也成功', async () => {
+    stubFetchStatus(204);
+    dbMock.selectQueue.push([{ wecomUserid: 'alice' }]); // ensureSubscriber：老用户
+    dbMock.selectQueue.push([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+    ]);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    resetHandlers();
+    registerHandlers({ unfavorite: handleUnfavorite });
+
+    await routeMessage(makeMsg({ content: '取消收藏一。' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('已取消收藏 a/one');
+  });
 });
 
 // ---------------------------------------------------------------------------

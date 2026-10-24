@@ -484,6 +484,20 @@ describe('handleUnsubscribe（退订 → active=false）', () => {
     expect(searchHandler).not.toHaveBeenCalled();
   });
 
+  it('端到端：「退订。」（尾标点）经真实 handleUnsubscribe 也写 active=false（router 归一化后不再静默）', async () => {
+    dbMock.selectQueue.push([existingSub()]);
+    resetHandlers();
+    registerHandlers({ unsubscribe: handleUnsubscribe });
+
+    await routeMessage(makeMsg({ content: '退订。' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toEqual({ active: false });
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('已退订');
+  });
+
   it('退订写 active=false + 按 wecom_userid 定位（配合 digest 已固化的 active=true 过滤 → 该用户被 pushDigests 跳过）', async () => {
     dbMock.selectQueue.push([existingSub()]);
     // 走完整链路：router「退订」→ 真实 handleUnsubscribe → 写库。
@@ -597,6 +611,24 @@ describe('handleDigestCount（条数 N → 简报条数自定义）', () => {
       expect(content as string).toContain('用法');
       expect(content as string).toContain('条数 N');
     }
+  });
+
+  it('端到端：「条数 5。」（尾标点）经真实 handleDigestCount 也写 digestCount=5（router 归一化后不再误回用法）', async () => {
+    // 第一行给 ensureSubscriber（老用户），第二行给 handleDigestCount 的读-合并-写。
+    dbMock.selectQueue.push([existingSub()], [existingSub()]);
+    resetHandlers();
+    registerHandlers({ digestCount: handleDigestCount });
+
+    await routeMessage(makeMsg({ content: '条数 5。' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: [], digestCount: 5 },
+    });
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith(
+      'alice',
+      '✅ 每日简报条数已设为 5（1–20）',
+    );
   });
 
   it('「订阅 python」读-合并-写：原 digestCount 保留，keywords 整体替换', async () => {

@@ -191,41 +191,47 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
   }
 
   // 统一剥除尾部中英文标点：「帮助。」「收藏 1！」与裸指令同等命中。
-  const content = msg.content.trim().replace(TRAILING_PUNCT_RE, '').trim();
+  // 分发时传归一化的副本——handler 会用各自的正则/等值再校验一次 content，
+  // 若仍传原始文本，「收藏 1。」会在 router 命中后于 handler 静默掉（死消息）。
+  const normalized: InboundMessage = {
+    ...msg,
+    content: msg.content.trim().replace(TRAILING_PUNCT_RE, '').trim(),
+  };
+  const content = normalized.content;
   if (content === '帮助') {
-    return dispatchSafely(handlers.help, msg);
+    return dispatchSafely(handlers.help, normalized);
   }
   if (UNFAVORITE_PATTERN.test(content)) {
-    return dispatchSafely(handlers.unfavorite, msg);
+    return dispatchSafely(handlers.unfavorite, normalized);
   }
   if (FAVORITE_PATTERN.test(content)) {
-    return dispatchSafely(handlers.favorite, msg);
+    return dispatchSafely(handlers.favorite, normalized);
   }
   if (content === '我的收藏') {
-    return dispatchSafely(handlers.list, msg);
+    return dispatchSafely(handlers.list, normalized);
   }
   // Task 11：精确匹配「绑定」（trim 后），避免吞掉「绑定 XXX」类消息。
   if (content === '绑定') {
-    return dispatchSafely(handlers.bind, msg);
+    return dispatchSafely(handlers.bind, normalized);
   }
   if (SUBSCRIBE_PATTERN.test(content)) {
-    return dispatchSafely(handlers.subscribe, msg);
+    return dispatchSafely(handlers.subscribe, normalized);
   }
   if (content === '退订') {
-    return dispatchSafely(handlers.unsubscribe, msg);
+    return dispatchSafely(handlers.unsubscribe, normalized);
   }
   if (DIGEST_COUNT_PATTERN.test(content)) {
-    return dispatchSafely(handlers.digestCount, msg);
+    return dispatchSafely(handlers.digestCount, normalized);
   }
   // 疑似命令容错：以命令词开头却不是合法指令 → 回用法提示，绝不静默掉进搜索。
   const usage = suspectedCommandUsage(content);
   if (usage !== null) {
     return dispatchSafely(
       (m) => sendWeComText(m.fromUserName, usage),
-      msg,
+      normalized,
     );
   }
-  return dispatchSafely(handlers.search, msg);
+  return dispatchSafely(handlers.search, normalized);
 }
 
 // Task 9：帮助/搜索 handler、Task 11：绑定 handler、Task 12：收藏/取消收藏/我的收藏

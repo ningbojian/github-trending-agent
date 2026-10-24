@@ -120,9 +120,12 @@ function processPost(
   res: CallbackResponse,
 ): void {
   let plain: string;
-  // crypt 实例提到 try 外：解密与回执加密复用同一实例（同一把密钥）。
-  const crypt = makeCrypt();
+  // makeCrypt 必须留在 try 内：AESKey 等环境配错时构造函数会抛错，
+  // 此处必须落成快速 401（企微据此告警），不能逃逸成 500 / 未处理拒绝。
+  // 同一 crypt 实例继续用于下方 text 回执加密（同一把密钥）。
+  let crypt: WxbizMsgCrypt;
   try {
+    crypt = makeCrypt();
     plain = crypt.decryptMsg(
       q(req, 'msg_signature'),
       q(req, 'timestamp'),

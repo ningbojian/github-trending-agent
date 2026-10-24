@@ -141,7 +141,7 @@ describe('shanghaiToday — 北京时间日期', () => {
 // buildDigestForSubscriber —— 偏好过滤
 // ---------------------------------------------------------------------------
 describe('buildDigestForSubscriber — 偏好过滤', () => {
-  it('preferences.languages 为空 → 不带 language 过滤（全量榜）', async () => {
+  it('preferences.languages 为空 → 不带语言过滤（全量榜）', async () => {
     dbMock.executeRows.push(makeEntry('a/one'), makeEntry('b/two'));
 
     const digest = await buildDigestForSubscriber(
@@ -149,9 +149,7 @@ describe('buildDigestForSubscriber — 偏好过滤', () => {
     );
 
     const compiled = compileQuery(dbMock.executeQueries[0]);
-    expect(whereFragment(compiled.sql)).not.toContain(
-      '"trending_entries"."language"',
-    );
+    expect(whereFragment(compiled.sql)).not.toContain('"repos"."language"');
     expect(digest).toContain('a/one');
     expect(digest).toContain('b/two');
   });
@@ -164,13 +162,11 @@ describe('buildDigestForSubscriber — 偏好过滤', () => {
     );
 
     const compiled = compileQuery(dbMock.executeQueries[0]);
-    expect(whereFragment(compiled.sql)).not.toContain(
-      '"trending_entries"."language"',
-    );
+    expect(whereFragment(compiled.sql)).not.toContain('"repos"."language"');
     expect(digest).toContain('a/one');
   });
 
-  it('preferences.languages 非空 → language IN 参数化过滤', async () => {
+  it('preferences.languages 非空 → lower(repos.language) IN 参数化过滤', async () => {
     dbMock.executeRows.push(makeEntry('py/match'));
 
     const digest = await buildDigestForSubscriber(
@@ -179,11 +175,27 @@ describe('buildDigestForSubscriber — 偏好过滤', () => {
 
     const compiled = compileQuery(dbMock.executeQueries[0]);
     expect(whereFragment(compiled.sql)).toMatch(
-      /"trending_entries"\."language" in \(\$\d+(?:, \$\d+)*\)/,
+      /lower\("repos"\."language"\) in \(\$\d+(?:, \$\d+)*\)/,
     );
     expect(compiled.params).toContain('python');
     expect(compiled.params).toContain('rust');
     expect(digest).toContain('py/match');
+  });
+
+  it('preferences.languages=["Java"] 经 lowercase 命中仓库真实语言（lower(repos.language) 匹配 "Java"）', async () => {
+    dbMock.executeRows.push(makeEntry('jdk/tool'));
+
+    const digest = await buildDigestForSubscriber(
+      makeSub({ preferences: { languages: ['Java'], keywords: [] } }),
+    );
+
+    const compiled = compileQuery(dbMock.executeQueries[0]);
+    expect(whereFragment(compiled.sql)).toMatch(
+      /lower\("repos"\."language"\) in \(\$\d+\)/,
+    );
+    // normalizePreferences 已 lowercase，参数不再二次 lower
+    expect(compiled.params).toContain('java');
+    expect(digest).toContain('jdk/tool');
   });
 
   it('周期固定为近 7 天（week），候选池 20 条', async () => {

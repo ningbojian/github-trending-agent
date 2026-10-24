@@ -133,20 +133,32 @@ describe('buildSearchSql（SQL/参数组装，不触库）', () => {
     expect(params).toEqual([10]); // 仅 limit topN
   });
 
-  it('languages 为空时不过滤 trending_entries.language', () => {
+  it('languages 为空时不过滤仓库语言', () => {
     const { sql } = buildSearchSql(makeQuery({ languages: [] }));
-    expect(whereFragment(sql)).not.toContain('trending_entries"."language"');
+    expect(whereFragment(sql)).not.toContain('"repos"."language"');
   });
 
-  it('languages 多值 → language IN（各语言独立参数）', () => {
+  it('languages 多值 → lower(repos.language) IN（各语言独立参数，q.languages 已小写不重复 lower）', () => {
     const { sql, params } = buildSearchSql(
       makeQuery({ languages: ['python', 'rust'] }),
     );
     expect(whereFragment(sql)).toMatch(
-      /"trending_entries"\."language" in \(\$\d+, \$\d+\)/,
+      /lower\("repos"\."language"\) in \(\$\d+, \$\d+\)/,
     );
+    expect(whereFragment(sql)).not.toContain('trending_entries"."language"');
     expect(params).toContain('python');
     expect(params).toContain('rust');
+  });
+
+  it('languages 含 c++/c# 时原样进参数（不在 SQL 文本中拼接）', () => {
+    const { sql, params } = buildSearchSql(
+      makeQuery({ languages: ['c++', 'c#'] }),
+    );
+    expect(whereFragment(sql)).toMatch(
+      /lower\("repos"\."language"\) in \(\$\d+, \$\d+\)/,
+    );
+    expect(params).toContain('c++');
+    expect(params).toContain('c#');
   });
 
   it('keywords 为空时无 ilike 条件', () => {

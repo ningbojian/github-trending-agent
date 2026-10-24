@@ -26,12 +26,20 @@ const DEFAULT_SEARCH_QUERY: SearchQuery = {
 const TOP_N_MIN = 1;
 const TOP_N_MAX = 25;
 
+/** 关键词标点清洗：去掉中英文标点与首尾空白；清洗后为空串则由调用方丢弃。 */
+const KEYWORD_PUNCT_RE = /[。！？!?；;，,、()（）]/g;
+
+function cleanKeyword(raw: string): string {
+  return raw.replace(KEYWORD_PUNCT_RE, '').trim();
+}
+
 /**
- * LLM 输出不可信，统一归一化：语言小写去空白、topN 钳位到 1..25、minStars ≥ 0。
+ * LLM 输出不可信，统一归一化：语言小写去空白、关键词去标点、
+ * topN 钳位到 1..25、minStars ≥ 0。
  */
 function normalizeQuery(query: SearchQuery): SearchQuery {
   const languages = query.languages.map((l) => l.trim().toLowerCase()).filter(Boolean);
-  const keywords = query.keywords.map((k) => k.trim()).filter(Boolean);
+  const keywords = query.keywords.map(cleanKeyword).filter(Boolean);
   const minStars =
     query.minStars === null || !Number.isFinite(query.minStars)
       ? null
@@ -52,6 +60,7 @@ function buildPrompt(text: string): string {
     "period（today|week|month|all）、minStars（star 数门槛，未提及为 null）、",
     "sortBy（stars_delta|stars|new）、topN（返回条数，默认 10）。",
     '铁律：只允许从给定文本推断，禁止编造文本中没有的信息；无信号的字段一律用默认值。',
+    '「比较火」「热门」「流行」只表示热度排序（sortBy），不得作为 keywords。',
     '',
     '示例 1',
     '输入：本周 python 里 ai 相关的',
@@ -69,6 +78,10 @@ function buildPrompt(text: string): string {
     '输入：啊',
     '输出：{"languages":[],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
     '',
+    '示例 5',
+    '输入：找一下本周比较火的Java项目',
+    '输出：{"languages":["java"],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '',
     `输入：${text}`,
     '输出：',
   ].join('\n');
@@ -83,6 +96,10 @@ const LANGUAGE_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
   { canonical: 'go', aliases: ['golang', 'go'] },
   { canonical: 'c++', aliases: ['c++', 'cpp'] },
   { canonical: 'c#', aliases: ['c#', 'csharp'] },
+  // html/css/vue 先于 c 注册：c 的正则带边界断言本就不会吞 css/c++，此处顺序仅作显式防御
+  { canonical: 'html', aliases: ['html'] },
+  { canonical: 'css', aliases: ['css'] },
+  { canonical: 'vue', aliases: ['vue'] },
   { canonical: 'c', aliases: ['c'] },
   { canonical: 'java', aliases: ['java'] },
   { canonical: 'kotlin', aliases: ['kotlin'] },
@@ -102,9 +119,14 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** 关键词剔除词表：虚词/时间词/排序词/平台词，按长度倒序拼成一个正则。 */
+/**
+ * 关键词剔除词表：虚词/时间词/排序词/平台词，按长度倒序拼成一个正则。
+ * 刻意不加裸单字填充词（找/火/要）：流程是先 replace 再按 [一-鿿]+ 切 token，
+ * 单字填充会截断复合词（「火狐」→「狐」再被 length<2 丢弃）；独立单字本就被 length<2 过滤。
+ */
 const KEYWORD_FILLERS = [
   '帮我看下', '帮我看看', '请问', '帮我', '我想', '看看', '看下', '请',
+  '找一下', '一下', '最近几天', '比较火', '比较', '热门', '流行', '一些', '推荐', '麻烦', '想要', '给我',
   '这个星期', '这个月', '最近一周', '近一周', '最近', '近期', '本周', '这周', '本月', '今天', '今日',
   '新上榜', '新项目', '增长快', '涨幅快', '涨得快', '飙升', '涨幅', '增长', '上升', '最多', '最高', '总数',
   '最新', '新进', '新',
@@ -187,10 +209,12 @@ export function fallbackParse(text: string): SearchQuery {
     sortBy = 'stars_delta';
   }
 
-  // keywords：剔除语言后，再剔除虚词/时间词/排序词，剩下的词即主题词
+  // keywords：剔除语言后，再剔除虚词/时间词/排序词，剩下的词清洗标点后即主题词
   const keywords: string[] = [];
   const tokens = working.replace(FILLER_RE, ' ').match(/[a-z0-9+#][a-z0-9+#.\-]*|[一-鿿]+/g) ?? [];
-  for (const token of tokens) {
+  for (const raw of tokens) {
+    const token = cleanKeyword(raw);
+    if (!token) continue; // 清洗后为空的纯标点 token 丢弃
     if (/^\d+$/.test(token)) continue; // 纯数字是 star 数/条数，不是关键词
     if (token.length < 2) continue; // 单字噪声（的、里、前…）不入关键词
     if (!keywords.includes(token)) keywords.push(token);

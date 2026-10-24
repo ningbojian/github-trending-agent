@@ -88,7 +88,9 @@ export async function scrapeAndUpsert(): Promise<{
   const pages: Array<{ url: string; language: string }> = [
     { url: 'https://github.com/trending?since=daily', language: LANGUAGE_ALL },
     ...SCRAPER_LANGUAGES.map((language) => ({
-      url: `https://github.com/trending/${language}?since=daily`,
+      // c++ → c%2B%2B、c# → c%23（# 原样会变成 URL fragment）；
+      // 某语言榜 404 时下方沿用「告警并跳过」，不重试。
+      url: `https://github.com/trending/${encodeURIComponent(language)}?since=daily`,
       language,
     })),
   ];

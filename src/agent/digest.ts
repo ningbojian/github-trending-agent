@@ -74,7 +74,8 @@ function headerLine(date: string): string {
 /**
  * 组装 topN 查询 SQL（trending_entries join repos）。
  * - 近 7 天窗口：`date >= now() - make_interval(days => 7)`
- * - languages 非空：`language IN (...)`（参数化）；空 → 不过滤（全量榜）
+ * - languages 非空：`lower(repos.language) IN (...)`（参数化；偏好已小写化，
+ *   repos.language 为 null 时 lower(null) 不匹配即天然排除）；空 → 不过滤（全量榜）
  * - 去重：`distinct on (full_name)`，组内取 stars_delta 最大的一行
  * - 外层按 stars_delta 降序取候选池
  */
@@ -87,7 +88,7 @@ function composeTopSql(languages: string[]): SQL {
       languages.map((language) => sql`${language}`),
       sql`, `,
     );
-    conditions.push(sql`${trendingEntries.language} in (${languageValues})`);
+    conditions.push(sql`lower(${repos.language}) in (${languageValues})`);
   }
 
   return sql`
@@ -239,7 +240,7 @@ function normalizePreferences(preferences: {
 
 /**
  * 构建单个订阅者的每日简报文本（全中文文案，markdown 单行 + 链接 + 中文简介）。
- * - preferences.languages 为空/缺失 → 全量语言榜；非空 → language IN 过滤
+ * - preferences.languages 为空/缺失 → 全量语言榜；非空（已小写化）→ lower(repos.language) IN 过滤
  * - keywords 轻量提升排序（不丢弃条目）
  * - 条数按 preferences.digestCount（clamp 1–20，默认 10）
  * - 头部日期按北京时间（now 可注入，供测试与 Task 5 复用）

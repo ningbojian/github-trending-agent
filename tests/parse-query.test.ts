@@ -79,6 +79,16 @@ describe('parseSearchQuery — LLM path', () => {
     expect(result.topN).toBe(25);
   });
 
+  it('cleans keywords: strips punctuation (。！？!?；;，,、()（）) and drops empty after cleaning', async () => {
+    mocks.generateObjectSafe.mockResolvedValue(
+      llmQuery({ keywords: [' AI！', '（框架）', '。', ''] }),
+    );
+
+    const result = await parseSearchQuery('x');
+
+    expect(result.keywords).toEqual(['AI', '框架']);
+  });
+
   it('clamps topN to at least 1', async () => {
     mocks.generateObjectSafe.mockResolvedValue(llmQuery({ topN: 0 }));
 
@@ -96,6 +106,20 @@ describe('parseSearchQuery — LLM path', () => {
     expect(prompt).toContain('只允许从');
     expect(prompt).toContain('禁止编造');
     expect(prompt).toContain('本周 python 里 ai 相关的');
+  });
+
+  it('prompt 含「找一下本周比较火的Java项目」示例，并注明热度词不得作为 keywords', async () => {
+    mocks.generateObjectSafe.mockResolvedValue(null);
+
+    await parseSearchQuery('x');
+
+    const prompt = mocks.generateObjectSafe.mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('找一下本周比较火的Java项目');
+    expect(prompt).toContain(
+      '{"languages":["java"],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    );
+    expect(prompt).toMatch(/比较火.*热门.*流行/);
+    expect(prompt).toContain('不得作为 keywords');
   });
 });
 
@@ -176,6 +200,44 @@ describe('fallbackParse (direct, pure)', () => {
   it('scales k / 万 suffixes for minStars', () => {
     expect(fallbackParse('10k star 以上的项目').minStars).toBe(10000);
     expect(fallbackParse('star 超过 1万 的项目').minStars).toBe(10000);
+  });
+
+  it('"找一下本周比较火的Java项目" → java / keywords=[] / week（热度语与请求语全部剔除）', () => {
+    expect(fallbackParse('找一下本周比较火的Java项目')).toEqual({
+      languages: ['java'],
+      keywords: [],
+      period: 'week',
+      minStars: null,
+      sortBy: 'stars_delta',
+      topN: 10,
+    });
+  });
+
+  it('新增多字填充词（一下/比较/热门/流行/一些/推荐/麻烦/想要/给我/最近几天）不入 keywords', () => {
+    expect(
+      fallbackParse('麻烦给我推荐一些最近几天比较火的rust项目').keywords,
+    ).toEqual([]);
+    expect(fallbackParse('想要热门流行的go项目').keywords).toEqual([]);
+  });
+
+  it('不加裸单字填充词：复合词不被单字「找/火/要」截断', () => {
+    // 「火狐」若被单字「火」剔除会剩「狐」，再被 length<2 丢弃——单字填充词的直接危害
+    expect(fallbackParse('看看火狐项目').keywords).toContain('火狐');
+  });
+
+  it('新增语言别名 html / css / vue 可识别且不入 keywords', () => {
+    expect(fallbackParse('本周 html css vue 项目')).toEqual({
+      languages: ['html', 'css', 'vue'],
+      keywords: [],
+      period: 'week',
+      minStars: null,
+      sortBy: 'stars_delta',
+      topN: 10,
+    });
+  });
+
+  it('c 别名不吞 css/c++（长别名先匹配的边界保持）', () => {
+    expect(fallbackParse('css 和 c++ 项目').languages).toEqual(['c++', 'css']);
   });
 
   it('does not call the LLM (pure function)', () => {

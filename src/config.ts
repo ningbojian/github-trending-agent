@@ -42,13 +42,29 @@ const envSchema = z.object({
 /**
  * Trending 抓取器覆盖的 per-language 榜单（URL slug，小写）。
  * 总榜（无语言过滤）单独抓取，语言哨兵值为 'all'。
+ * URL 经 encodeURIComponent 编码（c++ → c%2B%2B、c# → c%23）；
+ * 某语言榜 404 时沿用「告警并跳过」，不重试。
  */
 export const SCRAPER_LANGUAGES = [
   'python',
   'typescript',
+  'javascript',
   'go',
   'rust',
   'java',
+  'c',
+  'c++',
+  'c#',
+  'php',
+  'ruby',
+  'swift',
+  'kotlin',
+  'dart',
+  'shell',
+  'html',
+  'css',
+  'vue',
+  'lua',
 ] as const;
 
 export type Env = z.infer<typeof envSchema>;

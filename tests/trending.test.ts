@@ -182,18 +182,56 @@ describe('scrapeAndUpsert（fetch + db mock）', () => {
     return insertLog.filter((c) => c.table === repos);
   }
 
-  it('抓取总榜 + 每个 SCRAPER_LANGUAGES 语言页（since=daily）', async () => {
+  it('SCRAPER_LANGUAGES 覆盖 19 种语言（保留原 5 种）', () => {
+    expect([...SCRAPER_LANGUAGES]).toEqual([
+      'python',
+      'typescript',
+      'javascript',
+      'go',
+      'rust',
+      'java',
+      'c',
+      'c++',
+      'c#',
+      'php',
+      'ruby',
+      'swift',
+      'kotlin',
+      'dart',
+      'shell',
+      'html',
+      'css',
+      'vue',
+      'lua',
+    ]);
+  });
+
+  it('抓取总榜 + 每个 SCRAPER_LANGUAGES 语言页（since=daily，语言 slug 经 encodeURIComponent 编码）', async () => {
     const result = await scrapeAndUpsert();
     expect(fetchedUrls).toEqual([
       'https://github.com/trending?since=daily',
       ...SCRAPER_LANGUAGES.map(
-        (lang) => `https://github.com/trending/${lang}?since=daily`,
+        (lang) =>
+          `https://github.com/trending/${encodeURIComponent(lang)}?since=daily`,
       ),
     ]);
     expect(result).toEqual({
       inserted: fixtureArticleCount * (SCRAPER_LANGUAGES.length + 1),
       languages: SCRAPER_LANGUAGES.length + 1,
     });
+  });
+
+  it('含 + / # 的语言 slug 被编码（c++ → c%2B%2B、c# → c%23，# 原样会变成 fragment）', async () => {
+    await scrapeAndUpsert();
+    expect(fetchedUrls).toContain(
+      'https://github.com/trending/c%2B%2B?since=daily',
+    );
+    expect(fetchedUrls).toContain(
+      'https://github.com/trending/c%23?since=daily',
+    );
+    expect(fetchedUrls.some((url) => url.includes('c++') || url.includes('c#'))).toBe(
+      false,
+    );
   });
 
   it('总榜条目的 language 为哨兵值 "all"（绝不为 null），语言页用真实语言 slug', async () => {

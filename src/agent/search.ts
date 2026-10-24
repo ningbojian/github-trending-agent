@@ -34,7 +34,8 @@ function escapeLike(value: string): string {
  * 组装检索 SQL（trending_entries join repos）。
  * 注入纪律：标识符一律用 drizzle 列引用；语言/关键词/star 门槛/天数/topN 全部参数化。
  * - period：`date >= now() - make_interval(days => $n)`（today 1 / week 7 / month 30）
- * - languages：匹配 trending_entries.language（IN）
+ * - languages：匹配仓库真实语言 lower(repos.language)（IN；q.languages 已小写，
+ *   repos.language 为 null 时 lower(null) 不匹配即天然排除）
  * - keywords：每个关键词在 full_name / description / topics::text 上 ILIKE（字段间 OR，关键词间 AND）
  * - 去重：内层 `distinct on (full_name)`，order by full_name + 原排序语义（组内取首行）；
  *   外层按同样的排序语义（列别名）恢复排名后再 limit topN
@@ -55,7 +56,7 @@ function composeSearchSql(q: SearchQuery): SQL {
       q.languages.map((language) => sql`${language}`),
       sql`, `,
     );
-    conditions.push(sql`${trendingEntries.language} in (${languageValues})`);
+    conditions.push(sql`lower(${repos.language}) in (${languageValues})`);
   }
 
   for (const keyword of q.keywords) {

@@ -1,3 +1,5 @@
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -9,6 +11,7 @@ const llmMock = vi.hoisted(() => ({
 
 const dbMock = vi.hoisted(() => ({
   selectCalls: 0,
+  selectConditions: [] as unknown[],
   selectRows: [] as Record<string, unknown>[],
   insertValues: [] as Record<string, unknown>[],
 }));
@@ -25,8 +28,9 @@ vi.mock('../src/db/client', () => ({
   db: () => ({
     select: () => ({
       from: () => ({
-        where: async () => {
+        where: async (condition: unknown) => {
           dbMock.selectCalls += 1;
+          dbMock.selectConditions.push(condition);
           return dbMock.selectRows;
         },
       }),
@@ -62,9 +66,15 @@ function cacheRow(
   };
 }
 
+/** 把 drizzle SQL 对象编译为文本 + 参数，便于断言（不触库）。 */
+function compileQuery(wrapper: unknown): { sql: string; params: unknown[] } {
+  return new PgDialect().sqlToQuery(wrapper as SQL);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   dbMock.selectCalls = 0;
+  dbMock.selectConditions.length = 0;
   dbMock.selectRows.length = 0;
   dbMock.insertValues.length = 0;
   configMock.env.REPO_SUMMARY_MODE = undefined;
@@ -257,6 +267,27 @@ describe('loadRepoSummaries — 中文直取与 REPO_SUMMARY_MODE=off', () => {
       (dbMock.insertValues[0]!.expiresAt as Date).getTime() - Date.now();
     expect(ttl).toBeGreaterThan(LONG_TTL_MS - 5000);
   });
+
+  it('纯韩语 description（谚文 U+AC00+ 不属 CJK 汉字区段）不走中文快路径，必须进 LLM', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue({
+      summaries: [{ fullName: 'a/one', zh: '韩语开源项目简介' }],
+    });
+
+    const map = await loadRepoSummaries([
+      {
+        fullName: 'a/one',
+        description: '한국어로 작성된 오픈소스 프로젝트 설명입니다',
+      },
+    ]);
+
+    // 回归：CJK 区间若误吞谚文（如第三段起点错写成 U+8C48），此断言会失败。
+    expect(llmMock.generateObjectSafe).toHaveBeenCalledTimes(1);
+    expect(map.get('a/one')).toBe('韩语开源项目简介');
+    expect(dbMock.insertValues).toHaveLength(1);
+    expect((dbMock.insertValues[0]!.value as { zh: string }).zh).toBe(
+      '韩语开源项目简介',
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -308,5 +339,20 @@ describe('loadRepoSummaries — 边界', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('缓存批量查询：inArray 条件的 params 必须是带 repo-zh: 前缀的完整 key', async () => {
+    // 回归：若 select 的 key 去掉 `repo-zh:` 前缀，缓存将 100% miss 且本断言失败。
+    llmMock.generateObjectSafe.mockResolvedValue({
+      summaries: [{ fullName: 'a/one', zh: '生成简介' }],
+    });
+
+    await loadRepoSummaries([{ fullName: 'a/one', description: 'desc one' }]);
+
+    expect(dbMock.selectCalls).toBe(1);
+    expect(dbMock.selectConditions).toHaveLength(1);
+    const compiled = compileQuery(dbMock.selectConditions[0]);
+    expect(compiled.sql).toMatch(/"key" in \(\$\d+\)/);
+    expect(compiled.params).toContain('repo-zh:a/one');
   });
 });

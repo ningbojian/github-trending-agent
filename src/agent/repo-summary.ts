@@ -61,8 +61,9 @@ function srcOf(description: string | null): string {
 function isChinese(text: string): boolean {
   const chars = Array.from(text).filter((c) => !/\s/.test(c));
   if (chars.length === 0) return false;
+  // 显式 \u 转义：字面字符易错（曾把起点写成 U+8C48「豈」，误吞韩文/谚文等）。
   const cjk = chars.filter((c) =>
-    /[㐀-䶿一-鿿豈-﫿]/.test(c),
+    /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/.test(c),
   ).length;
   return cjk / chars.length >= 0.3;
 }

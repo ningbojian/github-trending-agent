@@ -120,11 +120,18 @@ interface SendResponse {
 /** 以自建应用文本消息推送给指定成员。errcode 非 0 时抛错。 */
 export async function sendWeComText(userId: string, content: string): Promise<void> {
   const token = await getWeComAccessToken();
+  // 可选出站中转：配置了 WECOM_RELAY_URL 时 message/send 走固定 IP 中转（规避企微白名单），
+  // 尾斜杠剥除防双斜杠路径；gettoken 不查白名单，仍直连。
+  const relayUrl = env.WECOM_RELAY_URL?.replace(/\/+$/, '');
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (env.WECOM_RELAY_SECRET) {
+    headers['X-Relay-Secret'] = env.WECOM_RELAY_SECRET;
+  }
   const res = await fetch(
-    `https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`,
+    `${relayUrl ?? 'https://qyapi.weixin.qq.com'}/cgi-bin/message/send?access_token=${encodeURIComponent(token)}`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers,
       body: JSON.stringify({
         touser: userId,
         msgtype: 'text',

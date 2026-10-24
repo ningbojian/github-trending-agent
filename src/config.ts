@@ -23,6 +23,9 @@ const envSchema = z.object({
   WECOM_CALLBACK_AES_KEY: z.string().min(1),
   // 可选：管理员 userid，用于失败告警推送
   WECOM_ADMIN_USERID: optionalString,
+  // 可选：出站中转（message/send 经固定 IP 中转，规避企微白名单）。仅 message/send 走中转，gettoken 仍直连。
+  WECOM_RELAY_URL: optionalString,
+  WECOM_RELAY_SECRET: optionalString,
   // GitHub OAuth App
   GITHUB_CLIENT_ID: z.string().min(1),
   GITHUB_CLIENT_SECRET: z.string().min(1),

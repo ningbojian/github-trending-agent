@@ -4,7 +4,9 @@ import { env } from '../src/config.js';
 /**
  * 定时推送每日简报端点（Vercel Node function）。
  * - 校验 `Authorization: Bearer <CRON_SECRET>`：缺失/错误 → 401 JSON，不做任何推送
- * - 校验通过 → pushDigests() → 200 JSON `{ sent, failed }`
+ * - 校验通过 → pushDigests() → 200 JSON `{ sent, skipped, failed }`
+ *   （skipped=推送时间未到/当日已发/未满间隔/抢占落败；failed=已抢占但发送失败，
+ *   last_digest_at 已回滚，下一小时 tick 自动重试）
  * 请求/响应最小形态与 api/wecom-callback.ts 保持一致（不引入 @vercel/node 依赖）。
  */
 

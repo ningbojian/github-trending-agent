@@ -1,4 +1,4 @@
-import { eq, sql, type SQL } from 'drizzle-orm';
+import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
 import { sendWeComMarkdown } from '../wecom/api.js';
@@ -66,6 +66,41 @@ const shanghaiDateFormatter = new Intl.DateTimeFormat('en-CA', {
  */
 export function shanghaiToday(now: Date = new Date()): string {
   return shanghaiDateFormatter.format(now);
+}
+
+/** 简报默认推送时间（北京时间 HH:MM；preferences 缺省/非法时使用）。 */
+export const DEFAULT_PUSH_TIME = '09:00';
+/** 推送间隔下限（天）。 */
+export const MIN_INTERVAL_DAYS = 1;
+/** 推送间隔上限（天，成本护栏）。 */
+export const MAX_INTERVAL_DAYS = 30;
+
+/** pushTime 合法形态：24 小时制「HH:MM」（00:00–23:59）。 */
+const PUSH_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// hourCycle: 'h23' —— h24 会在午夜输出 "24:00"，门控分钟数与回执都会算错。
+const shanghaiTimeFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Shanghai',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/**
+ * 北京时间「HH:MM」（补零，h23：午夜为 00:00）。
+ * Task 5 推送时间门控与「推送时间」回执共用；now 可注入供测试。
+ */
+export function shanghaiHHMM(now: Date = new Date()): string {
+  const parts = shanghaiTimeFormatter.formatToParts(now);
+  const hour = parts.find((part) => part.type === 'hour')?.value ?? '00';
+  const minute = parts.find((part) => part.type === 'minute')?.value ?? '00';
+  return `${hour}:${minute}`;
+}
+
+/** 北京时间当日分钟数（0–1439），与 preferences.pushTime 的分钟数同刻度比较。 */
+export function shanghaiMinutes(now: Date = new Date()): number {
+  const [hour, minute] = shanghaiHHMM(now).split(':');
+  return Number(hour) * 60 + Number(minute);
 }
 
 function headerLine(date: string): string {
@@ -225,13 +260,23 @@ const KEYWORD_PUNCT_RE = /[。！？!?；;，,、()（）]/g;
  * preferences 运行时防御：字段缺失/非数组一律按空处理（languages 空 → 全量）；
  * keywords 去中英文标点后 trim/lowercase（读取侧清洗存量脏数据，逻辑与 parse-query 一致）；
  * languages 只 trim/lowercase（语言过滤逻辑不变）；
- * digestCount 非有限数字（含字符串/NaN/缺失）→ 默认 10，有限数字 → clamp 1–20。
+ * digestCount 非有限数字（含字符串/NaN/缺失）→ 默认 10，有限数字 → clamp 1–20；
+ * pushTime 不匹配 `^([01]\d|2[0-3]):[0-5]\d$` → 默认 09:00；
+ * intervalDays 非 1–30 整数 → 默认 1（Handler写入侧已拦截越界，此处兜底脏数据）。
  */
 function normalizePreferences(preferences: {
   languages?: unknown;
   keywords?: unknown;
   digestCount?: unknown;
-}): { languages: string[]; keywords: string[]; digestCount: number } {
+  pushTime?: unknown;
+  intervalDays?: unknown;
+}): {
+  languages: string[];
+  keywords: string[];
+  digestCount: number;
+  pushTime: string;
+  intervalDays: number;
+} {
   const list = (value: unknown): string[] =>
     Array.isArray(value)
       ? value.map((item) => String(item).trim().toLowerCase()).filter(Boolean)
@@ -247,10 +292,25 @@ function normalizePreferences(preferences: {
     typeof rawCount === 'number' && Number.isFinite(rawCount)
       ? Math.min(MAX_DIGEST_COUNT, Math.max(MIN_DIGEST_COUNT, Math.floor(rawCount)))
       : DEFAULT_DIGEST_COUNT;
+  const rawPushTime = preferences.pushTime;
+  const pushTime =
+    typeof rawPushTime === 'string' && PUSH_TIME_RE.test(rawPushTime)
+      ? rawPushTime
+      : DEFAULT_PUSH_TIME;
+  const rawInterval = preferences.intervalDays;
+  const intervalDays =
+    typeof rawInterval === 'number' &&
+    Number.isInteger(rawInterval) &&
+    rawInterval >= MIN_INTERVAL_DAYS &&
+    rawInterval <= MAX_INTERVAL_DAYS
+      ? rawInterval
+      : 1;
   return {
     languages: list(preferences.languages),
     keywords: keywordList(preferences.keywords),
     digestCount,
+    pushTime,
+    intervalDays,
   };
 }
 
@@ -346,24 +406,131 @@ export async function invalidateRecentResults(
 }
 
 /**
- * 向所有 active 订阅者推送每日简报（markdown 通道）。
- * 逐个 try/catch：单个订阅者失败（建简报或发送）不影响其余，
- * 返回 { sent, failed } 计数。
- * 发送成功后按消息展示顺序写 search_caches（「收藏 N」引用刚收到的简报）；
+ * pushDigests 返回值：sent=实际发送；skipped=门控未到/当日已发/未满间隔/抢占
+ * 落败（含并发竞争）；failed=抢占成功后构建或发送失败（已回滚，下一小时重试）。
+ */
+export interface PushDigestsResult {
+  sent: number;
+  skipped: number;
+  failed: number;
+}
+
+/** 「HH:MM」→ 当日分钟数（pushTime 已经过 PUSH_TIME_RE 校验）。 */
+function pushTimeMinutes(pushTime: string): number {
+  const [hour, minute] = pushTime.split(':');
+  return Number(hour) * 60 + Number(minute);
+}
+
+/**
+ * 该订阅者今日是否可发（JS 侧门控，与抢占 SQL 的条件同语义）：
+ * - 从未发送（last_digest_at 为 null）→ 可发；
+ * - 上次发送的北京日期 >= 今日（当天已发/时钟偏移的未来时间）→ 不可发；
+ * - 否则必须已满 intervalDays 天（`last <= now - intervalDays 天`）。
+ * 抢占 SQL 仍是并发下的权威（两进程同时读到 null 时只有一方能 UPDATE 成功）。
+ */
+function eligibleForPush(
+  lastDigestAt: Date | null,
+  intervalDays: number,
+  now: Date,
+  today: string,
+): boolean {
+  if (lastDigestAt === null) {
+    return true;
+  }
+  if (shanghaiToday(lastDigestAt) >= today) {
+    return false;
+  }
+  return lastDigestAt.getTime() <= now.getTime() - intervalDays * 86_400_000;
+}
+
+/**
+ * 条件 UPDATE 抢占（原子，防并发重复发送）：
+ * `SET last_digest_at = now() WHERE id=$1 AND active AND
+ *  (last_digest_at IS NULL OR (北京日期 < 今日 AND last_digest_at <= now() - intervalDays 天))`
+ * 返回 true=抢到（可以构建发送）；false=已发过/并发对方先抢到。
+ * 日期比较用 AT TIME ZONE 'Asia/Shanghai'——last_digest_at 是 timestamptz，
+ * 转北京时间墙钟再取 date 才是用户的「今天」。
+ */
+async function claimDigest(id: number, intervalDays: number): Promise<boolean> {
+  const condition = and(
+    eq(subscribers.id, id),
+    eq(subscribers.active, true),
+    or(
+      isNull(subscribers.lastDigestAt),
+      and(
+        sql`(${subscribers.lastDigestAt} AT TIME ZONE 'Asia/Shanghai')::date < (now() AT TIME ZONE 'Asia/Shanghai')::date`,
+        sql`${subscribers.lastDigestAt} <= now() - make_interval(days => ${intervalDays})`,
+      ),
+    ),
+  ) as SQL;
+  const rows = await db()
+    .update(subscribers)
+    .set({ lastDigestAt: sql`now()` })
+    .where(condition)
+    .returning({ id: subscribers.id });
+  return rows.length > 0;
+}
+
+/**
+ * 抢占成功后的失败回滚：把 last_digest_at 置回 NULL，让下一小时的整点
+ * tick 重新满足抢占条件（重试）。回滚自身失败仅记日志——绝不向外抛。
+ */
+async function rollbackClaim(id: number): Promise<void> {
+  try {
+    await db()
+      .update(subscribers)
+      .set({ lastDigestAt: null })
+      .where(eq(subscribers.id, id));
+  } catch (err) {
+    console.error(`rollback last_digest_at failed for subscriber ${id}:`, err);
+  }
+}
+
+/**
+ * 向所有 active 订阅者推送每日简报（markdown 通道），按 Task 5 门控逐个放行：
+ * 1. 北京时间分钟数 `nowMin >= pushMin`（pushTime 非法按 09:00）；
+ * 2. 当日未发且已满 intervalDays 天（JS 预检，避免无谓写库）；
+ * 3. 条件 UPDATE 抢占（并发权威；落败 → skipped，绝不重复发送）；
+ * 4. 抢占成功后构建 → 发送 → 按消息展示顺序写 search_caches。
+ * 逐个 try/catch：抢占后的任何失败（构建/发送）把 last_digest_at 回滚为 NULL
+ * 并计入 failed，下一小时重试；单个订阅者失败不影响其余。
+ * 返回 { sent, skipped, failed }。
+ * 发送成功后写 search_caches（「收藏 N」引用刚收到的简报）；
  * 发送失败不写缓存——绝不让序号指向用户没收到的列表。
  */
 export async function pushDigests(
   now: Date = new Date(),
-): Promise<{ sent: number; failed: number }> {
+): Promise<PushDigestsResult> {
   const rows = await db()
     .select()
     .from(subscribers)
     .where(eq(subscribers.active, true));
 
+  const nowMinutes = shanghaiMinutes(now);
+  const today = shanghaiToday(now);
+
   let sent = 0;
+  let skipped = 0;
   let failed = 0;
   for (const sub of rows) {
+    // claimed 只在抢占确认成功后为 true：外层 catch 据此决定是否回滚
+    // （抢占语句自身抛错 = 未生效，无需回滚）。
+    let claimed = false;
     try {
+      const { pushTime, intervalDays } = normalizePreferences(sub.preferences);
+      if (nowMinutes < pushTimeMinutes(pushTime)) {
+        skipped += 1;
+        continue;
+      }
+      if (!eligibleForPush(sub.lastDigestAt ?? null, intervalDays, now, today)) {
+        skipped += 1;
+        continue;
+      }
+      claimed = await claimDigest(sub.id, intervalDays);
+      if (!claimed) {
+        skipped += 1;
+        continue;
+      }
       const { content, entries } = await buildDigestWithEntries(sub, now);
       await sendWeComMarkdown(sub.wecomUserid, content);
       sent += 1;
@@ -372,6 +539,7 @@ export async function pushDigests(
       } catch (err) {
         // 写缓存失败 → 失效旧缓存，让「收藏 N」落回无缓存三态文案；
         // 失效本身失败仅记日志（DB 全挂时不能外抛、不能翻转发送计数）。
+        // 注意：消息已发出，不触发 last_digest_at 回滚。
         console.error(`saveRecentResults failed for ${sub.wecomUserid}:`, err);
         try {
           await invalidateRecentResults(sub.wecomUserid);
@@ -385,7 +553,10 @@ export async function pushDigests(
     } catch (err) {
       failed += 1;
       console.error(`pushDigests failed for ${sub.wecomUserid}:`, err);
+      if (claimed) {
+        await rollbackClaim(sub.id);
+      }
     }
   }
-  return { sent, failed };
+  return { sent, skipped, failed };
 }

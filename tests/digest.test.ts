@@ -23,12 +23,25 @@ const summaryMock = vi.hoisted(() => ({
 const dbMock = vi.hoisted(() => ({
   executeQueries: [] as unknown[],
   executeRows: [] as Record<string, unknown>[],
+  executeError: undefined as Error | undefined,
   selectConditions: [] as unknown[],
   selectRows: [] as unknown[],
   deleteCalls: [] as { table: unknown; condition: unknown }[],
   insertCalls: [] as { table: unknown; values: Record<string, unknown> }[],
   insertError: undefined as Error | undefined,
   deleteError: undefined as Error | undefined,
+  /**
+   * update 流水线记录：kind='claim' 为条件 UPDATE … RETURNING（抢占），
+   * kind='update' 为普通 update（回滚 last_digest_at 等）。
+   */
+  updateCalls: [] as {
+    table: unknown;
+    values: Record<string, unknown>;
+    condition: unknown;
+    kind: 'claim' | 'update';
+  }[],
+  /** 抢占 RETURNING 结果队列：逐次 shift；耗尽后默认返回一行（抢占成功）。 */
+  claimResults: [] as Record<string, unknown>[][],
 }));
 
 vi.mock('../src/wecom/api', () => ({
@@ -43,6 +56,9 @@ vi.mock('../src/agent/repo-summary', () => ({
 vi.mock('../src/db/client', () => ({
   db: () => ({
     execute: async (query: unknown) => {
+      if (dbMock.executeError) {
+        throw dbMock.executeError;
+      }
       dbMock.executeQueries.push(query);
       return { rows: dbMock.executeRows };
     },
@@ -51,6 +67,34 @@ vi.mock('../src/db/client', () => ({
         where: async (condition: unknown) => {
           dbMock.selectConditions.push(condition);
           return dbMock.selectRows;
+        },
+      }),
+    }),
+    update: (table: unknown) => ({
+      set: (values: Record<string, unknown>) => ({
+        where: (condition: unknown) => {
+          const record = { table, values, condition };
+          let recordedPlain = false;
+          return {
+            /** 条件抢占路径：await …returning()。 */
+            returning: async () => {
+              dbMock.updateCalls.push({ ...record, kind: 'claim' });
+              return dbMock.claimResults.length > 0
+                ? (dbMock.claimResults.shift() as Record<string, unknown>[])
+                : [{ id: 1 }];
+            },
+            /** 普通 update 路径：直接 await where(...)（drizzle thenable 语义）。 */
+            then: (
+              onFulfilled?: (value: void) => unknown,
+              onRejected?: (reason: unknown) => unknown,
+            ) => {
+              if (!recordedPlain) {
+                recordedPlain = true;
+                dbMock.updateCalls.push({ ...record, kind: 'update' });
+              }
+              return Promise.resolve(undefined).then(onFulfilled, onRejected);
+            },
+          };
         },
       }),
     }),
@@ -84,6 +128,8 @@ import {
   invalidateRecentResults,
   pushDigests,
   saveRecentResults,
+  shanghaiHHMM,
+  shanghaiMinutes,
   shanghaiToday,
 } from '../src/agent/digest';
 
@@ -94,10 +140,13 @@ function makeSub(overrides: Partial<SubscriberRow> = {}): SubscriberRow {
     id: 1,
     wecomUserid: 'alice',
     displayName: 'Alice',
-    preferences: { languages: [], keywords: [] },
+    // pushTime '00:00' → 时间门恒过：本文件既有用例聚焦缓存写/计数语义，
+    // 不因运行时刻而变；门控语义由下方「推送时间/间隔门控」describe 显式覆盖。
+    preferences: { languages: [], keywords: [], pushTime: '00:00' },
     githubLogin: null,
     githubTokenEnc: null,
     active: true,
+    lastDigestAt: null,
     createdAt: new Date('2026-10-01T00:00:00Z'),
     ...overrides,
   };
@@ -135,12 +184,15 @@ beforeEach(() => {
   vi.clearAllMocks();
   dbMock.executeQueries.length = 0;
   dbMock.executeRows.length = 0;
+  dbMock.executeError = undefined;
   dbMock.selectConditions.length = 0;
   dbMock.selectRows.length = 0;
   dbMock.deleteCalls.length = 0;
   dbMock.insertCalls.length = 0;
   dbMock.insertError = undefined;
   dbMock.deleteError = undefined;
+  dbMock.updateCalls.length = 0;
+  dbMock.claimResults.length = 0;
   // 默认：简介降级（空 Map，等价 LLM 失败后的无简介输出），发送全部成功。
   summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
   apiMock.sendWeComText.mockResolvedValue(undefined);
@@ -620,7 +672,7 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
 
     const result = await pushDigests();
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
     expect(dbMock.deleteCalls).toHaveLength(1);
     expect(dbMock.deleteCalls[0]?.table).toBe(searchCaches);
     expect(dbMock.insertCalls).toHaveLength(1);
@@ -639,7 +691,9 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
       }),
     );
     dbMock.selectRows.push(
-      makeSub({ preferences: { languages: [], keywords: [], digestCount: 20 } }),
+      makeSub({
+        preferences: { languages: [], keywords: [], digestCount: 20, pushTime: '00:00' },
+      }),
     );
     dbMock.executeRows.push(...entriesRows);
     summaryMock.loadRepoSummaries.mockResolvedValue(
@@ -669,7 +723,7 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
 
     const result = await pushDigests();
 
-    expect(result).toEqual({ sent: 0, failed: 1 });
+    expect(result).toEqual({ sent: 0, skipped: 0, failed: 1 });
     expect(dbMock.deleteCalls).toHaveLength(0);
     expect(dbMock.insertCalls).toHaveLength(0);
     errorSpy.mockRestore();
@@ -680,7 +734,7 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
 
     const result = await pushDigests();
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
     expect(dbMock.deleteCalls).toHaveLength(0);
     expect(dbMock.insertCalls).toHaveLength(0);
   });
@@ -698,7 +752,7 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
 
     const result = await pushDigests();
 
-    expect(result).toEqual({ sent: 1, failed: 1 });
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 1 });
     expect(dbMock.insertCalls).toHaveLength(1);
     expect(dbMock.insertCalls[0]?.values).toMatchObject({ wecomUserid: 'alice' });
     errorSpy.mockRestore();
@@ -717,7 +771,7 @@ describe('pushDigests — 缓存写失败的 best-effort 失效', () => {
 
     const result = await pushDigests();
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
     expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
     // save 的 delete（成功）+ invalidate 的 delete；两次都按用户隔离删 search_caches。
     expect(dbMock.deleteCalls).toHaveLength(2);
@@ -741,7 +795,7 @@ describe('pushDigests — 缓存写失败的 best-effort 失效', () => {
 
     const result = await pushDigests();
 
-    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
     expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
     expect(console.error).toHaveBeenCalledWith(
       'saveRecentResults failed for alice:',
@@ -785,7 +839,7 @@ describe('pushDigests — 推送计数与容错', () => {
 
     const result = await pushDigests();
 
-    expect(result).toEqual({ sent: 2, failed: 0 });
+    expect(result).toEqual({ sent: 2, skipped: 0, failed: 0 });
     expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(2);
     expect(apiMock.sendWeComText).not.toHaveBeenCalled();
     expect(apiMock.sendWeComMarkdown.mock.calls.map((c) => c[0])).toEqual([
@@ -813,7 +867,7 @@ describe('pushDigests — 推送计数与容错', () => {
 
     const result = await pushDigests();
 
-    expect(result).toEqual({ sent: 2, failed: 1 });
+    expect(result).toEqual({ sent: 2, skipped: 0, failed: 1 });
     expect(apiMock.sendWeComMarkdown.mock.calls.map((c) => c[0])).toEqual([
       'alice',
       'bob',
@@ -824,6 +878,237 @@ describe('pushDigests — 推送计数与容错', () => {
       expect.stringContaining('a/one'),
     );
     errorSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 北京时间工具函数（Task 5：推送时间门控；h23 —— 午夜绝不出现 24:00）
+// ---------------------------------------------------------------------------
+describe('北京时间工具函数', () => {
+  it('shanghaiHHMM：UTC 16:00（北京次日 00:00）→ "00:00"（h23，绝不出现 24:00）', () => {
+    expect(shanghaiHHMM(new Date('2026-10-22T16:00:00Z'))).toBe('00:00');
+  });
+
+  it('shanghaiHHMM：北京 09:05 → "09:05"（补零）', () => {
+    expect(shanghaiHHMM(new Date('2026-10-22T01:05:00Z'))).toBe('09:05');
+  });
+
+  it('shanghaiMinutes：北京 23:59 → 1439；00:00 → 0', () => {
+    expect(shanghaiMinutes(new Date('2026-10-22T15:59:00Z'))).toBe(1439);
+    expect(shanghaiMinutes(new Date('2026-10-22T16:00:00Z'))).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pushDigests —— 推送时间/间隔门控 + 条件抢占 + 失败回滚（Task 5）
+// ---------------------------------------------------------------------------
+describe('pushDigests — 推送时间/间隔门控与抢占', () => {
+  /** 北京时间 2026-10-23 08:30（pushTime 09:00 未到）。 */
+  const BEFORE_PUSH = new Date('2026-10-23T00:30:00Z');
+  /** 北京时间 2026-10-23 09:00（恰好到点）。 */
+  const AT_PUSH = new Date('2026-10-23T01:00:00Z');
+
+  function subWith(
+    preferences: Record<string, unknown>,
+    overrides: Partial<SubscriberRow> = {},
+  ): SubscriberRow {
+    return makeSub({
+      preferences:
+        preferences as SubscriberRow['preferences'],
+      ...overrides,
+    });
+  }
+
+  it('pushTime 09:00 未到（北京 08:30）→ 不构建、不抢占、不发送，{sent:0, skipped:1, failed:0}', async () => {
+    dbMock.selectRows.push(
+      subWith({ languages: [], keywords: [], pushTime: '09:00' }),
+    );
+
+    const result = await pushDigests(BEFORE_PUSH);
+
+    expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
+    expect(dbMock.updateCalls).toHaveLength(0);
+    expect(dbMock.executeQueries).toHaveLength(0);
+  });
+
+  it('pushTime 09:00 恰好到点（nowMin == pushMin，>= 语义）→ 发送', async () => {
+    dbMock.selectRows.push(
+      subWith({ languages: [], keywords: [], pushTime: '09:00' }),
+    );
+    dbMock.executeRows.push(makeEntry('a/one'));
+
+    const result = await pushDigests(AT_PUSH);
+
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('当天已发（last_digest_at 为北京当日）→ 不重发、不抢占', async () => {
+    dbMock.selectRows.push(
+      makeSub({ lastDigestAt: new Date('2026-10-23T01:00:00Z') }),
+    );
+
+    // 北京 2026-10-23 14:00：同日已发过。
+    const result = await pushDigests(new Date('2026-10-23T06:00:00Z'));
+
+    expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
+    expect(dbMock.updateCalls).toHaveLength(0);
+  });
+
+  it('intervalDays=2：上次北京 10-21 09:00 → 次日（10-22）不发', async () => {
+    dbMock.selectRows.push(
+      subWith(
+        { languages: [], keywords: [], pushTime: '00:00', intervalDays: 2 },
+        { lastDigestAt: new Date('2026-10-21T01:00:00Z') },
+      ),
+    );
+
+    // 北京 2026-10-22 10:00：跨日但未满 2 天。
+    const result = await pushDigests(new Date('2026-10-22T02:00:00Z'));
+
+    expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
+    expect(dbMock.updateCalls).toHaveLength(0);
+  });
+
+  it('intervalDays=2：第三天（10-23）满间隔 → 抢占成功并发送', async () => {
+    dbMock.selectRows.push(
+      subWith(
+        { languages: [], keywords: [], pushTime: '00:00', intervalDays: 2 },
+        { lastDigestAt: new Date('2026-10-21T01:00:00Z') },
+      ),
+    );
+    dbMock.executeRows.push(makeEntry('a/one'));
+
+    // 北京 2026-10-23 10:00：距上次（10-21 09:00）已满 2 天。
+    const result = await pushDigests(new Date('2026-10-23T02:00:00Z'));
+
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    const claims = dbMock.updateCalls.filter((c) => c.kind === 'claim');
+    expect(claims).toHaveLength(1);
+    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('并发抢占：claim 仅第一次返回行 → 两次 pushDigests 只有第一次发送', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'));
+    // 模拟条件 UPDATE 的原子性：第一次抢到（返回行），第二次 0 行。
+    dbMock.claimResults.push([{ id: 1 }], []);
+
+    const first = await pushDigests(AT_PUSH);
+    const second = await pushDigests(AT_PUSH);
+
+    expect(first).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(second).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
+    expect(dbMock.updateCalls.filter((c) => c.kind === 'claim')).toHaveLength(2);
+    expect(dbMock.insertCalls).toHaveLength(1); // 只有第一次成功者写缓存
+  });
+
+  it('发送失败 → 回滚 last_digest_at = NULL（下一小时重试）+ failed，不写缓存', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'));
+    apiMock.sendWeComMarkdown.mockRejectedValue(new Error('wecom down'));
+
+    const result = await pushDigests(AT_PUSH);
+
+    expect(result).toEqual({ sent: 0, skipped: 0, failed: 1 });
+    const claim = dbMock.updateCalls.find((c) => c.kind === 'claim');
+    expect(claim).toBeDefined();
+    const rollback = dbMock.updateCalls.find((c) => c.kind === 'update');
+    expect(rollback).toBeDefined();
+    expect(rollback?.values).toEqual({ lastDigestAt: null });
+    const compiled = compileQuery(rollback?.condition);
+    expect(compiled.sql).toContain('"subscribers"."id"');
+    expect(compiled.params).toContain(1);
+    // 发送失败绝不写缓存。
+    expect(dbMock.deleteCalls).toHaveLength(0);
+    expect(dbMock.insertCalls).toHaveLength(0);
+    errorSpy.mockRestore();
+  });
+
+  it('构建失败（digest 查询抛错）→ 同样回滚 last_digest_at', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeError = new Error('db down');
+
+    const result = await pushDigests(AT_PUSH);
+
+    expect(result).toEqual({ sent: 0, skipped: 0, failed: 1 });
+    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
+    const rollback = dbMock.updateCalls.find((c) => c.kind === 'update');
+    expect(rollback?.values).toEqual({ lastDigestAt: null });
+    errorSpy.mockRestore();
+  });
+
+  it('抢占 SQL 形状：AT TIME ZONE Asia/Shanghai 日期比较 + make_interval(days => intervalDays)', async () => {
+    dbMock.selectRows.push(
+      subWith({ languages: [], keywords: [], pushTime: '00:00', intervalDays: 3 }, { id: 7 }),
+    );
+
+    await pushDigests(AT_PUSH);
+
+    const claim = dbMock.updateCalls.find((c) => c.kind === 'claim');
+    expect(claim).toBeDefined();
+    const compiled = compileQuery(claim?.condition);
+    expect(compiled.sql).toContain("AT TIME ZONE 'Asia/Shanghai'");
+    expect(compiled.sql).toContain('make_interval');
+    expect(compiled.sql).toContain('"subscribers"."last_digest_at"');
+    expect(compiled.sql).toContain('"subscribers"."active"');
+    expect(compiled.params).toContain(7); // id
+    expect(compiled.params).toContain(3); // intervalDays
+    // SET last_digest_at = now()（DB 时钟，与条件里的 now() 同源）
+    const setValue = compileQuery(claim?.values.lastDigestAt);
+    expect(setValue.sql).toContain('now()');
+  });
+
+  it('pushTime 非法（"99:99"）→ 按默认 09:00 门控：08:59 不发、09:00 发', async () => {
+    dbMock.selectRows.push(
+      subWith({ languages: [], keywords: [], pushTime: '99:99' }),
+    );
+
+    const before = await pushDigests(new Date('2026-10-23T00:59:00Z')); // 北京 08:59
+    expect(before).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
+
+    dbMock.executeRows.push(makeEntry('a/one'));
+    const after = await pushDigests(new Date('2026-10-23T01:00:00Z')); // 北京 09:00
+    expect(after).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('intervalDays 超上限（99）→ 按默认 1 天门控：昨天到点已发、今天到点即发', async () => {
+    dbMock.selectRows.push(
+      subWith(
+        { languages: [], keywords: [], pushTime: '00:00', intervalDays: 99 },
+        { lastDigestAt: new Date('2026-10-22T01:00:00Z') }, // 北京 10-22 09:00
+      ),
+    );
+    dbMock.executeRows.push(makeEntry('a/one'));
+
+    // 北京 10-23 09:00：若 99 被保留/截到 30 都不会发；按 1 才发。
+    const result = await pushDigests(new Date('2026-10-23T01:00:00Z'));
+
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+  });
+
+  it('intervalDays 非法（0）→ 按默认 1 天门控：未满 24 小时不发', async () => {
+    dbMock.selectRows.push(
+      subWith(
+        { languages: [], keywords: [], pushTime: '00:00', intervalDays: 0 },
+        { lastDigestAt: new Date('2026-10-22T02:00:00Z') }, // 北京 10-22 10:00
+      ),
+    );
+
+    // 北京 10-23 09:00：跨日但距上次不足 24h → 按 1 天门控不发
+    // （若 0 被当作 0 天间隔则会误发）。
+    const result = await pushDigests(new Date('2026-10-23T01:00:00Z'));
+
+    expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
   });
 });
 
@@ -897,7 +1182,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
     expect(dbMock.selectConditions).toHaveLength(0);
   });
 
-  it('Bearer <CRON_SECRET> 正确 → 执行 pushDigests 并返回 {sent, failed} JSON', async () => {
+  it('Bearer <CRON_SECRET> 正确 → 执行 pushDigests 并返回 {sent, skipped, failed} JSON', async () => {
     dbMock.selectRows.push(
       makeSub(),
       makeSub({ id: 2, wecomUserid: 'bob' }),
@@ -908,7 +1193,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
     await handler(cronReq('Bearer unit-test-cron-secret'), res);
 
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body ?? '')).toEqual({ sent: 2, failed: 0 });
+    expect(JSON.parse(res.body ?? '')).toEqual({ sent: 2, skipped: 0, failed: 0 });
     expect(res.headers['content-type']).toContain('application/json');
     expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(2);
   });

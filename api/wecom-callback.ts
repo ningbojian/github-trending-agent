@@ -2,13 +2,18 @@ import { waitUntil } from '@vercel/functions';
 import { env } from '../src/config.js';
 import { WxbizMsgCrypt } from '../src/wecom/crypto.js';
 import { routeMessage } from '../src/wecom/router.js';
-import { buildReplyTextXml, extractTag, parseInboundXml } from '../src/wecom/xml.js';
+import {
+  buildReplyEnvelope,
+  buildReplyTextXml,
+  extractTag,
+  parseInboundXml,
+} from '../src/wecom/xml.js';
 
 /**
  * 企业微信回调端点（Vercel Node function）。
  * - GET：URL 验证 —— 验签并解密 echostr，明文原样回传
  * - POST：验签解密 → 构造 InboundMessage → 异步分发（不 await）→ 立即 200
- *   （text 消息在响应体带被动回执 XML，非 text 保持空串）。
+ *   （text 消息在响应体带加密信封的被动回执 XML，非 text 保持空串）。
  *   微信要求 5 秒内响应，业务耗时（LLM/DB）必须在响应之后。
  * 验签/解密失败一律 401（企微据此重试/告警），不回显任何内部细节。
  */
@@ -115,8 +120,9 @@ function processPost(
   res: CallbackResponse,
 ): void {
   let plain: string;
+  // crypt 实例提到 try 外：解密与回执加密复用同一实例（同一把密钥）。
+  const crypt = makeCrypt();
   try {
-    const crypt = makeCrypt();
     plain = crypt.decryptMsg(
       q(req, 'msg_signature'),
       q(req, 'timestamp'),
@@ -138,18 +144,16 @@ function processPost(
     }),
   );
   // text 的唯一被动回复机会就在这次响应体里：带回执让用户立刻知道 agent 在运行。
-  // 非 text（事件/图片等）不可被动回复，保持空串让企微静默处理。
+  // 回调开启安全模式后明文回执会被企微静默丢弃（真机不可见）——必须先加密再套
+  // Encrypt 信封返回。非 text（事件/图片等）不可被动回复，保持空串让企微静默处理。
   if (msg.msgType === 'text') {
+    const replyXml = buildReplyTextXml({
+      toUserName: msg.fromUserName,
+      fromUserName: msg.toUserName,
+      content: buildAckContent(msg.content),
+    });
     res.setHeader('content-type', 'text/xml; charset=utf-8');
-    res
-      .status(200)
-      .send(
-        buildReplyTextXml({
-          toUserName: msg.fromUserName,
-          fromUserName: msg.toUserName,
-          content: buildAckContent(msg.content),
-        }),
-      );
+    res.status(200).send(buildReplyEnvelope(crypt.encrypt(replyXml)));
     return;
   }
   res.status(200).send('');

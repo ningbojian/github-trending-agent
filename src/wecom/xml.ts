@@ -84,3 +84,27 @@ export function buildReplyTextXml(opts: {
     '</xml>'
   );
 }
+
+/**
+ * 构造被动回复的加密信封：回调开启安全模式后，被动回执 HTTP 体必须是
+ * `<xml><Encrypt>…<MsgSignature>…<TimeStamp>…<Nonce>…</xml>` 信封形态，
+ * 明文回执 XML 会被企微静默丢弃（真机不可见）。
+ * 字段顺序钉死 Encrypt→MsgSignature→TimeStamp→Nonce；
+ * Encrypt/MsgSignature/Nonce 包 CDATA，TimeStamp 为裸整数（大写 S）。
+ * 各字段由 WxbizMsgCrypt.encrypt 产出（base64 密文/十六进制签名与 nonce），无需再转义。
+ */
+export function buildReplyEnvelope(parts: {
+  encrypt: string;
+  msgSignature: string;
+  timestamp: string | number;
+  nonce: string;
+}): string {
+  return (
+    '<xml>' +
+    `<Encrypt><![CDATA[${parts.encrypt}]]></Encrypt>` +
+    `<MsgSignature><![CDATA[${parts.msgSignature}]]></MsgSignature>` +
+    `<TimeStamp>${parts.timestamp}</TimeStamp>` +
+    `<Nonce><![CDATA[${parts.nonce}]]></Nonce>` +
+    '</xml>'
+  );
+}

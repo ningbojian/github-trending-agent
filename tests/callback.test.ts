@@ -87,6 +87,20 @@ function crypt(): WxbizMsgCrypt {
   return new WxbizMsgCrypt(TOKEN, AES_KEY, CORP_ID);
 }
 
+/**
+ * 解开被动回执的加密信封：从响应体取 Encrypt/MsgSignature/TimeStamp/Nonce，
+ * 验签解密返回内层明文回执 XML（回调开启安全模式后回执必须是信封形态）。
+ */
+function ackPlain(res: { body?: string }): string {
+  const body = res.body ?? '';
+  return crypt().decryptMsg(
+    extractTag(body, 'MsgSignature'),
+    extractTag(body, 'TimeStamp'),
+    extractTag(body, 'Nonce'),
+    extractTag(body, 'Encrypt'),
+  );
+}
+
 /** 构造解密后的入站消息 XML。 */
 function inboundXml(
   overrides: Partial<{
@@ -235,7 +249,7 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
 
     // 同步断言：响应已经发出（回执 XML 已在响应体），handler 尚未被调用。
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain('🔍 收到');
+    expect(ackPlain(res)).toContain('🔍 收到');
     expect(searchHandler).not.toHaveBeenCalled();
     events.push('response');
 
@@ -335,7 +349,7 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
 
     handler(req, res);
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain('🔍 收到');
+    expect(ackPlain(res)).toContain('🔍 收到');
     await waitUntilState.calls[0];
 
     expect(errorSpy).toHaveBeenCalledWith(
@@ -370,7 +384,7 @@ describe('POST 响应后的异步分发经 waitUntil 交给平台跟踪', () => 
 
     // 5 秒规则不变：同步断言响应已发出（回执 XML 已在响应体）。
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain('🔍 收到');
+    expect(ackPlain(res)).toContain('🔍 收到');
     // 平台必须拿到 dispatch promise，才能在响应回收实例后让分发活到落定。
     expect(waitUntilState.calls).toHaveLength(1);
     expect(waitUntilState.calls[0]).toBeInstanceOf(Promise);
@@ -440,7 +454,7 @@ describe('POST text 消息的被动回执 XML（5 秒窗口）', () => {
     dbState.selectRows = [{ wecomUserid: 'alice', active: true }];
   });
 
-  it('text 消息响应体为回执 XML：To/From 对调、MsgType text、字段顺序、回执文案', () => {
+  it('text 消息响应体为加密信封，解密后内层为回执 XML：To/From 对调、MsgType text、字段顺序、回执文案', () => {
     const { req, res } = postRequest(
       inboundXml({ fromUserName: 'bob', content: 'python 热榜' }),
     );
@@ -449,23 +463,42 @@ describe('POST text 消息的被动回执 XML（5 秒窗口）', () => {
 
     expect(res.statusCode).toBe(200);
     const body = res.body ?? '';
-    expect(extractTag(body, 'ToUserName')).toBe('bob');
-    expect(extractTag(body, 'FromUserName')).toBe(CORP_ID);
-    expect(extractTag(body, 'MsgType')).toBe('text');
-    expect(extractTag(body, 'Content')).toContain('🔍 收到，正在处理');
-    expect(extractTag(body, 'Content')).toContain('python 热榜');
-    expect(Number(extractTag(body, 'CreateTime'))).toBeGreaterThan(1700000000);
+    // （a）信封层：Encrypt 非空、MsgSignature 40 位小写十六进制、TimeStamp 裸数字（无 CDATA）、
+    // Nonce 非空，字段顺序钉死 Encrypt → MsgSignature → TimeStamp → Nonce。
+    expect(body).toMatch(/<Encrypt><!\[CDATA\[[\s\S]+?\]\]><\/Encrypt>/);
+    expect(body).toMatch(
+      /<MsgSignature><!\[CDATA\[[0-9a-f]{40}\]\]><\/MsgSignature>/,
+    );
+    expect(body).toMatch(/<TimeStamp>\d+<\/TimeStamp>/);
+    expect(body).not.toContain('<TimeStamp><![CDATA[');
+    expect(body).toMatch(/<Nonce><!\[CDATA\[[\s\S]+?\]\]><\/Nonce>/);
+    expect(body.indexOf('<Encrypt>')).toBeLessThan(
+      body.indexOf('<MsgSignature>'),
+    );
+    expect(body.indexOf('<MsgSignature>')).toBeLessThan(
+      body.indexOf('<TimeStamp>'),
+    );
+    expect(body.indexOf('<TimeStamp>')).toBeLessThan(body.indexOf('<Nonce>'));
+
+    // （b）内层明文：验签解密后原断言全保留。
+    const plain = ackPlain(res);
+    expect(extractTag(plain, 'ToUserName')).toBe('bob');
+    expect(extractTag(plain, 'FromUserName')).toBe(CORP_ID);
+    expect(extractTag(plain, 'MsgType')).toBe('text');
+    expect(extractTag(plain, 'Content')).toContain('🔍 收到，正在处理');
+    expect(extractTag(plain, 'Content')).toContain('python 热榜');
+    expect(Number(extractTag(plain, 'CreateTime'))).toBeGreaterThan(1700000000);
     // 字段顺序钉死：ToUserName → FromUserName → CreateTime → MsgType → Content
-    expect(body.indexOf('<ToUserName>')).toBeLessThan(
-      body.indexOf('<FromUserName>'),
+    expect(plain.indexOf('<ToUserName>')).toBeLessThan(
+      plain.indexOf('<FromUserName>'),
     );
-    expect(body.indexOf('<FromUserName>')).toBeLessThan(
-      body.indexOf('<CreateTime>'),
+    expect(plain.indexOf('<FromUserName>')).toBeLessThan(
+      plain.indexOf('<CreateTime>'),
     );
-    expect(body.indexOf('<CreateTime>')).toBeLessThan(
-      body.indexOf('<MsgType>'),
+    expect(plain.indexOf('<CreateTime>')).toBeLessThan(
+      plain.indexOf('<MsgType>'),
     );
-    expect(body.indexOf('<MsgType>')).toBeLessThan(body.indexOf('<Content>'));
+    expect(plain.indexOf('<MsgType>')).toBeLessThan(plain.indexOf('<Content>'));
   });
 
   it('入站内容超 20 码点时回执中截断', () => {
@@ -473,7 +506,7 @@ describe('POST text 消息的被动回执 XML（5 秒窗口）', () => {
 
     handler(req, res);
 
-    const content = extractTag(res.body ?? '', 'Content');
+    const content = extractTag(ackPlain(res), 'Content');
     expect(content).toContain('x'.repeat(20));
     expect(content).not.toContain('x'.repeat(21));
   });
@@ -513,7 +546,7 @@ describe('POST body 未被 Vercel 解析（text/xml → undefined，原始字节
     await flushAsync();
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain('🔍 收到');
+    expect(ackPlain(res)).toContain('🔍 收到');
     expect(helpHandler).toHaveBeenCalledTimes(1);
     expect(searchHandler).not.toHaveBeenCalled();
   });

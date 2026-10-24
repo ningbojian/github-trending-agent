@@ -5,11 +5,14 @@
  */
 
 import {
+  FAVORITE_USAGE_REPLY,
   handleFavorite,
   handleList,
   handleUnfavorite,
+  UNFAVORITE_USAGE_REPLY,
 } from '../github/stars.js';
 import { bindHandler } from '../github/oauth.js';
+import { NUMBER_TOKEN_PATTERN } from './cn-number.js';
 import {
   ensureSubscriber,
   handleDigestCount,
@@ -82,20 +85,54 @@ export function resetHandlers(): void {
   };
 }
 
-/** 「取消收藏 <数字>」——支持有/无空格与多位数（须先于「收藏 N」判断）。 */
-const UNFAVORITE_PATTERN = /^取消收藏\s*\d+$/;
+/** 「取消收藏 <数字>」——支持有/无空格、阿拉伯/中文数字（须先于「收藏 N」判断）。 */
+const UNFAVORITE_PATTERN = new RegExp(`^取消收藏\\s*${NUMBER_TOKEN_PATTERN}$`);
 
-/** 「收藏 <数字>」——支持有/无空格与多位数。 */
-const FAVORITE_PATTERN = /^收藏\s*\d+$/;
+/** 「收藏 <数字>」——支持有/无空格、阿拉伯/中文数字。 */
+const FAVORITE_PATTERN = new RegExp(`^收藏\\s*${NUMBER_TOKEN_PATTERN}$`);
 
 /** 「订阅 …」——前缀匹配（「退订」首字为「退」，不会被吞掉）。 */
 const SUBSCRIBE_PATTERN = /^订阅/;
 
-/** 「退订」——精确匹配（与「绑定」「我的收藏」同一纪律）。 */
-const UNSUBSCRIBE_PATTERN = /^退订$/;
-
 /** 「条数 …」——前缀匹配（裸「条数」/非法输入由 handler 回用法提示）。 */
 const DIGEST_COUNT_PATTERN = /^条数/;
+
+/** 尾部中英文标点（精确/前缀分发与疑似命令判定前统一剥除，「帮助。」也能命中）。 */
+const TRAILING_PUNCT_RE = /[。！？!?；;，,]+$/;
+
+/** 「我的收藏」带了多余内容时的用法提示。 */
+export const LIST_USAGE_REPLY = '用法：直接回复「我的收藏」即可（无需参数）';
+
+/** 「绑定」带了多余内容时的用法提示。 */
+export const BIND_USAGE_REPLY = '用法：直接回复「绑定」即可（无需参数）';
+
+/** 「退订」带了多余内容时的用法提示。 */
+export const UNSUBSCRIBE_USAGE_REPLY = '用法：直接回复「退订」即可（无需参数）';
+
+/**
+ * 疑似命令判定：精确/前缀分发全部未命中、即将 fallthrough 到搜索前，
+ * 若内容以命令词开头却不是合法指令（如「收藏一下」「我的收藏列表」），
+ * 回对应用法提示而不是把命令错字当搜索词发出去。
+ * 「帮助」刻意不在列：长句（「帮助我找 python」）是合法的搜索请求，只精确匹配。
+ */
+function suspectedCommandUsage(content: string): string | null {
+  if (content.startsWith('取消收藏')) {
+    return UNFAVORITE_USAGE_REPLY;
+  }
+  if (content.startsWith('收藏')) {
+    return FAVORITE_USAGE_REPLY;
+  }
+  if (content.startsWith('我的收藏')) {
+    return LIST_USAGE_REPLY;
+  }
+  if (content.startsWith('绑定')) {
+    return BIND_USAGE_REPLY;
+  }
+  if (content.startsWith('退订')) {
+    return UNSUBSCRIBE_USAGE_REPLY;
+  }
+  return null;
+}
 
 /** 把 handler 调用包成 promise（同步抛错也转为 rejected promise）。 */
 function dispatch(handler: MessageHandler, msg: InboundMessage): Promise<void> {
@@ -131,9 +168,11 @@ function dispatchSafely(
  * - text 先 ensureSubscriber（首条消息自动开通订阅者行；新用户先收欢迎语，
  *   再继续处理原消息 —— 欢迎语与 handler 回复可能同时到达，欢迎语在前）
  * - 分发顺序：「帮助」→「取消收藏 N」→「收藏 N」→「我的收藏」（精确）→
- *   「绑定」（精确）→「订阅 …」（前缀）→「退订」（精确）→「条数 …」（前缀）→ 其余 text → search
- * handler 异常由 dispatchSafely 捕获并单次回发兜底文案（routeMessage 实际
- * 不再 reject；回调端点的 catch 仅作第二道安全网）。
+ *   「绑定」（精确）→「订阅 …」（前缀）→「退订」（精确）→「条数 …」（前缀）→
+ *   疑似命令（以命令词开头却非合法指令 → 用法提示）→ 其余 text → search。
+ *   精确匹配允许尾部中英文标点（「帮助。」「收藏 1！」）；「帮助」只精确匹配，
+ *   「帮助我找 python」等长句仍走搜索。handler 异常由 dispatchSafely 捕获并
+ *   单次回发兜底文案（routeMessage 实际不再 reject；回调端点的 catch 仅作第二道安全网）。
  */
 export async function routeMessage(msg: InboundMessage): Promise<void> {
   if (msg.msgType !== 'text') {
@@ -151,7 +190,8 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
     }
   }
 
-  const content = msg.content.trim();
+  // 统一剥除尾部中英文标点：「帮助。」「收藏 1！」与裸指令同等命中。
+  const content = msg.content.trim().replace(TRAILING_PUNCT_RE, '').trim();
   if (content === '帮助') {
     return dispatchSafely(handlers.help, msg);
   }
@@ -171,11 +211,19 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
   if (SUBSCRIBE_PATTERN.test(content)) {
     return dispatchSafely(handlers.subscribe, msg);
   }
-  if (UNSUBSCRIBE_PATTERN.test(content)) {
+  if (content === '退订') {
     return dispatchSafely(handlers.unsubscribe, msg);
   }
   if (DIGEST_COUNT_PATTERN.test(content)) {
     return dispatchSafely(handlers.digestCount, msg);
+  }
+  // 疑似命令容错：以命令词开头却不是合法指令 → 回用法提示，绝不静默掉进搜索。
+  const usage = suspectedCommandUsage(content);
+  if (usage !== null) {
+    return dispatchSafely(
+      (m) => sendWeComText(m.fromUserName, usage),
+      msg,
+    );
   }
   return dispatchSafely(handlers.search, msg);
 }

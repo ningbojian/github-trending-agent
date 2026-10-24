@@ -338,6 +338,37 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
     });
   });
 
+  it('分隔符含中文句读（。！？；）与英文标点（!?;）：全部拆分为独立关键词', async () => {
+    await handleSubscribe(makeMsg({ content: '订阅 python。ai！llm；rust' }));
+    await handleSubscribe(makeMsg({ content: '订阅 go!?web;cli' }));
+
+    expect(dbMock.updateCalls).toHaveLength(2);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: ['python', 'ai', 'llm', 'rust'] },
+    });
+    expect(dbMock.updateCalls[1]?.values).toMatchObject({
+      preferences: { languages: [], keywords: ['go', 'web', 'cli'] },
+    });
+  });
+
+  it('「订阅 AI。」→ keywords=[AI]（尾标点不再混进关键词，修复线上 "AI。"）', async () => {
+    await handleSubscribe(makeMsg({ content: '订阅 AI。' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: ['AI'] },
+    });
+  });
+
+  it('token 内中英文括号等标点被剔除（与 parse-query 同一字符集），空串丢弃', async () => {
+    await handleSubscribe(makeMsg({ content: '订阅 node（生态）、(cli) 。  ' }));
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: ['node生态', 'cli'] },
+    });
+  });
+
   it('裸「订阅」（无可解析关键词）→ 用法提示，不写库', async () => {
     await handleSubscribe(makeMsg({ content: '订阅' }));
 

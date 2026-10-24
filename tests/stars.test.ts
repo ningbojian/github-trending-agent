@@ -101,14 +101,18 @@ import { encryptSecret } from '../src/github/oauth';
 import {
   AUTH_EXPIRED_REPLY,
   EMPTY_FAVORITES_REPLY,
+  EMPTY_SEARCH_CACHE_REPLY,
+  FAVORITE_USAGE_REPLY,
   handleFavorite,
   handleList,
   handleUnfavorite,
   LIST_FAILURE_REPLY,
+  NO_SEARCH_CACHE_REPLY,
   STAR_FAILURE_REPLY,
   starRepo,
   UNBOUND_REPLY,
   UNSTAR_FAILURE_REPLY,
+  UNFAVORITE_USAGE_REPLY,
   unstarRepo,
 } from '../src/github/stars';
 import { favorites, searchCaches, subscribers } from '../src/db/schema';
@@ -214,6 +218,19 @@ describe('交互文案常量（字面量固定）', () => {
     expect(LIST_FAILURE_REPLY).toBe('加载失败，请稍后再试');
     expect(EMPTY_FAVORITES_REPLY).toBe(
       "你还没有收藏任何项目。先搜索一下，再回复'收藏 N'即可收藏并同步 star。",
+    );
+  });
+
+  it('收藏三态文案与用法提示逐字固定（无缓存/空缓存/越界/序号非法）', () => {
+    expect(NO_SEARCH_CACHE_REPLY).toBe(
+      '还没有可收藏的结果，先搜索，或等今天的简报（简报里的项目也能收藏）',
+    );
+    expect(EMPTY_SEARCH_CACHE_REPLY).toBe('最近一次结果为空，请重新搜索');
+    expect(FAVORITE_USAGE_REPLY).toBe(
+      '用法：「收藏 N」，N 为 1 起的数字，例如：收藏 1',
+    );
+    expect(UNFAVORITE_USAGE_REPLY).toBe(
+      '用法：「取消收藏 N」，N 为 1 起的数字，例如：取消收藏 1',
     );
   });
 });
@@ -398,7 +415,7 @@ describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
     expect(dbMock.insertCalls).toHaveLength(0);
   });
 
-  it('N 越界（缓存只有 2 条，收藏 5）→ 回复「没有第 5 条」，不打 GitHub、不写库', async () => {
+  it('N 越界（缓存只有 2 条，收藏 5）→ 回复「最近一次结果只有 2 条，没有第 5 条」，不打 GitHub、不写库', async () => {
     const fetchMock = stubFetchStatus(204);
     dbMock.selectQueue.push([boundSubscriberRow()]);
     seedSearchCache([makeItem(), makeItem({ fullName: 'a/b' })]);
@@ -406,20 +423,93 @@ describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
     await handleFavorite(makeMsg({ content: '收藏 5' }));
 
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
-    expect(content).toBe('没有第 5 条');
+    expect(content).toBe('最近一次结果只有 2 条，没有第 5 条');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(dbMock.insertCalls).toHaveLength(0);
   });
 
-  it('无搜索缓存行 → 回复「没有第 1 条」', async () => {
+  it('无搜索缓存行 → 回复「还没有可收藏的结果，先搜索，或等今天的简报…」（不再谎报"没有第 1 条"）', async () => {
     stubFetchStatus(204);
-    dbMock.selectQueue.push([boundSubscriberRow()]); // subscribers 有行；cache 队列为空
+    dbMock.selectQueue.push([boundSubscriberRow()]); // subscribers 有行；cache 队列为空 → 无行
 
     await handleFavorite(makeMsg({ content: '收藏 1' }));
 
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
-    expect(content).toBe('没有第 1 条');
+    expect(content).toBe(NO_SEARCH_CACHE_REPLY);
     expect(dbMock.insertCalls).toHaveLength(0);
+  });
+
+  it('有缓存行但 results 为空 → 回复「最近一次结果为空，请重新搜索」', async () => {
+    stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    seedSearchCache([]);
+
+    await handleFavorite(makeMsg({ content: '收藏 1' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(EMPTY_SEARCH_CACHE_REPLY);
+    expect(dbMock.insertCalls).toHaveLength(0);
+  });
+
+  it('「收藏一」（中文数字）→ 收藏缓存第 1 条', async () => {
+    const fetchMock = stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    seedSearchCache([
+      makeItem({ fullName: 'rust-lang/rust' }),
+      makeItem({ fullName: 'vercel/next.js' }),
+    ]);
+
+    await handleFavorite(makeMsg({ content: '收藏一' }));
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/user/starred/rust-lang/rust');
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('✅ 已收藏 rust-lang/rust，已同步到你的 GitHub');
+  });
+
+  it('「收藏 十」（中文数字 10）→ 收藏缓存第 10 条', async () => {
+    const fetchMock = stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    seedSearchCache(
+      Array.from({ length: 10 }, (_, i) =>
+        makeItem({ fullName: `o/r${i + 1}` }),
+      ),
+    );
+
+    await handleFavorite(makeMsg({ content: '收藏 十' }));
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/user/starred/o/r10');
+  });
+
+  it('「收藏 0」（序号非法）→ 用法提示，不打 GitHub、不写库', async () => {
+    const fetchMock = stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+
+    await handleFavorite(makeMsg({ content: '收藏 0' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(FAVORITE_USAGE_REPLY);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(dbMock.insertCalls).toHaveLength(0);
+    // 序号非法在任何读库之前短路（连 subscribers 都不查）。
+    expect(dbMock.selectCalls).toHaveLength(0);
+  });
+
+  it('简报缓存读取契约：预置简报第 3 条 →「收藏 3」命中该条（简报里的项目也能收藏）', async () => {
+    const fetchMock = stubFetchStatus(204);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    // 简报推送经 saveRecentResults 写入的正是 { fullName }[] 形态。
+    seedSearchCache([
+      { fullName: 'a/one' } as SearchResultItem,
+      { fullName: 'b/two' } as SearchResultItem,
+      { fullName: 'c/three' } as SearchResultItem,
+    ]);
+
+    await handleFavorite(makeMsg({ content: '收藏 3' }));
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/user/starred/c/three');
   });
 
   it('已收藏幂等：GitHub 无法区分"已 starred"，重复收藏走同一 upsert（唯一约束兜底）', async () => {
@@ -487,6 +577,37 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     expect(content).toBe('已取消收藏 b/two');
+  });
+
+  it('「取消收藏二」（中文数字）→ 取消第 2 条收藏', async () => {
+    const fetchMock = stubFetchStatus(204);
+    seedFavorites([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+      { fullName: 'b/two', createdAt: new Date('2026-10-02T00:00:00Z') },
+    ]);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏二' }));
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/user/starred/b/two');
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('已取消收藏 b/two');
+  });
+
+  it('「取消收藏 0」（序号非法）→ 用法提示，不打 GitHub、不删行', async () => {
+    const fetchMock = stubFetchStatus(204);
+    seedFavorites([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+    ]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 0' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(UNFAVORITE_USAGE_REPLY);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(dbMock.deleteCalls).toHaveLength(0);
   });
 
   it('N 越界（2 条收藏，取消第 3 条）→ 回复「没有第 3 条」，不打 GitHub、不删行', async () => {
@@ -707,12 +828,20 @@ describe('router 分发顺序（五路由 + search 兜底）', () => {
     expect(bindHandlerMock).not.toHaveBeenCalled();
   });
 
-  it('「我的收藏夹」（非精确）、「取消收藏」（无数字）→ 落 search 兜底', async () => {
+  it('「我的收藏夹」（非精确）、「取消收藏」（无数字）→ 回用法提示，不落 search', async () => {
+    // 两条老用户行：ensureSubscriber 返回 false，不插欢迎语，只留用法提示。
+    dbMock.selectQueue.push([{ wecomUserid: 'alice' }], [{ wecomUserid: 'alice' }]);
+
     await routeMessage(makeMsg({ content: '我的收藏夹' }));
     await routeMessage(makeMsg({ content: '取消收藏' }));
-    expect(searchHandler).toHaveBeenCalledTimes(2);
+
+    expect(searchHandler).not.toHaveBeenCalled();
     expect(listHandler).not.toHaveBeenCalled();
     expect(unfavoriteHandler).not.toHaveBeenCalled();
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
+    const contents = apiMock.sendWeComText.mock.calls.map(([, text]) => text);
+    expect(contents[0]).toContain('我的收藏');
+    expect(contents[1]).toBe(UNFAVORITE_USAGE_REPLY);
   });
 });
 

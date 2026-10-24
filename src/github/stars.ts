@@ -2,6 +2,7 @@ import { and, asc, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { favorites, searchCaches, subscribers } from '../db/schema.js';
 import { sendWeComText } from '../wecom/api.js';
+import { NUMBER_TOKEN_PATTERN, parseCnNumber } from '../wecom/cn-number.js';
 import type { InboundMessage } from '../wecom/router.js';
 import { decryptSecret } from './oauth.js';
 
@@ -40,6 +41,21 @@ export const UNSTAR_FAILURE_REPLY = '取消收藏失败，请稍后再试';
 export const EMPTY_FAVORITES_REPLY =
   "你还没有收藏任何项目。先搜索一下，再回复'收藏 N'即可收藏并同步 star。";
 
+/** 「收藏 N」序号无法解析（如 收藏 0）时的用法提示（router 疑似命令路径共用同一文案）。 */
+export const FAVORITE_USAGE_REPLY =
+  '用法：「收藏 N」，N 为 1 起的数字，例如：收藏 1';
+
+/** 「取消收藏 N」序号无法解析时的用法提示。 */
+export const UNFAVORITE_USAGE_REPLY =
+  '用法：「取消收藏 N」，N 为 1 起的数字，例如：取消收藏 1';
+
+/** 无 search_caches 行（从未搜索、也未收到过简报缓存）时的引导文案。 */
+export const NO_SEARCH_CACHE_REPLY =
+  '还没有可收藏的结果，先搜索，或等今天的简报（简报里的项目也能收藏）';
+
+/** 有缓存行但最近一次结果为空时的文案。 */
+export const EMPTY_SEARCH_CACHE_REPLY = '最近一次结果为空，请重新搜索';
+
 /** 「我的收藏」读取/发送失败的兜底文案（绝不冒充空态，不谎报"没有收藏"）。 */
 export const LIST_FAILURE_REPLY = '加载失败，请稍后再试';
 
@@ -49,7 +65,12 @@ const MAX_LIST_BYTES = 1800;
 /** 列表截断标注（与 reply.ts 的截断纪律一致，文案区分场景）。 */
 const LIST_TRUNCATION_NOTE = '（内容过长，已截断）';
 
-/** 序号越界文案（没有第 N 条）。 */
+/** 收藏越界文案：缓存存在但最近一次结果不足 N 条（区分"从未缓存"的引导文案）。 */
+function favoriteOutOfRangeReply(n: number, total: number): string {
+  return `最近一次结果只有 ${total} 条，没有第 ${n} 条`;
+}
+
+/** 「我的收藏」越界文案（列表本体存在，只是不足 N 条）。 */
 function outOfRangeReply(n: number): string {
   return `没有第 ${n} 条`;
 }
@@ -131,18 +152,29 @@ async function loadTokenEnc(wecomUserid: string): Promise<string | null> {
   return enc == null ? null : String(enc);
 }
 
-/** 读调用方最近一次检索缓存（search_caches 每用户至多一行，仍按创建时间倒序兜底）。 */
+/**
+ * 读调用方最近一次检索缓存（search_caches 每用户至多一行，仍按创建时间倒序兜底）。
+ * 区分三态：无行（found=false，从未搜索/简报）/ 有行但结果为空 / 有行有结果——
+ * 让「收藏 N」能给出精确文案，不再把"没有缓存"谎报成"没有第 N 条"。
+ */
 async function loadLatestSearchResults(
   wecomUserid: string,
-): Promise<SearchCacheItem[]> {
+): Promise<{ found: boolean; items: SearchCacheItem[] }> {
   const rows = await db()
     .select()
     .from(searchCaches)
     .where(eq(searchCaches.wecomUserid, wecomUserid))
     .orderBy(desc(searchCaches.createdAt))
     .limit(1);
-  const results = rows[0]?.results;
-  return Array.isArray(results) ? (results as SearchCacheItem[]) : [];
+  const row = rows[0];
+  if (row === undefined) {
+    return { found: false, items: [] };
+  }
+  const results = row.results;
+  return {
+    found: true,
+    items: Array.isArray(results) ? (results as SearchCacheItem[]) : [],
+  };
 }
 
 /** 缓存条目只需 full_name；其余字段由 Task 8/9 写入，这里不消费。 */
@@ -189,17 +221,19 @@ async function deleteFavorite(wecomUserid: string, fullName: string): Promise<vo
 // 消息 handler
 // ---------------------------------------------------------------------------
 
-/** 「收藏 <数字>」——与 router 的分发正则保持一致。 */
-const FAVORITE_PATTERN = /^收藏\s*(\d+)$/;
+/** 「取消收藏 <数字>」——与 router 的分发正则保持一致（中文数字与阿拉伯数字同权）。 */
+const UNFAVORITE_PATTERN = new RegExp(`^取消收藏\\s*(${NUMBER_TOKEN_PATTERN})$`);
 
-/** 「取消收藏 <数字>」。 */
-const UNFAVORITE_PATTERN = /^取消收藏\s*(\d+)$/;
+/** 「收藏 <数字>」——与 router 的分发正则保持一致。 */
+const FAVORITE_PATTERN = new RegExp(`^收藏\\s*(${NUMBER_TOKEN_PATTERN})$`);
 
 /**
  * 「收藏 N」handler：
  * 1. 未绑定（无 github_token_enc）→ 引导绑定，不写库
- * 2. 从最近一次 search_caches 取第 N 条；越界 → 「没有第 N 条」
- * 3. 解密 token → starRepo → 'ok' → upsert favorites → 中文成功回复
+ * 2. 序号无法解析（如「收藏 0」）→ 用法提示
+ * 3. 读最近一次 search_caches 三态：无行 → 引导搜索/简报；空行 → 重新搜索；
+ *    越界 → 「最近一次结果只有 M 条，没有第 N 条」
+ * 4. 解密 token → starRepo → 'ok' → upsert favorites → 中文成功回复
  *    'auth_failed' → 授权已过期引导（不写 favorites）；'failed' → 通用失败文案
  */
 export async function handleFavorite(msg: InboundMessage): Promise<void> {
@@ -208,7 +242,11 @@ export async function handleFavorite(msg: InboundMessage): Promise<void> {
     if (!match) {
       return;
     }
-    const n = Number(match[1]);
+    const n = parseCnNumber(match[1] ?? '');
+    if (n === null) {
+      await sendWeComText(msg.fromUserName, FAVORITE_USAGE_REPLY);
+      return;
+    }
 
     const tokenEnc = await loadTokenEnc(msg.fromUserName);
     if (!tokenEnc) {
@@ -216,10 +254,21 @@ export async function handleFavorite(msg: InboundMessage): Promise<void> {
       return;
     }
 
-    const items = await loadLatestSearchResults(msg.fromUserName);
-    const item = items[n - 1];
+    const cache = await loadLatestSearchResults(msg.fromUserName);
+    if (!cache.found) {
+      await sendWeComText(msg.fromUserName, NO_SEARCH_CACHE_REPLY);
+      return;
+    }
+    if (cache.items.length === 0) {
+      await sendWeComText(msg.fromUserName, EMPTY_SEARCH_CACHE_REPLY);
+      return;
+    }
+    const item = cache.items[n - 1];
     if (!item) {
-      await sendWeComText(msg.fromUserName, outOfRangeReply(n));
+      await sendWeComText(
+        msg.fromUserName,
+        favoriteOutOfRangeReply(n, cache.items.length),
+      );
       return;
     }
 
@@ -272,7 +321,11 @@ export async function handleUnfavorite(msg: InboundMessage): Promise<void> {
     if (!match) {
       return;
     }
-    const n = Number(match[1]);
+    const n = parseCnNumber(match[1] ?? '');
+    if (n === null) {
+      await sendWeComText(msg.fromUserName, UNFAVORITE_USAGE_REPLY);
+      return;
+    }
 
     const rows = await loadFavorites(msg.fromUserName);
     const row = rows[n - 1];

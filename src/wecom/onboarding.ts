@@ -124,13 +124,20 @@ export async function ensureSubscriber(msg: InboundMessage): Promise<boolean> {
 /** 「订阅」前缀（与 router 的分发正则保持一致；「退订」首字不同，不会互相吞）。 */
 const SUBSCRIBE_PREFIX = '订阅';
 
+/** 偏好分隔符：中英文逗号、顿号、空白 + 中文句读与英文句读（。！？!?；;）。 */
+const KEYWORD_SEPARATOR_RE = /[,，、。！？!?；;\s]+/;
+
+/** token 内标点清洗：与 parse-query 同一字符集（剔除后空串由调用方丢弃）。 */
+const KEYWORD_PUNCT_RE = /[。！？!?；;，,、()（）]/g;
+
 /**
- * 解析偏好 tokens：按 中文/英文逗号、顿号、空白 切分，trim 后丢弃空串。
+ * 解析偏好 tokens：按 中文/英文逗号、顿号、句读、空白 切分，
+ * 剔除 token 内中英文标点，trim 后丢弃空串（「订阅 AI。」→ ['AI']）。
  */
 function parseKeywords(rest: string): string[] {
   return rest
-    .split(/[,，、\s]+/)
-    .map((token) => token.trim())
+    .split(KEYWORD_SEPARATOR_RE)
+    .map((token) => token.replace(KEYWORD_PUNCT_RE, '').trim())
     .filter((token) => token.length > 0);
 }
 

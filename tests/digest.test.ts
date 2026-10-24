@@ -6,7 +6,7 @@ import handler, {
   type CronResponse,
   maxDuration,
 } from '../api/cron-push-digest';
-import { subscribers } from '../src/db/schema';
+import { searchCaches, subscribers } from '../src/db/schema';
 
 // ---------------------------------------------------------------------------
 // Mocks：企微推送（markdown）/ 仓库简介（loadRepoSummaries）/ db 层 / config —— 绝不触网、不连库、不调 LLM。
@@ -25,6 +25,8 @@ const dbMock = vi.hoisted(() => ({
   executeRows: [] as Record<string, unknown>[],
   selectConditions: [] as unknown[],
   selectRows: [] as unknown[],
+  deleteCalls: [] as { table: unknown; condition: unknown }[],
+  insertCalls: [] as { table: unknown; values: Record<string, unknown> }[],
 }));
 
 vi.mock('../src/wecom/api', () => ({
@@ -50,6 +52,16 @@ vi.mock('../src/db/client', () => ({
         },
       }),
     }),
+    delete: (table: unknown) => ({
+      where: async (condition: unknown) => {
+        dbMock.deleteCalls.push({ table, condition });
+      },
+    }),
+    insert: (table: unknown) => ({
+      values: async (values: Record<string, unknown>) => {
+        dbMock.insertCalls.push({ table, values });
+      },
+    }),
   }),
 }));
 
@@ -58,9 +70,11 @@ vi.mock('../src/config', () => ({
 }));
 
 import {
-  DIGEST_FOOTER,
   buildDigestForSubscriber,
+  buildDigestWithEntries,
+  DIGEST_FOOTER,
   pushDigests,
+  saveRecentResults,
   shanghaiToday,
 } from '../src/agent/digest';
 
@@ -114,6 +128,8 @@ beforeEach(() => {
   dbMock.executeRows.length = 0;
   dbMock.selectConditions.length = 0;
   dbMock.selectRows.length = 0;
+  dbMock.deleteCalls.length = 0;
+  dbMock.insertCalls.length = 0;
   // 默认：简介降级（空 Map，等价 LLM 失败后的无简介输出），发送全部成功。
   summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
   apiMock.sendWeComText.mockResolvedValue(undefined);
@@ -301,8 +317,8 @@ describe('buildDigestForSubscriber — 简报内容', () => {
 
   it('空榜锁定：只有头部 + 占位文案，且不带收藏页脚（无可收藏条目）', async () => {
     // characterization 测试：锁定 assemble 的 EMPTY_NOTICE 分支——
-    // 空榜时故意省略 DIGEST_FOOTER（「收藏 N」在无可收藏条目时是误导），
-    // 收藏链路写入 search_caches 属 Task 4，届时再统一评估页脚策略。
+    // 空榜时故意省略 DIGEST_FOOTER（「收藏 N」在无可收藏条目时是误导）。
+    // Task 4 决策：空榜 entries=[] → 不写 search_caches（保留上一次有效缓存）。
     const digest = await buildDigestForSubscriber(
       makeSub(),
       new Date('2026-10-22T16:30:00Z'),
@@ -453,6 +469,228 @@ describe('buildDigestForSubscriber — keywords 轻量生效', () => {
 
     expect(digest).toContain('a/one');
     expect(digest).toContain('b/two');
+  });
+
+  it('normalizePreferences：存量 keywords 带尾标点（"AI。"）读取时清洗为 "ai"（languages 不清洗）', async () => {
+    dbMock.executeRows.push(
+      makeEntry('big/stars', { starsDelta: 900 }),
+      makeEntry('ai/tool', { starsDelta: 50 }),
+    );
+
+    const digest = await buildDigestForSubscriber(
+      makeSub({
+        preferences: { languages: ['Python。'], keywords: ['AI。'] },
+      }),
+    );
+
+    // 清洗后 "AI。" → "ai" 命中 ai/tool，轻量排序把它提到 big/stars 前面；
+    // 若读取侧不清洗（旧 bug），"ai。" 匹配不到任何条目，顺序保持 stars_delta。
+    expect(digest.indexOf('ai/tool')).toBeLessThan(digest.indexOf('big/stars'));
+    // languages 逻辑不变：标点不清洗 → 'python。' 不匹配任何仓库语言。
+    const compiled = compileQuery(dbMock.executeQueries[0]);
+    expect(compiled.params).toContain('python。');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildDigestWithEntries —— 可收藏条目与消息实际展示一致（排序 + digestCount + 3800 截断）
+// ---------------------------------------------------------------------------
+describe('buildDigestWithEntries — entries 与消息展示一致', () => {
+  it('entries 顺序与消息行一致（digestCount 截断后的前 N 条）', async () => {
+    for (let i = 1; i <= 5; i += 1) {
+      dbMock.executeRows.push(makeEntry(`o/r${i}`, { starsDelta: 1000 - i }));
+    }
+
+    const { content, entries } = await buildDigestWithEntries(
+      makeSub({ preferences: { languages: [], keywords: [], digestCount: 3 } }),
+      new Date('2026-10-22T16:30:00Z'),
+    );
+
+    expect(content).toBe(await buildDigestForSubscriber(
+      makeSub({ preferences: { languages: [], keywords: [], digestCount: 3 } }),
+      new Date('2026-10-22T16:30:00Z'),
+    ));
+    expect(entries).toEqual([
+      { fullName: 'o/r1' },
+      { fullName: 'o/r2' },
+      { fullName: 'o/r3' },
+    ]);
+  });
+
+  it('3800 字节截断后 entries 只含实际展示的条目（被丢弃的尾部条目不进缓存）', async () => {
+    const entriesRows = Array.from({ length: 20 }, (_, i) =>
+      makeEntry(`owner${i}/repo-with-a-rather-long-name-${i}`, {
+        stars: 123456,
+        starsDelta: 2345,
+      }),
+    );
+    dbMock.executeRows.push(...entriesRows);
+    summaryMock.loadRepoSummaries.mockResolvedValue(
+      new Map(
+        entriesRows.map((e, i) => [
+          String(e.fullName),
+          `这是一段很长的上榜理由编号${i}，用来撑爆字节上限。`.repeat(4),
+        ]),
+      ),
+    );
+
+    const { content, entries } = await buildDigestWithEntries(
+      makeSub({
+        preferences: { languages: [], keywords: [], digestCount: 20 },
+      }),
+    );
+
+    expect(content).toContain('（内容过长，已截断）');
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.length).toBeLessThan(20);
+    expect(entries[0]).toEqual({ fullName: 'owner0/repo-with-a-rather-long-name-0' });
+    // 每个 entries 条目都必须真实出现在消息里；被丢弃的最后一条不得出现。
+    for (const entry of entries) {
+      expect(content).toContain(entry.fullName);
+    }
+    expect(entries.map((e) => e.fullName)).not.toContain(
+      'owner19/repo-with-a-rather-long-name-19',
+    );
+    expect(content).not.toContain('owner19/repo-with-a-rather-long-name-19');
+  });
+
+  it('空榜 → { content: 占位文案, entries: [] }', async () => {
+    const { content, entries } = await buildDigestWithEntries(
+      makeSub(),
+      new Date('2026-10-22T16:30:00Z'),
+    );
+
+    expect(entries).toEqual([]);
+    expect(content).toBe(
+      '📊 今日 GitHub 热榜简报（2026-10-23）\n\n今日暂无符合条件的热榜项目。',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// saveRecentResults —— delete+insert 覆盖写（与 search.ts 同语义；空列表不写）
+// ---------------------------------------------------------------------------
+describe('saveRecentResults — search_caches 覆盖写', () => {
+  it('非空 items：先 delete 该用户全部行，再 insert 一行 { fullName }[]', async () => {
+    await saveRecentResults('alice', [
+      { fullName: 'a/one' },
+      { fullName: 'b/two' },
+    ]);
+
+    expect(dbMock.deleteCalls).toHaveLength(1);
+    expect(dbMock.deleteCalls[0]?.table).toBe(searchCaches);
+    const delCompiled = compileQuery(dbMock.deleteCalls[0]?.condition);
+    expect(delCompiled.sql).toContain('"search_caches"."wecom_userid"');
+    expect(delCompiled.params).toContain('alice');
+
+    expect(dbMock.insertCalls).toHaveLength(1);
+    expect(dbMock.insertCalls[0]?.table).toBe(searchCaches);
+    expect(dbMock.insertCalls[0]?.values).toEqual({
+      wecomUserid: 'alice',
+      results: [{ fullName: 'a/one' }, { fullName: 'b/two' }],
+    });
+  });
+
+  it('空 items → 不写（delete/insert 都不发生）', async () => {
+    await saveRecentResults('alice', []);
+
+    expect(dbMock.deleteCalls).toHaveLength(0);
+    expect(dbMock.insertCalls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pushDigests —— 推送成功后写 search_caches（「收藏 N」引用刚收到的简报）
+// ---------------------------------------------------------------------------
+describe('pushDigests — 推送后写 search_caches（收藏一致性）', () => {
+  it('发送成功 → 按展示顺序写该用户的 search_caches（delete + insert 各一次）', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'), makeEntry('b/two'));
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(dbMock.deleteCalls).toHaveLength(1);
+    expect(dbMock.deleteCalls[0]?.table).toBe(searchCaches);
+    expect(dbMock.insertCalls).toHaveLength(1);
+    expect(dbMock.insertCalls[0]?.table).toBe(searchCaches);
+    expect(dbMock.insertCalls[0]?.values).toEqual({
+      wecomUserid: 'alice',
+      results: [{ fullName: 'a/one' }, { fullName: 'b/two' }],
+    });
+  });
+
+  it('3800 截断丢弃的尾部条目不写入缓存（收藏序号绝不指向消息里看不到的条目）', async () => {
+    const entriesRows = Array.from({ length: 20 }, (_, i) =>
+      makeEntry(`owner${i}/repo-with-a-rather-long-name-${i}`, {
+        stars: 123456,
+        starsDelta: 2345,
+      }),
+    );
+    dbMock.selectRows.push(
+      makeSub({ preferences: { languages: [], keywords: [], digestCount: 20 } }),
+    );
+    dbMock.executeRows.push(...entriesRows);
+    summaryMock.loadRepoSummaries.mockResolvedValue(
+      new Map(
+        entriesRows.map((e, i) => [
+          String(e.fullName),
+          `这是一段很长的上榜理由编号${i}，用来撑爆字节上限。`.repeat(4),
+        ]),
+      ),
+    );
+
+    await pushDigests();
+
+    const results = dbMock.insertCalls[0]?.values.results as Array<{ fullName: string }>;
+    expect(results.length).toBeLessThan(20);
+    expect(results[0]?.fullName).toBe('owner0/repo-with-a-rather-long-name-0');
+    expect(results.map((r) => r.fullName)).not.toContain(
+      'owner19/repo-with-a-rather-long-name-19',
+    );
+  });
+
+  it('发送失败 → 不写缓存（绝不让「收藏 N」引用用户没收到的列表）', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'));
+    apiMock.sendWeComMarkdown.mockRejectedValue(new Error('wecom down'));
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 0, failed: 1 });
+    expect(dbMock.deleteCalls).toHaveLength(0);
+    expect(dbMock.insertCalls).toHaveLength(0);
+    errorSpy.mockRestore();
+  });
+
+  it('空榜推送成功 → entries 为空 → 不写缓存（保留用户上一次有效缓存）', async () => {
+    dbMock.selectRows.push(makeSub());
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(dbMock.deleteCalls).toHaveLength(0);
+    expect(dbMock.insertCalls).toHaveLength(0);
+  });
+
+  it('部分成功：失败的订阅者不写、成功的订阅者照写', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMock.selectRows.push(
+      makeSub(),
+      makeSub({ id: 2, wecomUserid: 'bob' }),
+    );
+    dbMock.executeRows.push(makeEntry('a/one'));
+    apiMock.sendWeComMarkdown
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('wecom down'));
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 1, failed: 1 });
+    expect(dbMock.insertCalls).toHaveLength(1);
+    expect(dbMock.insertCalls[0]?.values).toMatchObject({ wecomUserid: 'alice' });
+    errorSpy.mockRestore();
   });
 });
 

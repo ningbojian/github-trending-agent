@@ -324,10 +324,13 @@ describe('bindHandler', () => {
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
   });
 
-  it('「绑定」后跟其他字 → 不吞消息，落 search 兜底', async () => {
+  it('「绑定」后跟其他字 → 不进 bindHandler，回绑定用法提示（无需参数）', async () => {
     await routeMessage(makeMsg({ content: '绑定 GitHub' }));
-    expect(searchHandlerMock).toHaveBeenCalledTimes(1);
-    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    expect(searchHandlerMock).not.toHaveBeenCalled();
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('绑定');
+    expect(content).toContain('无需参数');
   });
 
   it('可直接调用 bindHandler（不经 router）：state 是 bob 的 nonce 映射', async () => {

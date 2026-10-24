@@ -610,6 +610,52 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
     expect(dbMock.deleteCalls).toHaveLength(0);
   });
 
+  it('「取消收藏 26」（超出收藏默认上限 25）→ 取消第 26 条（我的收藏可远超 25 条，删除编号不受收藏上限约束）', async () => {
+    const fetchMock = stubFetchStatus(204);
+    seedFavorites(
+      Array.from({ length: 30 }, (_, i) => ({
+        fullName: `o/r${i + 1}`,
+        createdAt: new Date('2026-10-01T00:00:00Z'),
+      })),
+    );
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 26' }));
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/user/starred/o/r26');
+    expect(dbMock.deleteCalls).toHaveLength(1);
+    const compiled = compileQuery(dbMock.deleteCalls[0]?.condition);
+    expect(compiled.params).toContain('o/r26');
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('已取消收藏 o/r26');
+  });
+
+  it('「取消收藏 999」（上限内解析成功但列表不足）→ 越界文案「没有第 999 条」', async () => {
+    stubFetchStatus(204);
+    seedFavorites([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+    ]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 999' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('没有第 999 条');
+    expect(dbMock.deleteCalls).toHaveLength(0);
+  });
+
+  it('「收藏 26」（超过收藏默认上限 25）→ 仍回用法提示（handleFavorite 保持 max=25 不回归）', async () => {
+    const fetchMock = stubFetchStatus(204);
+
+    await handleFavorite(makeMsg({ content: '收藏 26' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(FAVORITE_USAGE_REPLY);
+    expect(fetchMock).not.toHaveBeenCalled();
+    // 序号非法在任何读库之前短路。
+    expect(dbMock.selectCalls).toHaveLength(0);
+  });
+
   it('N 越界（2 条收藏，取消第 3 条）→ 回复「没有第 3 条」，不打 GitHub、不删行', async () => {
     const fetchMock = stubFetchStatus(204);
     seedFavorites([

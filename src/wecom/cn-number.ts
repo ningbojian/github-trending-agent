@@ -1,8 +1,9 @@
 /**
  * 「收藏 N」/「取消收藏 N」的数字解析：中文数字 + 阿拉伯数字。
  * router 与 stars.ts 共用同一实现，保证两条路径的数字语义完全一致。
- * 支持：一..九、十、十一..十九、二十、两（=2）与阿拉伯数字串；
- * 范围 1–25，其余返回 null（由调用方回用法提示，绝不静默掉进搜索）。
+ * 中文：一..九、十、十一..十九、二十、两（=2），语法固定不随上限扩展。
+ * 阿拉伯数字串：≥1 且 ≤ max 才合法；max 按调用点区分
+ * （收藏默认 25；取消收藏可到 MAX_UNFAVORITE_N——「我的收藏」列表可远超 25 条）。
  */
 
 /** 中文单字数字 → 值（「两」口语等同「二」）。 */
@@ -19,9 +20,11 @@ const CN_DIGITS: Record<string, number> = {
   两: 2,
 };
 
-/** 合法序号范围（与收藏链路的语义一致：1 起，至多 25）。 */
+/** 合法序号下限（所有调用点一致：1 起）。 */
 const MIN_N = 1;
-const MAX_N = 25;
+
+/** 默认上限（「收藏 N」引用的检索/简报缓存 topN ≤ 25）。 */
+const DEFAULT_MAX_N = 25;
 
 const ARABIC_RE = /^\d+$/;
 const CN_RE = /^[一二三四五六七八九十两]+$/;
@@ -29,12 +32,21 @@ const CN_RE = /^[一二三四五六七八九十两]+$/;
 /** 收藏序号 token 的字符集片段（router 与 stars.ts 的分发/解析正则共用，保证同步）。 */
 export const NUMBER_TOKEN_PATTERN = '[0-9一二三四五六七八九十两]+';
 
+export interface ParseCnNumberOptions {
+  /** 阿拉伯数字上限（默认 25）；中文数字语法固定，不受此上限影响。 */
+  max?: number;
+}
+
 /**
- * 解析序号：成功返回 1–25 的整数，无法识别/越界返回 null。
- * - 阿拉伯数字串：'1'..'25' 合法；'0'/'26'/'' → null
+ * 解析序号：成功返回 1..max 的整数，无法识别/越界返回 null。
+ * - 阿拉伯数字串：'1'..max 合法；'0'、超 max、'' → null
  * - 中文：一..九、十、十一..十九、二十、两；其余（三十/二十一/百…）→ null
  */
-export function parseCnNumber(input: string): number | null {
+export function parseCnNumber(
+  input: string,
+  options?: ParseCnNumberOptions,
+): number | null {
+  const max = options?.max ?? DEFAULT_MAX_N;
   const token = input.trim();
   if (token.length === 0) {
     return null;
@@ -57,7 +69,7 @@ export function parseCnNumber(input: string): number | null {
     }
   }
 
-  if (value === null || value < MIN_N || value > MAX_N) {
+  if (value === null || value < MIN_N || value > max) {
     return null;
   }
   return value;

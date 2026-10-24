@@ -27,6 +27,8 @@ const dbMock = vi.hoisted(() => ({
   selectRows: [] as unknown[],
   deleteCalls: [] as { table: unknown; condition: unknown }[],
   insertCalls: [] as { table: unknown; values: Record<string, unknown> }[],
+  insertError: undefined as Error | undefined,
+  deleteError: undefined as Error | undefined,
 }));
 
 vi.mock('../src/wecom/api', () => ({
@@ -55,11 +57,17 @@ vi.mock('../src/db/client', () => ({
     delete: (table: unknown) => ({
       where: async (condition: unknown) => {
         dbMock.deleteCalls.push({ table, condition });
+        if (dbMock.deleteError) {
+          throw dbMock.deleteError;
+        }
       },
     }),
     insert: (table: unknown) => ({
       values: async (values: Record<string, unknown>) => {
         dbMock.insertCalls.push({ table, values });
+        if (dbMock.insertError) {
+          throw dbMock.insertError;
+        }
       },
     }),
   }),
@@ -73,6 +81,7 @@ import {
   buildDigestForSubscriber,
   buildDigestWithEntries,
   DIGEST_FOOTER,
+  invalidateRecentResults,
   pushDigests,
   saveRecentResults,
   shanghaiToday,
@@ -130,6 +139,8 @@ beforeEach(() => {
   dbMock.selectRows.length = 0;
   dbMock.deleteCalls.length = 0;
   dbMock.insertCalls.length = 0;
+  dbMock.insertError = undefined;
+  dbMock.deleteError = undefined;
   // 默认：简介降级（空 Map，等价 LLM 失败后的无简介输出），发送全部成功。
   summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
   apiMock.sendWeComText.mockResolvedValue(undefined);
@@ -691,6 +702,66 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
     expect(dbMock.insertCalls).toHaveLength(1);
     expect(dbMock.insertCalls[0]?.values).toMatchObject({ wecomUserid: 'alice' });
     errorSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pushDigests —— 缓存写失败 → best-effort 失效旧缓存（陈旧非空行绝不残留）
+// ---------------------------------------------------------------------------
+describe('pushDigests — 缓存写失败的 best-effort 失效', () => {
+  it('saveRecentResults 失败（insert 抛错）→ 再 delete 该用户行做失效、计数不变、只发送一次', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'));
+    dbMock.insertError = new Error('insert down');
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
+    // save 的 delete（成功）+ invalidate 的 delete；两次都按用户隔离删 search_caches。
+    expect(dbMock.deleteCalls).toHaveLength(2);
+    for (const call of dbMock.deleteCalls) {
+      expect(call.table).toBe(searchCaches);
+      const compiled = compileQuery(call.condition);
+      expect(compiled.params).toContain('alice');
+    }
+    expect(console.error).toHaveBeenCalledWith(
+      'saveRecentResults failed for alice:',
+      expect.any(Error),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('失效 delete 也抛错 → 吞掉不外抛，计数不变（DB 全挂也不能冲出 pushDigests）', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'));
+    dbMock.deleteError = new Error('db down');
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 1, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      'saveRecentResults failed for alice:',
+      expect.any(Error),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      'invalidateRecentResults failed for alice:',
+      expect.any(Error),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('invalidateRecentResults：按 wecom_userid delete 该用户 search_caches 行', async () => {
+    await invalidateRecentResults('alice');
+
+    expect(dbMock.deleteCalls).toHaveLength(1);
+    expect(dbMock.deleteCalls[0]?.table).toBe(searchCaches);
+    const compiled = compileQuery(dbMock.deleteCalls[0]?.condition);
+    expect(compiled.sql).toContain('"search_caches"."wecom_userid"');
+    expect(compiled.params).toContain('alice');
   });
 });
 

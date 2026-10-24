@@ -56,6 +56,12 @@ export const NO_SEARCH_CACHE_REPLY =
 /** 有缓存行但最近一次结果为空时的文案。 */
 export const EMPTY_SEARCH_CACHE_REPLY = '最近一次结果为空，请重新搜索';
 
+/**
+ * 「取消收藏 N」的序号上限：「我的收藏」列表可远超 25 条，
+ * 删除编号不受「收藏 N」的缓存 topN 上限（25）约束。
+ */
+export const MAX_UNFAVORITE_N = 999;
+
 /** 「我的收藏」读取/发送失败的兜底文案（绝不冒充空态，不谎报"没有收藏"）。 */
 export const LIST_FAILURE_REPLY = '加载失败，请稍后再试';
 
@@ -321,7 +327,8 @@ export async function handleUnfavorite(msg: InboundMessage): Promise<void> {
     if (!match) {
       return;
     }
-    const n = parseCnNumber(match[1] ?? '');
+    // 「我的收藏」可远超 25 条：删除序号用更宽上限（收藏仍默认 25）。
+    const n = parseCnNumber(match[1] ?? '', { max: MAX_UNFAVORITE_N });
     if (n === null) {
       await sendWeComText(msg.fromUserName, UNFAVORITE_USAGE_REPLY);
       return;

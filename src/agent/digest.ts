@@ -332,6 +332,19 @@ export async function saveRecentResults(
 }
 
 /**
+ * 失效该用户 search_caches 行（best-effort 兜底，可能 reject，由调用方吞错）。
+ * saveRecentResults 失败后调用：delete 成功但 insert 失败会留下陈旧非空行，
+ * 「收藏 N」会引用用户没收到的旧列表——失效后落回「无缓存」三态引导文案。
+ */
+export async function invalidateRecentResults(
+  wecomUserid: string,
+): Promise<void> {
+  await db()
+    .delete(searchCaches)
+    .where(eq(searchCaches.wecomUserid, wecomUserid));
+}
+
+/**
  * 向所有 active 订阅者推送每日简报（markdown 通道）。
  * 逐个 try/catch：单个订阅者失败（建简报或发送）不影响其余，
  * 返回 { sent, failed } 计数。
@@ -356,8 +369,17 @@ export async function pushDigests(
       try {
         await saveRecentResults(sub.wecomUserid, entries);
       } catch (err) {
-        // 缓存写失败不影响已成功的推送计数（收藏三态文案能优雅兜底）。
+        // 写缓存失败 → 失效旧缓存，让「收藏 N」落回无缓存三态文案；
+        // 失效本身失败仅记日志（DB 全挂时不能外抛、不能翻转发送计数）。
         console.error(`saveRecentResults failed for ${sub.wecomUserid}:`, err);
+        try {
+          await invalidateRecentResults(sub.wecomUserid);
+        } catch (invalidateErr) {
+          console.error(
+            `invalidateRecentResults failed for ${sub.wecomUserid}:`,
+            invalidateErr,
+          );
+        }
       }
     } catch (err) {
       failed += 1;

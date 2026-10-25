@@ -1,11 +1,14 @@
 # 每小时触发 Vercel 简报端点（推送时间/间隔门控与并发抢占在 pushDigests 内完成）。
-# cron 0 * * * * 为 UTC 每小时整点（= 北京时间每小时整点）；也可 workflow_dispatch 手动触发。
+# cron 17 * * * * 为 UTC（= 北京时间每小时第 17 分）；也可 workflow_dispatch 手动触发。
+# 为什么不是整点 `0 * * * *`：GitHub 明说整点是负载高峰，高频（每小时）排程最容易被
+# 延迟或直接丢弃。本仓库实测过 `0 * * * *` 连续 17 小时零触发，而每天一次的 daily.yml
+# 稳定晚约 5 小时才跑——排程触发在这里本就不可靠。
 # 与 daily.yml 的分工：daily 只负责抓取入库，简报推送单由此工作流触发（避免双触发）。
 name: 简报小时触发
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:

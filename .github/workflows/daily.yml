@@ -1,5 +1,8 @@
-# 每日管线：抓取 GitHub Trending → 补全 topics（简报推送由 digest-hourly.yml 每小时触发，
-# 推送时间/间隔门控在 pushDigests 内完成——本管线不再触发简报，避免双触发）。
+# 每日管线：抓取 GitHub Trending → 补全 topics → 兜底触发一次简报。
+# 简报的正常触发是 digest-hourly.yml（每小时）；但 GitHub 的排程触发在本仓库实测
+# 不可靠（每小时那条曾连续 17 小时零触发），所以这里补一次兜底。
+# 不会重复发送：pushDigests 有三重门控——推送时间未到跳过、当天已发/未满间隔跳过、
+# 抢占用原子条件 UPDATE。
 # cron 30 0 * * * 为 UTC（= 北京时间 08:30）；也可 workflow_dispatch 手动跑抓取全链路。
 name: 每日热榜管线
 
@@ -34,6 +37,9 @@ jobs:
       WECOM_SECRET: ${{ secrets.WECOM_SECRET }}
       # 可选：未配置时失败告警步骤跳过（仅打 warning）
       WECOM_ADMIN_USERID: ${{ secrets.WECOM_ADMIN_USERID }}
+      # 可选：未配置时跳过兜底简报触发
+      VERCEL_URL: ${{ secrets.VERCEL_URL }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
       # 以下占位：OAuth/回调/加密密钥仅 Vercel 端点使用，绝不下放到 CI
       WECOM_CALLBACK_TOKEN: "placeholder-not-used-in-ci"
       WECOM_CALLBACK_AES_KEY: "placeholder-not-used-in-ci"
@@ -60,6 +66,15 @@ jobs:
 
       - name: 补全仓库 topics（GitHub API）
         run: npx tsx src/github/run-enrich.ts
+
+      - name: 兜底触发一次简报推送
+        if: env.VERCEL_URL != '' && env.CRON_SECRET != ''
+        run: |
+          CODE=$(curl -sS -o digest-resp.json -w "%{http_code}" -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
+            -H "Authorization: Bearer ${CRON_SECRET}")
+          echo "HTTP ${CODE}"
+          cat digest-resp.json; echo
+          [ "${CODE}" = 200 ]
 
       - name: 失败告警到企业微信管理员
         if: failure() && env.WECOM_ADMIN_USERID != ''

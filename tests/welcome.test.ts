@@ -16,8 +16,13 @@ const apiMock = vi.hoisted(() => ({
 
 const digestMock = vi.hoisted(() => ({
   buildDigestWithEntries: vi.fn(),
+  buildDigestFromSnapshot: vi.fn(),
   saveRecentResults: vi.fn(),
   markDigestSent: vi.fn(),
+}));
+
+const snapshotMock = vi.hoisted(() => ({
+  getDailySnapshot: vi.fn(),
 }));
 
 vi.mock('../src/wecom/api', () => ({
@@ -26,8 +31,13 @@ vi.mock('../src/wecom/api', () => ({
 
 vi.mock('../src/agent/digest', () => ({
   buildDigestWithEntries: digestMock.buildDigestWithEntries,
+  buildDigestFromSnapshot: digestMock.buildDigestFromSnapshot,
   saveRecentResults: digestMock.saveRecentResults,
   markDigestSent: digestMock.markDigestSent,
+}));
+
+vi.mock('../src/agent/digest-snapshot', () => ({
+  getDailySnapshot: snapshotMock.getDailySnapshot,
 }));
 
 import { sendWelcomeFlow, WELCOME_MESSAGE } from '../src/wecom/welcome';
@@ -62,7 +72,12 @@ function digestSend(): [string, string] | undefined {
 beforeEach(() => {
   vi.clearAllMocks();
   apiMock.sendWeComText.mockResolvedValue(undefined);
+  snapshotMock.getDailySnapshot.mockResolvedValue(null);
   digestMock.buildDigestWithEntries.mockResolvedValue({
+    content: DIGEST_CONTENT,
+    entries: ENTRIES,
+  });
+  digestMock.buildDigestFromSnapshot.mockResolvedValue({
     content: DIGEST_CONTENT,
     entries: ENTRIES,
   });
@@ -96,6 +111,25 @@ describe('sendWelcomeFlow — 欢迎 + 首日简报', () => {
     expect(
       digestMock.saveRecentResults.mock.invocationCallOrder[0]!,
     ).toBeLessThan(digestMock.markDigestSent.mock.invocationCallOrder[0]!);
+  });
+
+  it('当日快照可用时走快照构建：礼包多一段概览，且不额外调模型', async () => {
+    const snapshot = {
+      date: '2026-10-25',
+      dataDate: '2026-10-25',
+      abstract: '今天的榜单集中在 AI 工具与开发效率上。',
+      items: [],
+    };
+    snapshotMock.getDailySnapshot.mockResolvedValue(snapshot);
+
+    await sendWelcomeFlow(makeMsg());
+
+    expect(digestMock.buildDigestFromSnapshot).toHaveBeenCalledWith(
+      { preferences: {} },
+      snapshot,
+    );
+    expect(digestMock.buildDigestWithEntries).not.toHaveBeenCalled();
+    expect(digestSend()).toEqual(['alice', DIGEST_CONTENT]);
   });
 
   it('欢迎语压缩到 3 行以内：身份 + 自动简报 + 一个示例 + 帮助入口', () => {

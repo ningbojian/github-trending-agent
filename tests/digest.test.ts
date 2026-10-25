@@ -47,6 +47,19 @@ vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
 }));
 
+/**
+ * Abstract 单独打桩：回退构建会给简报加一段开头概览，
+ * 但这层不该在 digest 的测试里真去碰模型（配置缺失会走 recordLlmFailure 写库，
+ * 污染本文件对 insert/delete 次数的断言）。
+ */
+const abstractMock = vi.hoisted(() => ({
+  loadAbstractSafe: vi.fn(async () => null as string | null),
+}));
+
+vi.mock('../src/agent/abstract', () => ({
+  loadAbstractSafe: abstractMock.loadAbstractSafe,
+}));
+
 vi.mock('../src/agent/repo-summary', () => ({
   loadRepoSummaries: summaryMock.loadRepoSummaries,
 }));
@@ -227,6 +240,7 @@ beforeEach(() => {
   dbMock.claimResults.length = 0;
   // 默认：简介降级（空 Map，等价 LLM 失败后的无简介输出），发送全部成功。
   summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
+  abstractMock.loadAbstractSafe.mockResolvedValue(null);
   apiMock.sendWeComText.mockResolvedValue(undefined);
 });
 
@@ -650,8 +664,21 @@ describe('buildDigestWithEntries — entries 与消息展示一致', () => {
     expect(content).not.toContain('owner19/repo-with-a-rather-long-name-19');
   });
 
-  it('空榜 → { content: 占位文案, entries: [] }', async () => {
-    const { content, entries } = await buildDigestWithEntries(
+  it('有概览时，概览作为开头段落出现在标题与条目之间', async () => {
+    dbMock.executeRows.push(makeEntry('o/r1', { starsDelta: 100 }));
+    abstractMock.loadAbstractSafe.mockResolvedValue('今天的榜单集中在 AI 工具上。');
+
+    const { content } = await buildDigestWithEntries(makeSub());
+
+    const lines = content.split('\n');
+    expect(lines[0]).toContain('📊 今日 GitHub 热榜简报');
+    expect(lines[1]).toBe('');
+    expect(lines[2]).toBe('今天的榜单集中在 AI 工具上。');
+    expect(lines[3]).toBe('');
+    expect(lines[4]).toContain('o/r1');
+  });
+
+  it('空榜 → { content: 占位文案, entries: [] }', async () => {    const { content, entries } = await buildDigestWithEntries(
       makeSub(),
       new Date('2026-10-22T16:30:00Z'),
     );

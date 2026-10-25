@@ -263,9 +263,11 @@ describe('getDailySnapshot', () => {
     expect(snapshot).toEqual({
       date: '2026-10-25',
       dataDate: null,
-      abstract: llmState.abstract,
+      abstract: null,
       items: [],
     });
+    // 空榜没有可概括的内容：不再为一个空段落白烧一次模型调用。
+    expect(llmState.prompts).toHaveLength(0);
     expect(dbState.insertCalls).toHaveLength(0);
   });
 
@@ -301,12 +303,12 @@ describe('getDailySnapshot', () => {
     expect(snapshot?.abstract).toBe(llmState.abstract);
   });
 
-  it('truncates the abstract to 80 code points', async () => {
+  it('truncates the abstract to 120 code points', async () => {
     dbState.executeRows = [row('a/one')];
-    llmState.abstract = '今'.repeat(120);
+    llmState.abstract = '今'.repeat(200);
 
     const snapshot = await getDailySnapshot(NOW);
-    expect(Array.from(snapshot?.abstract ?? '')).toHaveLength(80);
+    expect(Array.from(snapshot?.abstract ?? '')).toHaveLength(120);
   });
 });
 

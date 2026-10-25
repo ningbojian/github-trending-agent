@@ -1,8 +1,10 @@
 import {
+  buildDigestFromSnapshot,
   buildDigestWithEntries,
   markDigestSent,
   saveRecentResults,
 } from '../agent/digest.js';
+import { getDailySnapshot } from '../agent/digest-snapshot.js';
 import { sendWeComText } from './api.js';
 import type { InboundMessage } from './router.js';
 
@@ -47,7 +49,12 @@ export async function sendWelcomeFlow(msg: InboundMessage): Promise<void> {
 
   let digest: { content: string; entries: { fullName: string }[] };
   try {
-    digest = await buildDigestWithEntries({ preferences: {} });
+    // 优先复用当日快照：同一份榜单当天只生成一次，礼包因此多一段概览、
+    // 少一次模型调用。快照不可用才走实时构建（自带降级）。
+    const snapshot = await getDailySnapshot();
+    digest = snapshot
+      ? await buildDigestFromSnapshot({ preferences: {} }, snapshot)
+      : await buildDigestWithEntries({ preferences: {} });
   } catch (err) {
     console.error('first-day digest build failed:', err);
     return;

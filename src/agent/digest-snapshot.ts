@@ -1,9 +1,8 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { z } from 'zod';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
 import { shanghaiToday } from './time.js';
-import { generateObjectSafe } from './llm.js';
+import { loadAbstractSafe } from './abstract.js';
 import { loadRepoSummaries } from './repo-summary.js';
 
 /**
@@ -17,7 +16,8 @@ import { loadRepoSummaries } from './repo-summary.js';
  *   「昨天数据」的快照，全天所有推送都少一份最新数据。
  * - 中文简介：候选池按每批 ≤40 个仓库调用 loadRepoSummaries
  *   （内部批量 + `repo-zh:<fullName>` 180 天全局缓存），批间失败只丢该批简介。
- * - Abstract：一次小调用，2 句话 ≤80 字；失败则不写 abstract，简报照常发送。
+ * - Abstract：一次小调用，2–3 句话 ≤120 字（见 abstract.ts）；失败则不写 abstract，
+ *   简报照常发送；空池直接跳过，不发起调用。
  * - 任何失败返回 null，两个渠道各自回退现有 buildDigestWithEntries。
  */
 
@@ -50,10 +50,6 @@ const GLOBAL_TOP = 20;
 const LANGUAGE_TOP = 20;
 /** 简介批量大小（每批一次 LLM）。 */
 const SUMMARY_BATCH = 40;
-/** Abstract 上限（按码点）。 */
-const ABSTRACT_MAX_CHARS = 80;
-
-const abstractSchema = z.object({ abstract: z.string() });
 
 function snapshotKey(date: string): string {
   return `${CACHE_PREFIX}${date}`;
@@ -151,44 +147,6 @@ export function selectSnapshotPool(candidates: DigestSnapshotItem[]): DigestSnap
     push(item);
   }
   return picked;
-}
-
-function truncateChars(text: string, max: number): string {
-  const chars = Array.from(text.trim());
-  return chars.length <= max ? chars.join('') : chars.slice(0, max).join('');
-}
-
-function buildAbstractPrompt(items: DigestSnapshotItem[], summaries: Map<string, string>): string {
-  const lines = items.map((item) => {
-    const zh = summaries.get(item.fullName)?.trim();
-    return `- ${item.fullName}${zh ? `：${zh}` : ''}`;
-  });
-  return [
-    '下面是今天 GitHub 热榜的仓库列表。请写 2 句话、不超过 80 个汉字的今日概览：',
-    '1. 只概括共同主题或方向，不逐个列举仓库，不编造列表之外的事实；',
-    '2. 语气客观中性，不用营销词、不用 emoji；',
-    '3. 以 JSON 输出：{"abstract":"..."}。',
-    '',
-    '仓库列表：',
-    ...lines,
-  ].join('\n');
-}
-
-async function loadAbstractSafe(
-  items: DigestSnapshotItem[],
-  summaries: Map<string, string>,
-): Promise<string | null> {
-  try {
-    const out = await generateObjectSafe(
-      abstractSchema,
-      buildAbstractPrompt(items, summaries),
-    );
-    const text = out?.abstract?.trim();
-    if (!text) return null;
-    return truncateChars(text, ABSTRACT_MAX_CHARS);
-  } catch {
-    return null;
-  }
 }
 
 async function loadSummariesSafe(

@@ -3,6 +3,7 @@ import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
 import { sendWeComText } from '../wecom/api.js';
 import { formatEntryLine } from '../wecom/text.js';
+import { loadAbstractSafe } from './abstract.js';
 import {
   getDailySnapshot,
   selectEntriesForPreferences,
@@ -321,7 +322,9 @@ export async function buildDigestWithEntries(
   const lines = shownEntries.map((entry, index) =>
     formatEntryLine(index + 1, entry, summaries.get(entry.fullName)),
   );
-  const { text, keptCount } = assemble(headerLine(shanghaiToday(now)), lines);
+  // 与快照路径同口径的开头概览：只在真正有列表时生成，失败为 null（简报照常发）。
+  const intro = await loadAbstractSafe(shownEntries, summaries);
+  const { text, keptCount } = assemble(headerLine(shanghaiToday(now)), lines, intro);
   return {
     content: text,
     entries: shownEntries

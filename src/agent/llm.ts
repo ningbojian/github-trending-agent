@@ -2,9 +2,11 @@ import { createAlibaba } from '@ai-sdk/alibaba';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateObject, type LanguageModel } from 'ai';
 import type { ZodSchema } from 'zod';
 import { env } from '../config.js';
+import { recordLlmFailure } from './llm-failure.js';
 
 /** env.LLM_PROVIDER 的合法取值。 */
 const LLM_PROVIDERS = [
@@ -84,17 +86,19 @@ export function llm(): LanguageModel {
       // 小米 MiMo 提供 Anthropic 兼容协议，复用 Anthropic 客户端并覆盖 baseURL。
       return createAnthropic({ apiKey, baseURL: baseURL ?? MIMO_BASE_URL })(modelId);
     case 'opencode':
-      // OpenCode Go 网关是 OpenAI 兼容 chat/completions：必须显式 .chat()，
-      // 因为 @ai-sdk/openai 的默认入口是 /responses（多数第三方模型不支持）。
-      return createOpenAI({
+      // 必须用 @ai-sdk/openai-compatible（也是官方为该网关标注的包），不能
+      // 用 @ai-sdk/openai：后者的 chat 模型会把 generateObject 变成
+      // response_format={type:'json_schema',strict:true}（OpenAI 专有的
+      // Structured Outputs），而网关背后的 DeepSeek 等模型只认
+      // {type:'json_object'}，收到 json_schema 直接 400 —— 表现为简介全部
+      // 退化成英文截断。这里发出的才是最朴素的 chat/completions 请求。
+      return createOpenAICompatible({
+        name: 'opencode',
         apiKey,
         baseURL: baseURL?.trim() || OPENCODE_GO_BASE_URL,
-        // 官方建议：用自己的 UA 标识客户端，并用稳定会话 ID 便于路由与缓存。
-        headers: {
-          'user-agent': 'github-trending-agent/1.0',
-          'x-opencode-session': 'ghtrending-digest',
-        },
-      }).chat(modelId);
+        // OpenCode Go 要求带会话标识，否则 400 MissingSessionID。
+        headers: { 'x-opencode-session': 'ghtrending-digest' },
+      }).chatModel(modelId);
     default:
       break;
   }
@@ -115,15 +119,32 @@ export function llm(): LanguageModel {
 }
 
 /**
+ * 读取当前的 provider/model 标签用于日志与诊断记录。
+ *
+ * env 是懒加载 Proxy：变量缺失/非法时**读取即抛**。这个读取既不能在
+ * try 之外（会直接崩），也不能写在 catch 里（错误会二次抛出，把
+ * 「失败返回 null」变成「失败冒泡」）—— 所以单独兜一层。
+ */
+function llmLabel(): { provider: string; model: string } {
+  try {
+    return { provider: env.LLM_PROVIDER, model: env.LLM_MODEL };
+  } catch {
+    return { provider: '<env-invalid>', model: '<env-invalid>' };
+  }
+}
+
+/**
  * 对 prompt 做结构化对象生成；SDK 抛错、返回对象未过 zod 校验、
  * 网络失败等任何失败均返回 null，绝不 reject。
  * 成功后打印用量（provider/model/输入输出 token，不含内容），便于在
- * Vercel 日志核对成本。
+ * Vercel 日志核对成本；失败时除日志外还写一条 6 小时的诊断记录到
+ * kv_cache（`llm:last-error`），因为线上往往拿不到 Vercel 日志。
  */
 export async function generateObjectSafe<T>(
   schema: ZodSchema<T>,
   prompt: string,
 ): Promise<T | null> {
+  const { provider, model } = llmLabel();
   try {
     const result = await generateObject({ model: llm(), schema, prompt });
     const usage = result.usage as
@@ -137,7 +158,7 @@ export async function generateObjectSafe<T>(
     const inputTokens = usage?.inputTokens ?? usage?.promptTokens;
     const outputTokens = usage?.outputTokens ?? usage?.completionTokens;
     console.log(
-      `[llm] provider=${env.LLM_PROVIDER} model=${env.LLM_MODEL} ` +
+      `[llm] provider=${provider} model=${model} ` +
         `input_tokens=${inputTokens ?? '?'} output_tokens=${outputTokens ?? '?'}`,
     );
     // SDK 已按 schema 校验；此处再 parse 一次以兜底（并保证返回类型为 T）。
@@ -145,10 +166,9 @@ export async function generateObjectSafe<T>(
   } catch (err) {
     // 不打印内容，只打印原因：配置错（未知提供商、缺 baseURL）与鉴权/网络失败
     // 都不能静默——否则线上只会「一直没有中文简介」，无从排查。
-    console.error(
-      `[llm] provider=${env.LLM_PROVIDER} model=${env.LLM_MODEL} failed:`,
-      err instanceof Error ? err.message : err,
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[llm] provider=${provider} model=${model} failed:`, message);
+    await recordLlmFailure({ provider, model, message });
     return null;
   }
 }

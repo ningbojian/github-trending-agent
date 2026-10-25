@@ -147,8 +147,12 @@ curl -i https://<domain>/api/oauth-github
 
 **验证**
 
-用成员账号**首次进入应用**（企微工作台点开该应用，触发 `enter_agent` 事件）或给应用发一条首条文本（如「你好」）→ 先收到欢迎语（3 行：`你好！我是 GitHub 热榜助手，已为你自动开通每日简报（默认每天 09:00 北京时间推送）。…`），紧接一条**今日简报**（markdown，每行 `N. [owner/repo](链接) ★星标 (+增量) — 中文简介`）。
+用成员账号**首次进入应用**（企微工作台点开该应用，触发 `enter_agent` 事件）或给应用发一条首条文本（如「你好」）→ 先收到欢迎语（3 行：`你好！我是 GitHub 热榜助手，已为你自动开通每日简报（默认每天 09:00 北京时间推送）。…`），紧接一条**今日简报**（纯文本，每行 `N. owner/repo ★星标 (+增量) — 中文简介 https://github.com/owner/repo`）。
 再次进入应用 / 再发消息**不会**重复送礼包（订阅者行已存在）。
+
+> **消息类型只能是 text。** 企微文档写明「微工作台（原企业号）不支持展示 markdown 消息」——微工作台就是个人微信那一侧。发 markdown 时用户只会看到「暂时不支持此消息类型，请在企微中查看」。所以本项目所有外发消息（欢迎语、简报、搜索回复、报错文案）一律 `msgtype: "text"`，仓库链接写成裸 URL（微信会自动识别成可点链接）。企微对 text 与 markdown 的内容上限都是 **2048 字节**，各调用方按 1900 字节截断留余量。
+>
+> 另有一个后台开关会毁掉整条微信通道：若「我的企业 → 微信插件 / 微工作台」里开启了**「在微工作台中始终进入主页」**，微信端只会收到被截断到 20 字节的 text、其余消息类型被转成一句「请在企微中查看」。**必须确认它是关闭的**，否则无论发什么类型用户都读不到内容。
 同时：企微后台「接收消息」无报错记录，Vercel Logs 能看到对应的 POST `/api/wecom-callback`（text 先回加密回执、异步处理；event 回 200 空串、异步送礼包）。
 若保存回调 URL 时报验证失败 → 核对 Token / EncodingAESKey / corpid 三者与 Vercel env 是否逐字一致，并确认该 env 已随部署生效。
 
@@ -226,14 +230,14 @@ curl -i https://<domain>/api/oauth-github
 - **预期观察**：
   1. 「每日热榜管线」抓取 / 补全两步全绿；「简报小时触发」的触发步骤 curl 返回 `{"sent":N,"skipped":M,"failed":0}`（`failed` 必须为 0；`skipped` 是未到推送时间 / 当日已发 / 未满间隔的正常跳过）。
   2. Neon：`select count(*) from trending_entries where date = current_date;` 大于 0（20 个榜单：总榜 + `SCRAPER_LANGUAGES` 的 19 个语言榜）；`repos.topics` 有非空数组（enrich 生效）。
-  3. 微信：`active = true` 的订阅者收到**每日简报**（企微 markdown，每行 `N. [owner/repo](https://github.com/owner/repo) ★1234 (+567)（新上榜） — 中文简介`，条数按「条数 N」设置、默认 10；仓库名可点，简介是 ≤28 字中文概括。LLM 挂掉或 `REPO_SUMMARY_MODE=off` 时只省略破折号后的简介，仓库列表永远在）。
+  3. 微信：`active = true` 的订阅者收到**每日简报**（纯文本，每行 `N. owner/repo ★1234 (+567)（新上榜） — 中文简介 https://github.com/owner/repo`，条数按「条数 N」设置、默认 10；简介是 ≤28 字中文概括，链接写成裸 URL 由微信识别。LLM 挂掉或 `REPO_SUMMARY_MODE=off` 时只省略破折号后的简介，仓库列表永远在；超过 1900 字节从尾部逐条丢弃并标注「已截断」）。
   4. Vercel Logs：手动触发的 `/api/cron-push-digest` 一次 200 记录。
 
-### ② 自然语言搜索 → markdown 列表
+### ② 自然语言搜索 → 纯文本列表
 
 - **操作**：微信里发「**本周 rust 的 ai 项目**」。
 - **预期观察**：
-  1. 收到企微 **markdown** 回复：每行形如 `1. [owner/repo](https://github.com/owner/repo) ★1234 (+567)（新上榜） — 中文简介`，末行固定提示 `💡 直接回复「收藏 N」收藏任意一条；发「帮助」查看全部指令`；仓库名可点进 GitHub。
+  1. 收到**纯文本**回复：每行形如 `1. owner/repo ★1234 (+567)（新上榜） — 中文简介 https://github.com/owner/repo`，末行固定提示 `💡 直接回复「收藏 N」收藏任意一条；发「帮助」查看全部指令`；链接是裸 URL，微信里可点进 GitHub。
   2. Neon：`search_caches` 该用户行的 `results` 数组被覆盖写（`select results from search_caches where wecom_userid = '<测试用户>';`），序号与回复列表一一对应——这是下一步「收藏 1」的前提。
   3. 换一句「**找一下本周比较火的Java项目**」：同样有结果（中文描述 → 语言 java + 周榜，不因关键词误判返回空）；「**本周 swift 项目**」也能命中（语言过滤走 `repos.language`，不再只看语言榜）。
 
@@ -269,7 +273,7 @@ curl -i https://<domain>/api/oauth-github
 
 - **操作 A（LLM 不可用）**：把 Vercel `LLM_API_KEY` 临时改错（或 LLM 服务不可达）→ 再发一次搜索「本周 rust 的 ai 项目」；再手动 dispatch 一次管线看简报。
 - **预期 A 观察**：
-  1. 搜索**仍返回 markdown 列表**——`parseSearchQuery` 走 `fallbackParse` 正则回退（语言别名、`本周/今天/本月` 时间词、关键词仍被提取），不是报错。
+  1. 搜索**仍返回纯文本列表**——`parseSearchQuery` 走 `fallbackParse` 正则回退（语言别名、`本周/今天/本月` 时间词、关键词仍被提取），不是报错。
   2. 简报**仍列出仓库**（中文简介降级为 description 截断或整段省略——只少破折号后那段，仓库列表永远存在）。
   3. 修复 key 后回复恢复带 LLM 增强的解析结果。
 - **操作 B（无效/乱写查询）**：发一条无有效条件的文本（如「啊啊啊乱写一通」）。

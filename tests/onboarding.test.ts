@@ -12,12 +12,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // ---------------------------------------------------------------------------
 const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
-  sendWeComMarkdown: vi.fn(),
 }));
 
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
-  sendWeComMarkdown: apiMock.sendWeComMarkdown,
 }));
 
 /**
@@ -165,7 +163,6 @@ beforeEach(() => {
   dbMock.insertError = undefined;
   dbMock.updateCalls.length = 0;
   apiMock.sendWeComText.mockResolvedValue(undefined);
-  apiMock.sendWeComMarkdown.mockResolvedValue(undefined);
   // 礼包里的首日简报：固定一份最简结果，避免走真实 DB/摘要链路。
   digestMock.buildDigestWithEntries.mockReset();
   digestMock.buildDigestWithEntries.mockResolvedValue({
@@ -258,11 +255,12 @@ describe('首条消息 onboarding — 欢迎语', () => {
       preferences: { languages: [], keywords: [] },
     });
 
-    // 两条回复：欢迎语在前，原消息处理回复在后。
-    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
+    // 三条回复：欢迎语 → 首日简报 → 原消息处理回复（都在同一条 text 通道上）。
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(3);
     const calls = apiMock.sendWeComText.mock.calls as [string, string][];
     expect(calls[0]).toEqual(['alice', WELCOME_MESSAGE]);
-    expect(calls[1]).toEqual(['alice', '（搜索结果）']);
+    expect(calls[1]).toEqual(['alice', '📊 今日 GitHub 热榜简报']);
+    expect(calls[2]).toEqual(['alice', '（搜索结果）']);
     expect(search).toHaveBeenCalledTimes(1);
   });
 

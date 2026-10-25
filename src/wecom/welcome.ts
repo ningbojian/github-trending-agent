@@ -3,7 +3,7 @@ import {
   markDigestSent,
   saveRecentResults,
 } from '../agent/digest.js';
-import { sendWeComMarkdown, sendWeComText } from './api.js';
+import { sendWeComText } from './api.js';
 import type { InboundMessage } from './router.js';
 
 /**
@@ -54,7 +54,7 @@ export async function sendWelcomeFlow(msg: InboundMessage): Promise<void> {
   }
 
   try {
-    await sendWeComMarkdown(userId, digest.content);
+    await sendWeComText(userId, digest.content);
   } catch (err) {
     console.error('first-day digest send failed:', err);
     return;

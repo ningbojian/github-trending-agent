@@ -175,25 +175,18 @@ async function postMessage(
   }
 }
 
-/** 以自建应用文本消息推送给指定成员。errcode 非 0 时抛错。 */
+/**
+ * 以自建应用文本消息推送给指定成员。errcode 非 0 时抛错。
+ *
+ * 只提供文本：企微的 markdown 消息在「微工作台」（个人微信那一侧）不可见，
+ * 用户只会看到「暂时不支持此消息类型，请在企微中查看」。要在微信里读简报，
+ * 就必须发 text（内容上限 2048 字节，见各调用方的安全阈值）。
+ */
 export async function sendWeComText(userId: string, content: string): Promise<void> {
   await postMessage(userId, {
     touser: userId,
     msgtype: 'text',
     agentid: Number(env.WECOM_AGENT_ID),
     text: { content },
-  });
-}
-
-/**
- * 以自建应用 markdown 消息推送给指定成员（支持 [文字](url) 链接）。
- * 供搜索结果与每日简报使用；短交互回执仍走 sendWeComText。
- */
-export async function sendWeComMarkdown(userId: string, content: string): Promise<void> {
-  await postMessage(userId, {
-    touser: userId,
-    msgtype: 'markdown',
-    agentid: Number(env.WECOM_AGENT_ID),
-    markdown: { content },
   });
 }

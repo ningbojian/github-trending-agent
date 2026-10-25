@@ -2,11 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InboundMessage } from '../src/wecom/router';
 
 // ---------------------------------------------------------------------------
-// Mocks：api（text+markdown）/ LLM / searchTrending / loadRepoSummaries / db —— 绝不触网、不连库。
+// Mocks：api / LLM / searchTrending / loadRepoSummaries / db —— 绝不触网、不连库。
 // ---------------------------------------------------------------------------
 const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
-  sendWeComMarkdown: vi.fn(),
 }));
 
 const llmMock = vi.hoisted(() => ({
@@ -27,7 +26,6 @@ const dbMock = vi.hoisted(() => ({
 
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
-  sendWeComMarkdown: apiMock.sendWeComMarkdown,
 }));
 
 vi.mock('../src/agent/llm', () => ({
@@ -59,7 +57,7 @@ import {
   EMPTY_RESULT_REPLY,
   ERROR_REPLY,
   GUIDANCE_FOOTER,
-  MAX_MARKDOWN_BYTES,
+  MAX_TEXT_BYTES,
   formatSearchReply,
   handleSearch,
 } from '../src/wecom/reply';
@@ -115,8 +113,6 @@ function makeQuery(overrides: Partial<{
 beforeEach(() => {
   apiMock.sendWeComText.mockReset();
   apiMock.sendWeComText.mockResolvedValue(undefined);
-  apiMock.sendWeComMarkdown.mockReset();
-  apiMock.sendWeComMarkdown.mockResolvedValue(undefined);
   llmMock.generateObjectSafe.mockReset();
   llmMock.generateObjectSafe.mockResolvedValue(null);
   searchMock.searchTrending.mockReset();
@@ -127,10 +123,10 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// formatSearchReply：纯函数，markdown 单行 + 链接 + 摘要注入，逐字符钉死。
+// formatSearchReply：纯函数，纯文本单行 + 裸链接 + 摘要注入，逐字符钉死。
 // ---------------------------------------------------------------------------
-describe('formatSearchReply（markdown 单行 + 链接 + 摘要注入）', () => {
-  it('快照断言：编号、链接、★stars (+delta)、（新上榜）、简介与页脚逐字符钉死', () => {
+describe('formatSearchReply（纯文本单行 + 裸链接 + 摘要注入）', () => {
+  it('快照断言：编号、仓库名、★stars (+delta)、（新上榜）、简介、链接与页脚逐字符钉死', () => {
     const items = [
       makeItem(),
       makeItem({
@@ -146,11 +142,17 @@ describe('formatSearchReply（markdown 单行 + 链接 + 摘要注入）', () =>
     ]);
     expect(formatSearchReply(items, summaries)).toBe(
       [
-        '1. [vercel/next.js](https://github.com/vercel/next.js) ★128000 (+321) — React 全栈框架',
-        '2. [rust-lang/rust](https://github.com/rust-lang/rust) ★99000 (+123)（新上榜） — 系统级编程语言',
+        '1. vercel/next.js ★128000 (+321) — React 全栈框架 https://github.com/vercel/next.js',
+        '2. rust-lang/rust ★99000 (+123)（新上榜） — 系统级编程语言 https://github.com/rust-lang/rust',
         GUIDANCE_FOOTER,
       ].join('\n'),
     );
+  });
+
+  it('消息里不得出现 markdown 链接语法（微信侧看不到 markdown）', () => {
+    const out = formatSearchReply([makeItem()], new Map());
+    expect(out).not.toContain('](');
+    expect(out).toContain('https://github.com/vercel/next.js');
   });
 
   it('摘要 Map 缺失该仓库 → 省略破折号后段（不回退英文 description）', () => {
@@ -160,7 +162,7 @@ describe('formatSearchReply（markdown 单行 + 链接 + 摘要注入）', () =>
     );
     expect(out).toBe(
       [
-        '1. [x/blank](https://github.com/x/blank) ★128000 (+321)',
+        '1. x/blank ★128000 (+321) https://github.com/x/blank',
         GUIDANCE_FOOTER,
       ].join('\n'),
     );
@@ -168,12 +170,13 @@ describe('formatSearchReply（markdown 单行 + 链接 + 摘要注入）', () =>
     expect(out).not.toContain(' — ');
   });
 
-  it('摘要含 markdown 特殊字符时被转义（防注入防错乱）', () => {
+  it('摘要里的 Markdown 特殊字符原样保留（纯文本无需转义）', () => {
     const out = formatSearchReply(
       [makeItem({ fullName: 'a/b' })],
       new Map([['a/b', '支持 *通配* 与 [配置]']]),
     );
-    expect(out).toContain(' — 支持 \\*通配\\* 与 \\[配置\\]');
+    expect(out).toContain(' — 支持 *通配* 与 [配置]');
+    expect(out).not.toContain('\\');
   });
 
   it('isNew 为 false 时无（新上榜）标注', () => {
@@ -190,9 +193,9 @@ describe('formatSearchReply（markdown 单行 + 链接 + 摘要注入）', () =>
       ],
       new Map(),
     );
-    expect(out).toContain('1. [a/a](https://github.com/a/a)');
-    expect(out).toContain('2. [b/b](https://github.com/b/b)');
-    expect(out).toContain('3. [c/c](https://github.com/c/c)');
+    expect(out).toContain('1. a/a');
+    expect(out).toContain('2. b/b');
+    expect(out).toContain('3. c/c');
   });
 
   it('页脚固定在末尾，含「收藏」「帮助」两个指引关键词', () => {
@@ -209,9 +212,9 @@ describe('formatSearchReply（markdown 单行 + 链接 + 摘要注入）', () =>
 });
 
 // ---------------------------------------------------------------------------
-// formatSearchReply 超长截断：markdown 上限 3800 字节（4096 的安全阈值）。
+// formatSearchReply 超长截断：企微文本消息上限 2048 字节，安全阈值 1900。
 // ---------------------------------------------------------------------------
-describe('formatSearchReply 超长截断（MAX_MARKDOWN_BYTES = 3800）', () => {
+describe(`formatSearchReply 超长截断（MAX_TEXT_BYTES = ${MAX_TEXT_BYTES}）`, () => {
   function makeManyItems(count: number): SearchResultItem[] {
     return Array.from({ length: count }, (_, i) =>
       makeItem({
@@ -229,20 +232,21 @@ describe('formatSearchReply 超长截断（MAX_MARKDOWN_BYTES = 3800）', () => 
     );
   }
 
-  it('导出的上限常量为 3800 字节', () => {
-    expect(MAX_MARKDOWN_BYTES).toBe(3800);
+  it('导出的上限常量为 1900 字节：低于企微文本消息 2048 字节的内容上限', () => {
+    expect(MAX_TEXT_BYTES).toBe(1900);
+    expect(MAX_TEXT_BYTES).toBeLessThan(2048);
   });
 
-  it('超过 3800 字节时截断列表、标注截断、保留页脚', () => {
+  it('超过上限时截断列表、标注截断、保留页脚', () => {
     const out = formatSearchReply(makeManyItems(40), longSummaries(40));
-    expect(Buffer.byteLength(out, 'utf8')).toBeLessThanOrEqual(3800);
+    expect(Buffer.byteLength(out, 'utf8')).toBeLessThanOrEqual(MAX_TEXT_BYTES);
     expect(out).toContain('（结果过多，已截断）');
     expect(out).toContain(GUIDANCE_FOOTER);
   });
 
   it('截断保留靠前条目、丢弃靠后条目', () => {
     const out = formatSearchReply(makeManyItems(40), longSummaries(40));
-    expect(out).toContain('1. [owner0/repo-0]');
+    expect(out).toContain('1. owner0/repo-0');
     expect(out).not.toContain('owner39/repo-39');
   });
 
@@ -253,10 +257,10 @@ describe('formatSearchReply 超长截断（MAX_MARKDOWN_BYTES = 3800）', () => 
 });
 
 // ---------------------------------------------------------------------------
-// handleSearch：parse → search →（空结果关键词回退）→ summaries → markdown 发送。
+// handleSearch：parse → search →（空结果关键词回退）→ summaries → 文本发送。
 // ---------------------------------------------------------------------------
-describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 发送）', () => {
-  it('LLM 返回结构化查询 → 检索 2 条 → 注入摘要 → sendWeComMarkdown 发送', async () => {
+describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → 文本发送）', () => {
+  it('LLM 返回结构化查询 → 检索 2 条 → 注入摘要 → sendWeComText 发送', async () => {
     llmMock.generateObjectSafe.mockResolvedValue(
       makeQuery({ languages: ['python'], keywords: ['ai'] }),
     );
@@ -285,14 +289,13 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 
     expect(query.keywords).toEqual(['ai']);
     // 摘要按同一 items 注入
     expect(summaryMock.loadRepoSummaries).toHaveBeenCalledWith(items);
-    // markdown 通道发送（而非 text）
-    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
-    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
-    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledWith(
+    // 只走文本通道（markdown 在微信里不可见）
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith(
       'alice',
       [
-        '1. [alice/py-ai](https://github.com/alice/py-ai) ★1000 (+100) — Python AI 框架',
-        '2. [bob/rs-ai](https://github.com/bob/rs-ai) ★2000 (+200)（新上榜）',
+        '1. alice/py-ai ★1000 (+100) — Python AI 框架 https://github.com/alice/py-ai',
+        '2. bob/rs-ai ★2000 (+200)（新上榜） https://github.com/bob/rs-ai',
         GUIDANCE_FOOTER,
       ].join('\n'),
     );
@@ -311,7 +314,7 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 
     ];
     expect(query.languages).toEqual(['python']);
     expect(query.keywords).toEqual(['ai']);
-    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
   });
 
   it('首次检索空且 keywords 非空 → 去关键词重查一次（第二次 keywords 为空）', async () => {
@@ -337,12 +340,11 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 
     expect(second.keywords).toEqual([]);
     // 其余查询维度保持不变（只摘掉 keywords）
     expect(second.languages).toEqual(first.languages);
-    // 回退命中后走 markdown 正常发送
-    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
-    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    // 回退命中后正常发送一次
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
   });
 
-  it('首次检索空且 keywords 为空 → 不重查，直接回引导文案（text）', async () => {
+  it('首次检索空且 keywords 为空 → 不重查，直接回引导文案', async () => {
     llmMock.generateObjectSafe.mockResolvedValue(makeQuery());
     await handleSearch(makeMsg({ content: '啊' }));
 
@@ -352,11 +354,10 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 
       'alice',
       EMPTY_RESULT_REPLY,
     );
-    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
     expect(EMPTY_RESULT_REPLY).toContain('没找到');
   });
 
-  it('两次检索都为空 → EMPTY_RESULT_REPLY（text）', async () => {
+  it('两次检索都为空 → EMPTY_RESULT_REPLY', async () => {
     llmMock.generateObjectSafe.mockResolvedValue(
       makeQuery({ keywords: ['quantum'] }),
     );
@@ -367,10 +368,9 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 
       'alice',
       EMPTY_RESULT_REPLY,
     );
-    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
   });
 
-  it('摘要含换行 → 渲染边界折叠：发送内容中无以 > 开头的引用注入行', async () => {
+  it('摘要含换行 → 渲染边界折叠：发送内容中无以 > 开头的引用行', async () => {
     llmMock.generateObjectSafe.mockResolvedValue(makeQuery());
     searchMock.searchTrending.mockResolvedValue([
       makeItem({ fullName: 'a/b' }),
@@ -381,7 +381,7 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 
 
     await handleSearch(makeMsg({ content: 'python' }));
 
-    const [, content] = apiMock.sendWeComMarkdown.mock.calls[0] as [
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [
       string,
       string,
     ];
@@ -400,16 +400,17 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 
 
     await handleSearch(makeMsg({ content: 'python' }));
 
-    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
-    const [, content] = apiMock.sendWeComMarkdown.mock.calls[0] as [
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [
       string,
       string,
     ];
-    expect(content).toContain('[alice/py-ai](https://github.com/alice/py-ai)');
+    expect(content).toContain('alice/py-ai');
+    expect(content).toContain('https://github.com/alice/py-ai');
     expect(content).not.toContain(' — ');
   });
 
-  it('检索抛错 → 发送友好错误文案（text）、记 handleSearch failed 日志，且不向上传播异常', async () => {
+  it('检索抛错 → 发送友好错误文案、记 handleSearch failed 日志，且不向上传播异常', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     searchMock.searchTrending.mockRejectedValue(new Error('db down'));
     await expect(
@@ -432,10 +433,9 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → markdown 
     expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', ERROR_REPLY);
   });
 
-  it('sendWeComMarkdown 失败时兜底改发错误文案，兜底再失败则两条日志都记（运维可见）', async () => {
+  it('列表发送失败时兜底改发错误文案，兜底再失败则两条日志都记（运维可见）', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     searchMock.searchTrending.mockResolvedValue([makeItem()]);
-    apiMock.sendWeComMarkdown.mockRejectedValue(new Error('wecom down'));
     apiMock.sendWeComText.mockRejectedValue(new Error('wecom down'));
     await expect(
       handleSearch(makeMsg({ content: 'python' })),

@@ -18,14 +18,11 @@ vi.mock('../src/config', () => ({ env: ENV }));
 // ---------------------------------------------------------------------------
 const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
-  // router 现在会加载 ./welcome.js，而 welcome 从 api 里取 sendWeComMarkdown；
   // mock 工厂必须提供该导出，否则 ESM 绑定期报「No export is defined on the mock」。
-  sendWeComMarkdown: vi.fn(),
 }));
 
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
-  sendWeComMarkdown: apiMock.sendWeComMarkdown,
 }));
 
 /**

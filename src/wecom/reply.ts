@@ -1,19 +1,22 @@
 import { parseSearchQuery } from '../agent/parse-query.js';
 import { loadRepoSummaries } from '../agent/repo-summary.js';
 import { searchTrending, type SearchResultItem } from '../agent/search.js';
-import { sendWeComMarkdown, sendWeComText } from './api.js';
-import { formatEntryLine } from './markdown.js';
+import { sendWeComText } from './api.js';
+import { formatEntryLine } from './text.js';
 import type { InboundMessage } from './router.js';
 
 /**
- * 消息回复引擎：把检索结果格式化成企微 markdown 并推送。
- * - formatSearchReply：纯函数，编号列表（链接 + 中文简介）+ 固定页脚，超长自动截断
- * - handleSearch：parse → search（空结果去关键词重查一次）→ summaries → sendWeComMarkdown，
+ * 消息回复引擎：把检索结果格式化成纯文本并推送。
+ * - formatSearchReply：纯函数，编号列表（仓库 + 星数 + 裸链接 + 中文简介）+ 固定页脚，超长自动截断
+ * - handleSearch：parse → search（空结果去关键词重查一次）→ summaries → sendWeComText，
  *   全链兜底异常
+ *
+ * 为什么发 text 而不是 markdown：企微的 markdown 消息在微工作台（个人微信
+ * 那一侧）不可见，用户只会收到「暂时不支持此消息类型，请在企微中查看」。
  */
 
-/** 企微 markdown 消息上限 4096 字节；3800 字节为安全阈值，超出即截断列表。 */
-export const MAX_MARKDOWN_BYTES = 3800;
+/** 企微文本消息内容上限 2048 字节；1900 字节为安全阈值，超出即截断列表。 */
+export const MAX_TEXT_BYTES = 1900;
 
 /** 搜索结果页脚：拿到结果后的下一步指引（收藏任意一条 / 查看全部指令）。 */
 export const GUIDANCE_FOOTER =
@@ -42,10 +45,10 @@ function buildReply(lines: string[], truncated: boolean): string {
 
 /**
  * 把检索结果格式化为编号列表 + 固定页脚（全中文交互文案）。
- * 每条一行：`1. [owner/repo](url) ★1234 (+567)（新上榜） — 中文简介`；
+ * 每条一行：`1. owner/repo ★1234 (+567)（新上榜） — 中文简介 https://github.com/owner/repo`；
  * 简介从 summaries 按 fullName 注入（Task 1 的 loadRepoSummaries 产物），
  * 缺失即省略破折号后段（不回退英文 description）。
- * 超过 3800 字节（企微 markdown 4096 字节上限的安全阈值）时从尾部逐条丢弃，
+ * 超过 1900 字节（企微文本消息 2048 字节上限的安全阈值）时从尾部逐条丢弃，
  * 并在页脚前标注截断。空列表返回空串（空结果引导由 handleSearch 负责）。
  */
 export function formatSearchReply(
@@ -59,7 +62,7 @@ export function formatSearchReply(
     formatEntryLine(i + 1, item, summaries.get(item.fullName)),
   );
   const full = buildReply(allLines, false);
-  if (byteLength(full) <= MAX_MARKDOWN_BYTES) {
+  if (byteLength(full) <= MAX_TEXT_BYTES) {
     return full;
   }
   // 从尾部逐条丢弃，直到 剩余列表 + 截断标注 + 页脚 放得下（topN ≤ 25，代价可忽略）。
@@ -67,11 +70,11 @@ export function formatSearchReply(
   while (lines.length > 0) {
     lines = lines.slice(0, -1);
     const candidate = buildReply(lines, true);
-    if (byteLength(candidate) <= MAX_MARKDOWN_BYTES) {
+    if (byteLength(candidate) <= MAX_TEXT_BYTES) {
       return candidate;
     }
   }
-  // 理论不可达：截断标注 + 页脚本身远小于 3800 字节。
+  // 理论不可达：截断标注 + 页脚本身远小于 1900 字节。
   return buildReply([], true);
 }
 
@@ -91,10 +94,10 @@ async function loadSummariesSafe(
 }
 
 /**
- * 搜索 handler：parse → search → format → sendWeComMarkdown。
+ * 搜索 handler：parse → search → format → sendWeComText。
  * 首次检索为空且 query 带关键词时，去掉 keywords 再查一次（关键词常是
  * 用户主题词而非榜单词，ILIKE 易 0 命中，直接放弃等于「没找到」误伤）。
- * 空结果回引导文案（text）；有结果加载中文简介后走 markdown 通道。
+ * 空结果回引导文案；有结果加载中文简介后推送编号列表。
  * 任何异常（LLM/检索/发送）都被兜住，保证用户总能收到某种中文回复；
  * 异常不外抛，router 的 dispatchSafely 只作第二道安全网。
  */
@@ -113,10 +116,7 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
       return;
     }
     const summaries = await loadSummariesSafe(items);
-    await sendWeComMarkdown(
-      msg.fromUserName,
-      formatSearchReply(items, summaries),
-    );
+    await sendWeComText(msg.fromUserName, formatSearchReply(items, summaries));
   } catch (err) {
     console.error('handleSearch failed:', err);
     try {

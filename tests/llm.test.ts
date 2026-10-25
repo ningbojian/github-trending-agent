@@ -15,14 +15,20 @@ const mocks = vi.hoisted(() => ({
   },
   createAnthropic: vi.fn(),
   createOpenAI: vi.fn(),
+  createOpenAICompatible: vi.fn(),
   createDeepSeek: vi.fn(),
   createAlibaba: vi.fn(),
   generateObject: vi.fn(),
+  recordLlmFailure: vi.fn(async () => {}),
 }));
 
 vi.mock('../src/config', () => ({ env: mocks.env }));
 vi.mock('@ai-sdk/anthropic', () => ({ createAnthropic: mocks.createAnthropic }));
 vi.mock('@ai-sdk/openai', () => ({ createOpenAI: mocks.createOpenAI }));
+vi.mock('@ai-sdk/openai-compatible', () => ({
+  createOpenAICompatible: mocks.createOpenAICompatible,
+}));
+vi.mock('../src/agent/llm-failure', () => ({ recordLlmFailure: mocks.recordLlmFailure }));
 vi.mock('@ai-sdk/deepseek', () => ({ createDeepSeek: mocks.createDeepSeek }));
 vi.mock('@ai-sdk/alibaba', () => ({ createAlibaba: mocks.createAlibaba }));
 vi.mock('ai', () => ({ generateObject: mocks.generateObject }));
@@ -43,6 +49,9 @@ beforeEach(() => {
   mocks.env.LLM_BASE_URL = undefined;
   mocks.createAnthropic.mockImplementation(() => fakeProvider('anthropic'));
   mocks.createOpenAI.mockImplementation(() => fakeProvider('openai'));
+  mocks.createOpenAICompatible.mockImplementation(() => ({
+    chatModel: (modelId: string) => ({ provider: 'opencode-chat', modelId }),
+  }));
   mocks.createDeepSeek.mockImplementation(() => fakeProvider('deepseek'));
   mocks.createAlibaba.mockImplementation(() => fakeProvider('ali'));
   mocks.generateObject.mockReset();
@@ -136,50 +145,39 @@ describe('llm provider branching', () => {
     expect(mocks.createAlibaba).not.toHaveBeenCalled();
   });
 
-  it('opencode: uses the Go chat-completions endpoint instead of /responses', () => {
-    // OpenCode Go 的网关只提供 OpenAI 兼容的 chat/completions（models.dev:
-    // opencode-go → @ai-sdk/openai-compatible）。@ai-sdk/openai 的默认入口是
-    // /responses，必须显式 .chat()，否则 DeepSeek 这类模型直接 404。
+  it('opencode: 用 OpenAI 兼容客户端，避免发出 OpenAI 专有的 structured outputs', () => {
+    // 线上症状：所有简介都退化成英文截断，说明 generateObject 每次都失败。
+    // 根因在请求体：@ai-sdk/openai 的 .chat() 会强制带
+    // response_format={type:'json_schema',strict:true}（OpenAI Structured
+    // Outputs）。OpenCode Go 网关背后的 DeepSeek 等模型只认
+    // {type:'json_object'}，收到 json_schema 直接 400。
+    // 官方为该网关标注的 AI SDK 包就是 @ai-sdk/openai-compatible。
     mocks.env.LLM_PROVIDER = 'opencode';
-    const chat = vi.fn((modelId: string) => ({
-      provider: 'opencode-chat',
-      modelId,
-    }));
-    const client = Object.assign(vi.fn(), { chat, responses: vi.fn() });
-    mocks.createOpenAI.mockImplementation(() => client as never);
 
     expect(llm()).toEqual({ provider: 'opencode-chat', modelId: 'test-model' });
-    expect(mocks.createOpenAI).toHaveBeenCalledWith({
+    expect(mocks.createOpenAICompatible).toHaveBeenCalledWith({
+      name: 'opencode',
       apiKey: 'test-llm-api-key',
       baseURL: 'https://opencode.ai/inference/go/openai/v1',
-      headers: {
-        'user-agent': 'github-trending-agent/1.0',
-        'x-opencode-session': 'ghtrending-digest',
-      },
+      headers: { 'x-opencode-session': 'ghtrending-digest' },
     });
-    expect(chat).toHaveBeenCalledWith('test-model');
-    // 绝不能走默认调用入口（那会打到 /responses）
-    expect(client).not.toHaveBeenCalled();
+    // 绝不能走 @ai-sdk/openai（默认入口是 /responses，
+    // 且会带上 json_schema structured outputs）。
+    expect(mocks.createOpenAI).not.toHaveBeenCalled();
     expect(mocks.createAnthropic).not.toHaveBeenCalled();
   });
 
   it('opencode: honours LLM_BASE_URL (pay-as-you-go endpoint)', () => {
     mocks.env.LLM_PROVIDER = 'opencode';
     mocks.env.LLM_BASE_URL = 'https://opencode.ai/inference/openai/v1';
-    const chat = vi.fn((modelId: string) => ({ provider: 'opencode-chat', modelId }));
-    mocks.createOpenAI.mockImplementation(
-      () => Object.assign(vi.fn(), { chat }) as never,
-    );
 
     llm();
 
-    expect(mocks.createOpenAI).toHaveBeenCalledWith({
+    expect(mocks.createOpenAICompatible).toHaveBeenCalledWith({
+      name: 'opencode',
       apiKey: 'test-llm-api-key',
       baseURL: 'https://opencode.ai/inference/openai/v1',
-      headers: {
-        'user-agent': 'github-trending-agent/1.0',
-        'x-opencode-session': 'ghtrending-digest',
-      },
+      headers: { 'x-opencode-session': 'ghtrending-digest' },
     });
   });
 
@@ -314,10 +312,59 @@ describe('generateObjectSafe', () => {
     await expect(generateObjectSafe(schema, 'x')).resolves.toBeNull();
   });
 
+  it('records the failure to the DB so it can be read without Vercel logs', async () => {
+    // 失败只写 console.error 时，没有 Vercel 日志权限就完全无从排查：
+    // 线上表现只是「简介一直是英文」，看不出是密钥、模型名还是请求体的问题。
+    mocks.generateObject.mockRejectedValue(new Error('400 unsupported response_format'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await generateObjectSafe(schema, 'x');
+
+    expect(mocks.recordLlmFailure).toHaveBeenCalledTimes(1);
+    expect(mocks.recordLlmFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: 'anthropic',
+        model: 'test-model',
+        message: expect.stringContaining('unsupported response_format'),
+      }),
+    );
+  });
+
+  it('does not record anything when generation succeeds', async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: { title: 'trending-repo', stars: 42 },
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await generateObjectSafe(schema, 'x');
+
+    expect(mocks.recordLlmFailure).not.toHaveBeenCalled();
+  });
+
   it('returns null instead of rejecting when the provider itself cannot be created', async () => {
     mocks.env.LLM_PROVIDER = 'vertex';
 
     await expect(generateObjectSafe(schema, 'x')).resolves.toBeNull();
     expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
+  it('returns null instead of rejecting when reading env itself throws', async () => {
+    // 生产上 env 是懒加载 Proxy：变量缺失/非法时，读取即抛出。
+    // 老实现把 env.LLM_PROVIDER 直接写在 catch 里，于是这个错误会在
+    // catch 里二次抛出，冒泡到调用方（fail-open 变成 fail-crash）。
+    const descriptor = Object.getOwnPropertyDescriptor(mocks.env, 'LLM_PROVIDER');
+    Object.defineProperty(mocks.env, 'LLM_PROVIDER', {
+      configurable: true,
+      get() {
+        throw new Error('Invalid environment variables: LLM_API_KEY');
+      },
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await expect(generateObjectSafe(schema, 'x')).resolves.toBeNull();
+    } finally {
+      if (descriptor) Object.defineProperty(mocks.env, 'LLM_PROVIDER', descriptor);
+    }
   });
 });

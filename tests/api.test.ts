@@ -164,34 +164,25 @@ describe('sendWeComText — message/send 出站中转（env 门控）', () => {
   });
 });
 
-describe('sendWeComMarkdown — markdown 消息', () => {
-  it('payload 形状：msgtype=markdown + markdown.content（与 text 同构复用 touser/agentid）', async () => {
-    const { sendWeComMarkdown } = await loadApiWithEnv();
-    const fetchMock = stubFetchOk();
+describe('外发消息只有 text 一种类型', () => {
+  it('不再导出 markdown 发送函数：微工作台（个人微信）看不到 markdown 消息', async () => {
+    // 线上症状：用户在个人微信里收到「暂时不支持此消息类型，请在企微中查看」。
+    // 企微文档明确写着「微工作台（原企业号）不支持展示 markdown 消息」。
+    // 只要有人把 markdown 发送函数加回来，这条就会红。
+    const api = await loadApiWithEnv();
 
-    await sendWeComMarkdown('alice', '1. [a/b](https://github.com/a/b) ★1 (+1)');
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(
-      'https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=tok-123',
-    );
-    expect(JSON.parse(String(init.body))).toEqual({
-      touser: 'alice',
-      msgtype: 'markdown',
-      agentid: 1000002,
-      markdown: { content: '1. [a/b](https://github.com/a/b) ★1 (+1)' },
-    });
+    expect(api).not.toHaveProperty('sendWeComMarkdown');
+    expect(typeof api.sendWeComText).toBe('function');
   });
 
-  it('出站中转头复用：配置了 relay 时 markdown 同样带 X-Relay-Secret', async () => {
-    const { sendWeComMarkdown } = await loadApiWithEnv({
+  it('文本消息沿用同一套中转头：配置 relay 后 text 也带 X-Relay-Secret', async () => {
+    const { sendWeComText } = await loadApiWithEnv({
       WECOM_RELAY_URL: 'http://relay.test:18080',
       WECOM_RELAY_SECRET: 'unit-relay-secret',
     });
     const fetchMock = stubFetchOk();
 
-    await sendWeComMarkdown('alice', '**hello**');
+    await sendWeComText('alice', 'hello');
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('http://relay.test:18080/cgi-bin/message/send?access_token=tok-123');
@@ -233,14 +224,14 @@ describe('postMessage 重试（网络异常 / HTTP 5xx 重试一次；业务 err
   });
 
   it('fetch reject（网络瞬断）→ 重试一次即成功', async () => {
-    const { sendWeComMarkdown } = await loadApiWithEnv();
+    const { sendWeComText } = await loadApiWithEnv();
     const fetchMock = vi
       .fn()
       .mockRejectedValueOnce(new TypeError('fetch failed'))
       .mockResolvedValueOnce(okResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    await runWithFakeTimers(sendWeComMarkdown('alice', 'hello'));
+    await runWithFakeTimers(sendWeComText('alice', 'hello'));
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });

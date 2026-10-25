@@ -18,6 +18,7 @@
     "@ai-sdk/anthropic": "^4.0.85",
     "@ai-sdk/deepseek": "^3.0.70",
     "@ai-sdk/openai": "^4.0.99",
+    "@ai-sdk/openai-compatible": "^3.0.78",
     "@neondatabase/serverless": "^1.2.0",
     "@vercel/functions": "^3.10.3",
     "ai": "^7.0.148",
@@ -31,5 +32,9 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"
+  },
+  "overrides": {
+    "@ai-sdk/provider": "4.0.34",
+    "@ai-sdk/provider-utils": "5.0.68"
   }
 }

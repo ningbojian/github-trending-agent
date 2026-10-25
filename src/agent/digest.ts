@@ -1,8 +1,8 @@
 import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
-import { sendWeComMarkdown } from '../wecom/api.js';
-import { formatEntryLine } from '../wecom/markdown.js';
+import { sendWeComText } from '../wecom/api.js';
+import { formatEntryLine } from '../wecom/text.js';
 import {
   getDailySnapshot,
   selectEntriesForPreferences,
@@ -15,13 +15,13 @@ export { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
 
 /**
  * 每日简报：按订阅者偏好取近 7 天 topN 热榜条目，每条一行
- * （仓库可点链接 + 中文简介），走企微 markdown 通道推送。
+ * （仓库可点链接 + 中文简介），走企微文本消息推送。
  * 简介经 loadRepoSummaries（Task 1）批量生成 + 全局 kv 缓存，失败自动降级，
  * repo 列表永远存在。
  *
  * 数据获取不复用 searchTrending：后者按"用户最近一次检索"的语义写 search_caches，
  * 每日定时任务不该借用那条通道；推送成功后本模块用 saveRecentResults 按
- * **消息实际展示的顺序**（含 digestCount 与 3800 字节截断）覆盖写 search_caches，
+ * **消息实际展示的顺序**（含 digestCount 与 1900 字节截断）覆盖写 search_caches，
  * 让用户收到简报后直接「收藏 N」即可引用其中条目；用户随后搜索会正常覆盖。
  */
 
@@ -35,8 +35,8 @@ export const DEFAULT_DIGEST_COUNT = 10;
 export const MIN_DIGEST_COUNT = 1;
 /** 简报条数上限（成本护栏）。 */
 export const MAX_DIGEST_COUNT = 20;
-/** 企微 markdown 4096 字节上限的安全阈值（与搜索回复一致）。 */
-const MAX_DIGEST_BYTES = 3800;
+/** 企微文本消息 2048 字节上限的安全阈值（与搜索回复一致）。 */
+const MAX_DIGEST_BYTES = 1900;
 /** 截断标注。 */
 const TRUNCATION_NOTE = '（内容过长，已截断）';
 /** 榜单为空时的占位文案。 */
@@ -185,7 +185,7 @@ async function loadSummariesSafe(
 }
 
 /**
- * 头部 + 单行列表 + 页脚拼接；超过 3800 字节时从尾部逐条丢弃并标注截断。
+ * 头部 + 单行列表 + 页脚拼接；超过 1900 字节时从尾部逐条丢弃并标注截断。
  * 空列表只回占位文案（无可收藏条目，不带收藏页脚）。
  * 返回 keptCount：最终消息里实际展示的条目数（供 entries 与缓存对齐）。
  */
@@ -226,7 +226,7 @@ function assemble(
       return { text: candidate, keptCount: kept.length };
     }
   }
-  // 理论不可达：截断标注 + 页脚本身远小于 3800 字节。
+  // 理论不可达：截断标注 + 页脚本身远小于 1900 字节。
   return { text: build([], true), keptCount: 0 };
 }
 
@@ -293,13 +293,13 @@ function normalizePreferences(preferences: {
 
 /**
  * 构建单个订阅者的每日简报文本 + 消息里实际展示的可收藏条目
- * （全中文文案，markdown 单行 + 链接 + 中文简介）。
+ * （全中文文案，纯文本单行 + 裸链接 + 中文简介）。
  * - preferences.languages 为空/缺失 → 全量语言榜；非空（已小写化）→ lower(repos.language) IN 过滤
  * - keywords 轻量提升排序（不丢弃条目）
  * - 条数按 preferences.digestCount（clamp 1–20，默认 10）
  * - 头部日期按北京时间（now 可注入，供测试与 Task 5 复用）
  * - 简介失败（null/抛错/缓存未命中降级）→ 无破折号后段，repo 列表始终存在
- * - entries 顺序 = 消息行顺序（排序 + digestCount 截断 + 3800 字节截断之后）；
+ * - entries 顺序 = 消息行顺序（排序 + digestCount 截断 + 1900 字节截断之后）；
  *   空榜 → []。「收藏 N」按此序号引用，绝不指向消息里看不到的条目。
  */
 export async function buildDigestWithEntries(
@@ -334,7 +334,7 @@ export async function buildDigestWithEntries(
  * 从当日快照构建单个订阅者的简报（企微渠道）：
  * - 选择层与邮件共用 selectEntriesForPreferences（语言过滤 + 关键词排序 + 条数）
  * - Abstract 作为开头概览（快照构建失败时省略，格式与既有简报一致）
- * - 仍走 assemble 的 3800 字节截断；entries 与消息实际展示顺序对齐
+ * - 仍走 assemble 的 1900 字节截断；entries 与消息实际展示顺序对齐
  */
 export async function buildDigestFromSnapshot(
   sub: {
@@ -524,7 +524,7 @@ export async function markDigestSent(wecomUserid: string): Promise<void> {
 }
 
 /**
- * 向所有 active 订阅者推送每日简报（markdown 通道），按 Task 5 门控逐个放行：
+ * 向所有 active 订阅者推送每日简报（文本通道），按 Task 5 门控逐个放行：
  * 1. 北京时间分钟数 `nowMin >= pushMin`（pushTime 非法按 09:00）；
  * 2. 当日未发且已满 intervalDays 天（JS 预检，避免无谓写库）；
  * 3. 条件 UPDATE 抢占（并发权威；落败 → skipped，绝不重复发送）；
@@ -574,7 +574,7 @@ export async function pushDigests(
       const { content, entries } = snapshot
         ? await buildDigestFromSnapshot(sub, snapshot)
         : await buildDigestWithEntries(sub, now);
-      await sendWeComMarkdown(sub.wecomUserid, content);
+      await sendWeComText(sub.wecomUserid, content);
       sent += 1;
       try {
         await saveRecentResults(sub.wecomUserid, entries);

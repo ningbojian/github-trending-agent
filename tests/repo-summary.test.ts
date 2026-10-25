@@ -174,18 +174,38 @@ describe('loadRepoSummaries — LLM 失败降级', () => {
         { fullName: 'b/two', description: null },
       ]);
 
-      expect(map.get('a/one')).toBe(longDesc.slice(0, 40));
+      expect(map.get('a/one')).toBe(`${longDesc.slice(0, 38)}…`);
       expect(map.has('b/two')).toBe(false);
 
       expect(dbMock.insertValues).toHaveLength(1);
       const written = dbMock.insertValues[0]!;
       expect(written.key).toBe('repo-zh:a/one');
-      expect(written.value).toEqual({ zh: longDesc.slice(0, 40), src: longDesc });
+      expect(written.value).toEqual({
+        zh: `${longDesc.slice(0, 38)}…`,
+        src: longDesc,
+      });
       // expiresAt ≈ now + 1 天（冻结时钟下精确相等）
       expect((written.expiresAt as Date).getTime()).toBe(Date.now() + DAY_MS);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('英文长描述按词边界截断并加省略号（不切断单词）', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue(null);
+    const longDesc =
+      'Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo.';
+
+    const map = await loadRepoSummaries([
+      { fullName: 'z/nine', description: longDesc },
+    ]);
+
+    const zh = map.get('z/nine')!;
+    expect(zh).toBe('Alpha bravo charlie delta echo foxtrot…');
+    expect(Array.from(zh).length).toBeLessThanOrEqual(40);
+    // 省略号之前的每个字符都必须逐字来自原文（只丢掉末尾的半个词）
+    expect(longDesc.startsWith(zh.slice(0, -1))).toBe(true);
+    expect(zh.slice(0, -1).endsWith(' ')).toBe(false);
   });
 
   it('LLM 抛错（违反 never-reject 契约）：同样降级截断 + 短 TTL', async () => {
@@ -199,7 +219,7 @@ describe('loadRepoSummaries — LLM 失败降级', () => {
         { fullName: 'a/one', description: desc },
       ]);
 
-      expect(map.get('a/one')).toBe(desc.slice(0, 40));
+      expect(map.get('a/one')).toBe('English description used for…');
       expect(dbMock.insertValues).toHaveLength(1);
       expect((dbMock.insertValues[0]!.expiresAt as Date).getTime()).toBe(
         Date.now() + DAY_MS,
@@ -244,7 +264,7 @@ describe('loadRepoSummaries — 中文直取与 REPO_SUMMARY_MODE=off', () => {
     ]);
 
     expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
-    expect(map.get('a/one')).toBe(desc.slice(0, 40));
+    expect(map.get('a/one')).toBe('English description that would…');
     expect(map.has('b/two')).toBe(false);
     expect(dbMock.insertValues).toHaveLength(1);
     const ttl =
@@ -317,7 +337,7 @@ describe('loadRepoSummaries — 边界', () => {
 
     expect([...map.keys()].sort()).toEqual(['a/one', 'b/two']);
     expect(map.get('a/one')).toBe('生成简介');
-    expect(map.get('b/two')).toBe(fallbackDesc.slice(0, 40));
+    expect(map.get('b/two')).toBe('Fallback English description for…');
   });
 
   it('LLM 成功：以长 TTL（180 天）回写 kv_cache，src 存当前 description', async () => {

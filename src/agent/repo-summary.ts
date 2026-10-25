@@ -13,8 +13,8 @@ import { generateObjectSafe } from './llm.js';
  * - 命中条件：expiresAt > now 且 src === 当前 description（null 记为 ''）。
  * - 未命中合并为**一次**批量 generateObjectSafe；已是中文（CJK 占非空白字符
  *   ≥30%）的 description 不进 LLM，直接截断 28 字。
- * - LLM 失败 / REPO_SUMMARY_MODE=off：降级 description 截断 40 字符，写缓存
- *   仅 1 天短 TTL（下次再试）；无 description 的条目不入 Map、不写缓存。
+ * - LLM 失败 / REPO_SUMMARY_MODE=off：降级 description 按词边界截断 40 字符（含省略号），
+ *   写缓存仅 1 天短 TTL（下次再试）；无 description 的条目不入 Map、不写缓存。
  */
 
 export interface SummaryInput {
@@ -74,9 +74,23 @@ function truncateChars(text: string, max: number): string {
   return chars.length <= max ? text : chars.slice(0, max).join('');
 }
 
-/** 降级文案：description 截断 40 字符；无 description 返回 null（不入 Map、不写缓存）。 */
+/**
+ * 降级截断：英文描述按**词边界**截到 max 字以内并加省略号，
+ * 避免出现「lazie」「fle」这类被切掉尾巴的半个单词。
+ * 末尾留 1 位给省略号；找不到合适的空格时退回硬截断。
+ */
+function truncateWords(text: string, max: number): string {
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  const cut = chars.slice(0, max - 1).join('');
+  const space = cut.lastIndexOf(' ');
+  const base = space > 0 ? cut.slice(0, space) : cut;
+  return `${base.trimEnd()}…`;
+}
+
+/** 降级文案：description 按词边界截断 40 字符（含省略号）；无 description 返回 null（不入 Map、不写缓存）。 */
 function fallbackZh(description: string | null): string | null {
-  return description ? truncateChars(description, FALLBACK_MAX_CHARS) : null;
+  return description ? truncateWords(description, FALLBACK_MAX_CHARS) : null;
 }
 
 function cacheWrite(

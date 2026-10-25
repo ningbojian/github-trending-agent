@@ -1,24 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" width="960" height="320" role="img" aria-labelledby="t d">
-  <title id="t">GitHub 热榜 · 每日简报（横版字标）</title>
-  <desc id="d">深海军蓝方形图标在左，右侧为「GitHub 热榜」与「每日简报 · 每天 09:00」两行文字，透明底。</desc>
+  <title id="t">Farsight · 企业字标</title>
+  <desc id="d">深海军蓝圆角方形图标在左，右侧为英文企业名 Farsight，透明底。</desc>
   <!--
-    横版字标：用于「企业微信管理后台 → 我的企业 → 企业信息 → 企业 logo」这类窄横幅位置。
+    企业字标：用于「企业微信管理后台 → 我的企业 → 企业信息 → 企业 logo」这类窄横幅位置。
+    文字是企业名，不是产品名，也不是宣传语——所以字标里不承诺任何发送时间：
+    推送时间由每位用户自己配置，邮箱通道还会分批发。
     造型与 docs/assets/icon.svg 完全同源（同一份几何图形，只是缩放到 176×176 并加圆角裁切），
     所以不存在「图标走样」的第二个版本；改图标时两边一起改。
     透明底：白底后台里最干净；若要放深色底，外面加一层 #0B1220 即可。
-    导出：logo-lockup-960.png（3:1）/ logo-lockup-1200x300.png（4:1）/ logo-lockup-square-750.png（1:1）。
+    导出两档：宽高按下面的 width/height 原样渲染即得 960×320；
+    要 1200×300 时只改 width/height 为 1200/300、viewBox 保持 0 0 960 320，
+    默认的 preserveAspectRatio="xMidYMid meet" 会按高度等比缩放并左右留透明边。
   -->
   <defs>
     <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="112" y1="150" x2="400" y2="380">
       <stop offset="0" stop-color="#3B82F6"/>
       <stop offset="1" stop-color="#2563EB"/>
     </linearGradient>
-    <clipPath id="tile"><rect x="172" y="72" width="176" height="176" rx="44"/></clipPath>
+    <clipPath id="tile"><rect x="227.5" y="72" width="176" height="176" rx="44"/></clipPath>
   </defs>
 
   <!-- 图标（裁切在未变换的外层坐标系里，变换只作用于内部几何） -->
   <g clip-path="url(#tile)">
-    <g transform="translate(172,72) scale(0.34375)">
+    <g transform="translate(227.5,72) scale(0.34375)">
       <rect width="512" height="512" fill="#0B1220"/>
       <g transform="rotate(-5 256 268)">
         <circle cx="256" cy="88" r="27" fill="#22D3EE" opacity="0.18"/>
@@ -35,9 +39,8 @@
     </g>
   </g>
 
-  <!-- 字标 -->
-  <g font-family="'Microsoft YaHei', 'PingFang SC', -apple-system, sans-serif">
-    <text x="384" y="160" font-size="72" font-weight="700" fill="#0B1220" letter-spacing="-1">GitHub 热榜</text>
-    <text x="386" y="212" font-size="30" font-weight="400" fill="#656d76" letter-spacing="1">每日简报 · 每天 09:00</text>
+  <!-- 字标：企业名，西文字体优先（雅黑的拉丁字形偏方，不适合做字标） -->
+  <g font-family="'Segoe UI', 'Helvetica Neue', Arial, 'Microsoft YaHei', sans-serif">
+    <text x="439.5" y="190" font-size="80" font-weight="700" fill="#0B1220" letter-spacing="-1">Farsight</text>
   </g>
 </svg>

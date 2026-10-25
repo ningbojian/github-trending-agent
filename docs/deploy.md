@@ -124,8 +124,8 @@ curl -i https://<domain>/api/oauth-github
 1. 「我的企业 → 企业信息」记录**企业 ID**（corpid）→ 存入 Vercel `WECOM_CORP_ID`。
 2. 「应用管理 → 自建 → 创建应用」：填名称、logo、可见范围（先覆盖测试成员）。创建后记录 **AgentId** 与 **Secret** → 分别存入 `WECOM_AGENT_ID`（纯数字字符串）、`WECOM_SECRET`。
    - **logo 直接用** [docs/assets/icon-750.png](assets/icon-750.png)（750×750 PNG，原创图标，可商用）。
-   - **应用介绍**（一句话）：`每天一份中文 GitHub 热榜简报，直接在微信里收、在微信里问。`
-   - **功能介绍**：`每天抓取 GitHub Trending 并写下中文简介，按你设定的时间推送简报（默认 09:00，可改时间与频率）。在会话里用自然语言检索热榜，例如「本周 rust 的 ai 项目」；发「帮助」查看全部指令。绑定 GitHub 后可收藏仓库并同步 star。`
+   - **应用介绍**（4–120 字）：`每天一份中文 GitHub 热榜简报，直接在微信里收、在微信里问。`（33 字）
+   - **功能介绍**（4–120 字）：`每天抓取 GitHub Trending 并写成中文简介，按你设定的时间和间隔推送。会话里可直接提问找项目，例如「本周 rust 的 ai 项目」；发「帮助」查看全部指令。绑定 GitHub 后可收藏仓库并同步 star。`（111 字）
    - 两段都只讲「能干什么」，不写安装步骤——「无需下载企业微信」那类话属于落地页 `/api/join`。
 3. 应用详情 →「接收消息 → 接收消息服务器配置 → 设置 API 接收」：
    - **URL**：`https://<domain>/api/wecom-callback`
@@ -138,7 +138,9 @@ curl -i https://<domain>/api/oauth-github
 
 - 上传 [assets/icon-750.png](assets/icon-750.png)（750×750 PNG）；源文件是 [assets/icon.svg](assets/icon.svg)。改了造型后用同一份 SVG 重新导出：临时 `npm i -D @resvg/resvg-js` → `npx --yes tsx` 或一小段 Node 脚本渲染 750 / 512 两档，用完 `npm uninstall`（PNG 只用于上传后台，应用运行时不依赖该包）。
 - 微信插件会话、聊天列表会把它当头像显示（圆形或圆角方形裁切）：图形主体（天线、眼睛、微笑、气泡尾巴）都落在中心半径 205 的安全区内，裁切不会缺角。
-- **「我的企业 → 企业信息 → 企业 logo」是窄横幅，不要传方形头像**（会只显示中间一小块）。用横版字标 [assets/logo-lockup.svg](assets/logo-lockup.svg)，按上传框的「建议尺寸」挑最接近的一档：`logo-lockup-960.png`（960×320，3:1）、`logo-lockup-1200x300.png`（1200×300，4:1）、`logo-lockup-square-750.png`（750×750，方形框用，字标居中留白）。三张都是透明底，白底后台里没有色块。若对话框写的是别的数字，用同一份 SVG 再导一档即可。
+- **「我的企业 → 企业信息 → 企业 logo」是窄横幅，不要传方形头像**（会只显示中间一小块）。字标上写的是**企业名**，所以先去「我的企业 → 企业信息 → 企业名称」把名字定好，再从 [assets/logo-lockup.svg](assets/logo-lockup.svg) 导出 PNG 上传：`logo-lockup-960.png`（960×320，3:1）或 `logo-lockup-1200x300.png`（1200×300，4:1），按上传框的「建议尺寸」挑最接近的一档。两张都是透明底，白底后台里没有色块。
+  - 导出方法：临时 `npm i -D @resvg/resvg-js`，按 SVG 自己的 `width`/`height` 渲染即得 960×320；要 4:1 只把这两个属性改成 `width="1200" height="300"`、**`viewBox` 保持 `0 0 960 320`**，默认的 `preserveAspectRatio="xMidYMid meet"` 会按高度等比缩小并左右补透明边。用完 `npm uninstall`。
+  - 字标里**不写任何发送时间**：推送时间每位用户可改，邮箱通道还会分批发，静态图写死时间就是错的承诺（`tests/brand.test.ts` 会拦）。
 - 横版字标的图标与 [assets/icon.svg](assets/icon.svg) 同源，`tests/brand.test.ts` 会逐字比对两者的图标组——改图标时两处必须一起改。
 - 原创几何图形（深海军蓝底 `#0B1220` + 蓝青渐变气泡机器人 `#3B82F6 → #2563EB`，青色天线点 `#22D3EE`），不含第三方商标/字体/图库素材，可商用；落地页与 favicon 用的是同一造型的内联副本（[src/brand.ts](../src/brand.ts)）。
 - 品牌色的语义分工：**蓝色是品牌色**（按钮、链接、卡片描边）；**绿色只用于数据**（邮件里的「+N 今日 / 新上榜」沿用 GitHub 的增长绿 `#1a7f37`），不要把它们互换。

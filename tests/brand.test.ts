@@ -83,8 +83,9 @@ describe('横版字标 docs/assets/logo-lockup.svg', () => {
     expect(lockup.replace('xmlns="http://www.w3.org/2000/svg"', '')).not.toMatch(/https?:/);
   });
 
-  it('两行字标文案齐全（主字 + 副字）', () => {
-    expect(lockup).toContain('GitHub 热榜');
-    expect(lockup).toContain('每日简报');
+  it('字标是企业名，且不再承诺任何发送时间', () => {
+    expect(lockup).toContain('Farsight');
+    // 推送时间可配（邮件还分批发），写死时间会跟着代码默认值漂移，所以整份文件（含注释）都不许出现
+    expect(lockup).not.toMatch(/09:00|每天/);
   });
 });

@@ -19,7 +19,7 @@
   <rect x="30" y="80" width="600" height="32" fill="#0B1220"/>
   <text class="t" x="56" y="64" font-size="20" font-weight="700" style="fill:#ffffff">GitHub 热榜</text>
   <text class="t" x="56" y="88" font-size="13" style="fill:#b1bac4">每日简报</text>
-  <text class="t" x="604" y="88" font-size="12.5" style="fill:#b1bac4" text-anchor="end">2026-10-25 · 北京时间 09:00</text>
+  <text class="t" x="604" y="88" font-size="12.5" style="fill:#b1bac4" text-anchor="end">2026-10-25 · 北京时间</text>
 
   <!-- 问候 + 概览 -->
   <text class="t" x="56" y="146" font-size="15">你好，这是今天的 GitHub 热榜简报。</text>

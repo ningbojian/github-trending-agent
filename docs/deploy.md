@@ -20,9 +20,14 @@
 2. 本地 `cp .env.example .env`，把连接串填进 `NEON_DATABASE_URL`。
 3. 安装依赖：`npm ci`。
 4. 执行迁移：`npm run db:migrate`。
-   - 实际命令是 `drizzle-kit migrate`（见 `package.json` scripts），迁移 SQL 为 `drizzle/0000_silly_shatterstar.sql` 与 `drizzle/0001_living_the_leader.sql`（后者新增 `subscribers.last_digest_at`，供简报推送时间/间隔门控使用）。
+   - 实际命令是 `drizzle-kit migrate`（见 `package.json` scripts），迁移 SQL 为 `drizzle/0000_silly_shatterstar.sql`、`0001_living_the_leader.sql`（新增 `subscribers.last_digest_at`，供简报推送时间/间隔门控使用）、`0003_dashing_vin_gonzales.sql`（新增 `subscribers.llm_base_url / llm_model / llm_key_enc`，自备 AI Key）。
    - `drizzle.config.ts` 直接读 `process.env.NEON_DATABASE_URL`；若当前 shell 没有该变量，先 `set -a; source .env; set +a` 再跑，或内联：
      `NEON_DATABASE_URL='postgresql://…' npm run db:migrate`。
+   - **⚠ 迁移账本的时间戳陷阱**：`drizzle-kit migrate` 只应用 journal 里 `when` **大于** `drizzle.__drizzle_migrations` 中最大 `created_at` 的迁移，且无论跳过多少条都会打印 "migrations applied successfully"。本仓库 `0002` 的 `when` 曾被人为设到未来（`1793200000000` ≈ 2026-10-28），导致之后生成的迁移被静默跳过。**新增迁移后必须确认它真的执行了**：
+     ```sql
+     select id, created_at from drizzle.__drizzle_migrations order by id;
+     ```
+     条数应等于 `drizzle/meta/_journal.json` 的 `entries` 数；若少了，把新迁移的 `when` 改成大于上一条的值再跑一次（不要手工改生产账本）。
 
 **验证**
 
@@ -262,12 +267,16 @@ curl -i https://<domain>/api/oauth-github
 
 ### ⑤ 「我的收藏」/「取消收藏 1」→ star 消失
 
+「我的收藏」**以 GitHub star 为准**，本地 `favorites` 表只是缓存与兜底。
+
 - **操作**：发「**我的收藏**」→ 按列表序号发「**取消收藏 1**」。
 - **预期观察**：
-  1. 「我的收藏」回编号列表（`owner/repo` + 收藏日期）；空列表回 `你还没有收藏任何项目。…`。
-  2. 「取消收藏 1」回 `已取消收藏 <owner/repo>`。
-  3. GitHub：该仓库 star **消失**。
-  4. Neon：对应 `favorites` 行被**删除**（`select count(*) from favorites where full_name = '…';` 为 0）；GitHub 侧未确认成功（如 401）时行不删、回引导文案——属正常降级。
+  1. 已绑定：回 `你的 star：` + 最近 10 个 `N. owner/repo https://github.com/owner/repo`，末行 `还有 N 个 · 在 GitHub 看全部 https://github.com/<login>?tab=stars`；一个 star 都没有才回空态文案 `你还没有收藏任何项目。…`。网页端手工 star 的仓库也会出现在这里（这就是本次改造的目的）。
+  2. 未绑定：回本地收藏列表 + 末行 `绑定 GitHub 后这里会显示你全部 star`。
+  3. 拉取失败（429/500/网络）：回本地收藏列表 + `暂时读不到 GitHub star，下面是本服务里收藏过的项目`；**绝不**谎报"没有收藏"。token 失效（401）→ `授权已过期，请重新发'绑定'`。
+  4. 「取消收藏 1」按**同一份 GitHub 列表**（star 时间倒序）解析序号，回 `已取消收藏 <owner/repo>`；序号超出已展示的 10 条但 star 更多 → `只列出了最近 10 个 star，第 N 个请到 GitHub 取消：…`（不谎称没有）。
+  5. GitHub：该仓库 star **消失**；Neon：对应 `favorites` 行被删除（未在本地留过记录的 star 本无行可删，属正常）。
+  6. 只读接口用公开端点 `GET /users/<login>/starred`（`sort=created&direction=desc&per_page=10`，另发一次 `per_page=1` 从 `Link: rel="last"` 读总数）。**不需要 `user` 权限**，已绑定用户无需重新授权；代价是只看得见公开仓库的 star。
 
 ### ⑥ 降级路径：LLM 挂掉 / 无效查询
 
@@ -369,6 +378,44 @@ curl -i https://<domain>/api/oauth-github
 - 单轮 ≤50 封、间隔 ≥250ms；全局日上限 300 封；确认信同地址 10 分钟冷却、全局每日 50 封。
 - 连续失败 5 次自动停用该订阅者；失败回滚 `last_sent_at` 并累计计数。
 - 每封带 `List-Unsubscribe` + `List-Unsubscribe-Post`（RFC 8058），正文含可见退订链接；无外链图片、无追踪像素。
+
+---
+
+## 10. 行为说明：每日概览 / 意图边界 / 自备模型 Key
+
+### 10.1 每日简报开头的「今日概览」
+
+简报（企微与邮件）在标题之后、条目之前会有一段 2–3 句中文概览，概括当天这批项目的共同方向，由运营方 LLM 在**构建当日快照时生成一次**并写入 `kv_cache` 的 `digest-snapshot:<日期>`（字段 `abstract`，≤120 字）。之后所有推送（含新用户礼包）都读快照，**不再调用模型**。
+
+- 概览生成失败 / LLM 挂掉 → 只是少这一段，简报照常发（绝不因为概览失败而不发）。
+- 当天榜单为空 → 不调用模型，也不编造概览。
+- 想确认某天的概览：`select value from kv_cache where key = 'digest-snapshot:' || current_date;` 看 `abstract` 字段。
+
+### 10.2 意图边界：无关问题不再回热榜
+
+`src/agent/intent.ts` 先做一遍**零成本规则判定**（`你是谁`/`你能做什么` → `about`；`今天天气`/`股票`/`讲个笑话` 等 → `off_topic`），命中就直接回对应引导文案；规则判不准才交给 LLM 判定 `intent` 字段。`about` / `off_topic` 分支**不查库、不写 `search_caches`**——所以「收藏 N」仍指向最后一次真实列表。
+
+原则是**只拦明显无关的**：`看看热榜`、`今天有什么`、`本周 rust 的 ai 项目` 全部照常返回列表；规则漏判只会退化成老行为（回列表），不会误伤正常提问。
+
+### 10.3 自备模型 Key（互动烧用户自己的额度）
+
+归属划分：
+
+| 路径 | 用谁的 Key |
+|---|---|
+| 每日快照（中文简介 + 今日概览） | 运营方（Vercel `LLM_*`），每天约 1 次 |
+| 每日推送 / 新用户礼包 | 不调模型（读快照） |
+| **互动：解析搜索意图、生成搜索结果简介** | **用户自己的 Key**；没配 → 规则解析 + 只读 `repo-zh` 共享缓存，一分钱不花 |
+
+命令：
+
+- 「**设置模型**」→ 回一次性链接 `https://<域名>/api/set-key?t=…`（15 分钟有效、只能提交一次）。
+- 「**我的模型**」→ 未配置时明说互动会退回规则模式；已配置时回 `地址 / 模型 / sk-…后四位`。
+- 「**清除模型**」→ 三列一起置空。
+
+表单端点 `api/set-key.ts` 的护栏：token 验签 + `jti` 一次性（`kv_cache['setkey-used:<jti>']`）；接口地址必须 `https://`；**保存前用用户自己的 Key 发一次 10 秒超时的最小 ping**，失败原样回表单不落库；Key 只以 AES-256-GCM 密文入 `subscribers.llm_key_enc`，错误文案与 `llm:last-error` 一律 `sk-***` 脱敏，页面回显只给掩码。
+
+**风险与取舍**：不配置的用户，互动仍可用但只有英文原描述（共享缓存命中时是中文）。这正符合「互动不烧运营方额度」的要求；要提升体验就配 Key。`TOKEN_ENCRYPT_KEY` 缺失时「设置模型」直接回「服务未配置加密密钥」，不生成链接。
 
 ---
 

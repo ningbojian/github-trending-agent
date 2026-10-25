@@ -65,8 +65,18 @@ export const MAX_UNFAVORITE_N = 999;
 /** 「我的收藏」读取/发送失败的兜底文案（绝不冒充空态，不谎报"没有收藏"）。 */
 export const LIST_FAILURE_REPLY = '加载失败，请稍后再试';
 
+/** 未绑定时附在本地列表后的引导（star 存在 GitHub，不绑定就只有本地收藏）。 */
+export const UNBOUND_STARS_NOTE = '绑定 GitHub 后这里会显示你全部 star';
+
+/** 已绑定但拉不到 GitHub 时的回退说明（如实告知这是本地收藏，不是全部 star）。 */
+export const STARS_FALLBACK_NOTE =
+  '暂时读不到 GitHub star，下面是本服务里收藏过的项目';
+
 /** 企微文本消息上限 ~2048 字节；1800 字节为安全阈值，超出即从尾部丢弃条目。 */
 const MAX_LIST_BYTES = 1800;
+
+/** 「我的收藏」一次展示的 star 条数（不实现翻页，其余去 GitHub 看）。 */
+const GITHUB_STARS_PAGE_SIZE = 10;
 
 /** 列表截断标注（与 reply.ts 的截断纪律一致，文案区分场景）。 */
 const LIST_TRUNCATION_NOTE = '（内容过长，已截断）';
@@ -79,6 +89,14 @@ function favoriteOutOfRangeReply(n: number, total: number): string {
 /** 「我的收藏」越界文案（列表本体存在，只是不足 N 条）。 */
 function outOfRangeReply(n: number): string {
   return `没有第 ${n} 条`;
+}
+
+/**
+ * star 多于已展示的 10 条时的越界文案：明说只列了最近 10 个，
+ * 而不是谎称"没有第 N 条"（用户确实有那一条 star）。
+ */
+function githubOutOfRangeReply(n: number, login: string): string {
+  return `只列出了最近 ${GITHUB_STARS_PAGE_SIZE} 个 star，第 ${n} 个请到 GitHub 取消：https://github.com/${login}?tab=stars`;
 }
 
 // ---------------------------------------------------------------------------
@@ -145,17 +163,149 @@ export async function unstarRepo(token: string, fullName: string): Promise<StarR
 }
 
 // ---------------------------------------------------------------------------
+// GitHub star 列表（只读）
+// ---------------------------------------------------------------------------
+
+/** GitHub star 条目（只消费 full_name，链接由它派生）。 */
+export interface GithubStarItem {
+  fullName: string;
+}
+
+export type GithubStarsResult =
+  | { kind: 'ok'; items: GithubStarItem[]; total: number }
+  | { kind: 'auth_failed' }
+  | { kind: 'failed' };
+
+/**
+ * star 列表端点用**公开用户端点** `/users/{login}/starred`：
+ * `GET /user/starred` 对 OAuth App 需要 `user` 权限，而我们的 token 只有
+ * `public_repo`——改权限会让已绑定用户全部重新授权。公开端点不需要额外 scope，
+ * 代价是只看得见 star 的**公开**仓库（绝大多数情况就是全部）。
+ * 仍然带上 token：公开端点不校验它，但认证请求的速率额度是匿名的 60 倍。
+ */
+function starsEndpoint(login: string): string {
+  return `https://api.github.com/users/${encodeURIComponent(login)}/starred`;
+}
+
+/** 从 `Link` 头解析 `rel="last"` 的页码（配合 per_page=1 即为 star 总数）。 */
+function parseLastPage(linkHeader: string | null): number | null {
+  if (!linkHeader) {
+    return null;
+  }
+  const match = /[?&]page=(\d+)[^>]*>\s*;\s*rel="last"/.exec(linkHeader);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * 读某个 GitHub 用户的 star（按 star 时间倒序，前 10 个 + 总数）。
+ * - 401 → 'auth_failed'（token 失效，引导重新绑定）
+ * - 其余非 200 / 网络错误 → 'failed'（调用方回退本地收藏，绝不冒充"没有 star"）
+ * - 不足 10 条时跳过统计请求（无 Link 时总数即本次条数）
+ */
+export async function loadGithubStars(
+  login: string,
+  token: string,
+): Promise<GithubStarsResult> {
+  const headers = {
+    accept: 'application/vnd.github+json',
+    authorization: `Bearer ${token}`,
+  };
+  try {
+    const res = await fetch(
+      `${starsEndpoint(login)}?sort=created&direction=desc&per_page=${GITHUB_STARS_PAGE_SIZE}`,
+      { headers },
+    );
+    if (res.status === 401) {
+      return { kind: 'auth_failed' };
+    }
+    if (res.status !== 200) {
+      console.warn(`loadGithubStars ${login}: HTTP ${res.status}`);
+      return { kind: 'failed' };
+    }
+    const raw: unknown = await res.json();
+    const items: GithubStarItem[] = Array.isArray(raw)
+      ? raw
+          .filter((row): row is { full_name: unknown } => typeof row === 'object' && row !== null)
+          .map((row) => ({ fullName: String((row as { full_name?: unknown }).full_name ?? '') }))
+          .filter((item) => item.fullName.length > 0)
+      : [];
+
+    let total = items.length;
+    if (items.length >= GITHUB_STARS_PAGE_SIZE) {
+      // 第 11 条以后不展示，但总数决定尾行「还有 N 个」——统计失败时宁可不显示尾行。
+      try {
+        const countRes = await fetch(`${starsEndpoint(login)}?per_page=1`, { headers });
+        if (countRes.status === 200) {
+          const lastPage = parseLastPage(countRes.headers.get('link'));
+          if (lastPage !== null) {
+            total = lastPage;
+          }
+        } else {
+          console.warn(`loadGithubStars count ${login}: HTTP ${countRes.status}`);
+        }
+      } catch (err) {
+        console.warn(`loadGithubStars count ${login}: ${String(err)}`);
+      }
+    }
+    return { kind: 'ok', items, total };
+  } catch (err) {
+    console.warn(`loadGithubStars ${login}: ${String(err)}`);
+    return { kind: 'failed' };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // DB 访问（全部经 db()，测试以 mock 桩替换）
 // ---------------------------------------------------------------------------
 
-/** 读订阅者的加密 token；无订阅者行或未绑定时返回 null。 */
-async function loadTokenEnc(wecomUserid: string): Promise<string | null> {
+/** 订阅者的 GitHub 绑定状态：token 密文与登录名（都没有则为 null）。 */
+interface GithubBinding {
+  tokenEnc: string | null;
+  login: string | null;
+}
+
+/** 读订阅者的绑定状态；无订阅者行或未绑定时均为 null 字段。 */
+async function loadBinding(wecomUserid: string): Promise<GithubBinding> {
   const rows = await db()
     .select()
     .from(subscribers)
     .where(eq(subscribers.wecomUserid, wecomUserid));
-  const enc = rows[0]?.githubTokenEnc;
-  return enc == null ? null : String(enc);
+  const row = rows[0];
+  const tokenEnc = row?.githubTokenEnc;
+  const login = row?.githubLogin;
+  return {
+    tokenEnc: tokenEnc == null ? null : String(tokenEnc),
+    login: login == null ? null : String(login),
+  };
+}
+
+/** 读订阅者的加密 token；无订阅者行或未绑定时返回 null。 */
+async function loadTokenEnc(wecomUserid: string): Promise<string | null> {
+  return (await loadBinding(wecomUserid)).tokenEnc;
+}
+
+/** 绑定态三分类：未绑定 / 密文损坏（引导重新绑定）/ 可用 token。 */
+type BindingAuth =
+  | { kind: 'unbound' }
+  | { kind: 'expired' }
+  | { kind: 'ok'; token: string; login: string | null };
+
+/** 读并解密 token；解密失败按"授权过期"处理（密钥轮换 / 密文被篡改）。 */
+async function loadBindingAuth(wecomUserid: string): Promise<BindingAuth> {
+  const binding = await loadBinding(wecomUserid);
+  if (binding.tokenEnc === null) {
+    return { kind: 'unbound' };
+  }
+  try {
+    return {
+      kind: 'ok',
+      token: decryptSecret(binding.tokenEnc),
+      login: binding.login,
+    };
+  } catch (err) {
+    console.warn('github token decrypt failed:', err);
+    return { kind: 'expired' };
+  }
 }
 
 /**
@@ -316,9 +466,11 @@ export async function handleFavorite(msg: InboundMessage): Promise<void> {
 
 /**
  * 「取消收藏 N」handler：
- * 1. 列"我的收藏"（created_at 升序），越界 → 「没有第 N 条」
- * 2. 未绑定 → 引导绑定，不删行
- * 3. unstarRepo → 'ok' → 删 favorites 行 → 「已取消收藏 owner/repo」
+ * 1. 已绑定 → 序号按 GitHub star 列表（时间倒序）解析，与「我的收藏」显示完全一致；
+ *    未绑定 / 拉取失败 → 回退本地 favorites（created_at 升序）
+ * 2. 越界 → 「没有第 N 条」；star 多于已展示的 10 条时改为引导去 GitHub 取消
+ * 3. 未绑定 → 引导绑定，不删行
+ * 4. unstarRepo → 'ok' → 删 favorites 行 → 「已取消收藏 owner/repo」
  *    'auth_failed' / 'failed' 均不删行（GitHub 侧未确认取消）。
  */
 export async function handleUnfavorite(msg: InboundMessage): Promise<void> {
@@ -334,29 +486,56 @@ export async function handleUnfavorite(msg: InboundMessage): Promise<void> {
       return;
     }
 
-    const rows = await loadFavorites(msg.fromUserName);
-    const row = rows[n - 1];
-    if (!row) {
-      await sendWeComText(msg.fromUserName, outOfRangeReply(n));
-      return;
-    }
-
-    const tokenEnc = await loadTokenEnc(msg.fromUserName);
-    if (!tokenEnc) {
-      await sendWeComText(msg.fromUserName, UNBOUND_REPLY);
-      return;
-    }
-
-    let token: string;
-    try {
-      token = decryptSecret(tokenEnc);
-    } catch (err) {
-      console.warn('unfavorite token decrypt failed:', err);
+    const auth = await loadBindingAuth(msg.fromUserName);
+    if (auth.kind === 'expired') {
       await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
       return;
     }
 
-    const result = await unstarRepo(token, row.fullName);
+    let fullName: string | null = null;
+    if (auth.kind === 'ok' && auth.login !== null) {
+      const stars = await loadGithubStars(auth.login, auth.token);
+      if (stars.kind === 'auth_failed') {
+        await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
+        return;
+      }
+      if (stars.kind === 'ok') {
+        const item = stars.items[n - 1];
+        if (!item) {
+          await sendWeComText(
+            msg.fromUserName,
+            stars.total > stars.items.length
+              ? githubOutOfRangeReply(n, auth.login)
+              : outOfRangeReply(n),
+          );
+          return;
+        }
+        fullName = item.fullName;
+      }
+    }
+
+    if (fullName === null) {
+      // 回退：本地 favorites（asc）。越界判定先于未绑定引导（保持原有优先级）。
+      const rows = await loadFavorites(msg.fromUserName);
+      const row = rows[n - 1];
+      if (!row) {
+        await sendWeComText(msg.fromUserName, outOfRangeReply(n));
+        return;
+      }
+      if (auth.kind !== 'ok') {
+        await sendWeComText(msg.fromUserName, UNBOUND_REPLY);
+        return;
+      }
+      fullName = row.fullName;
+    }
+
+    if (auth.kind !== 'ok') {
+      // 防御性短路：上面两条路径都已在未绑定时返回。
+      await sendWeComText(msg.fromUserName, UNBOUND_REPLY);
+      return;
+    }
+
+    const result = await unstarRepo(auth.token, fullName);
     if (result === 'auth_failed') {
       await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
       return;
@@ -366,8 +545,8 @@ export async function handleUnfavorite(msg: InboundMessage): Promise<void> {
       return;
     }
 
-    await deleteFavorite(msg.fromUserName, row.fullName);
-    await sendWeComText(msg.fromUserName, `已取消收藏 ${row.fullName}`);
+    await deleteFavorite(msg.fromUserName, fullName);
+    await sendWeComText(msg.fromUserName, `已取消收藏 ${fullName}`);
   } catch (err) {
     console.error('handleUnfavorite failed:', err);
     try {
@@ -391,9 +570,19 @@ function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8');
 }
 
-function buildListReply(lines: string[], truncated: boolean): string {
-  const note = truncated ? `\n${LIST_TRUNCATION_NOTE}` : '';
-  return `你的收藏：\n${lines.join('\n')}${note}`;
+function buildListReply(
+  lines: string[],
+  truncated: boolean,
+  note?: string,
+): string {
+  const parts = ['你的收藏：', ...lines];
+  if (truncated) {
+    parts.push(LIST_TRUNCATION_NOTE);
+  }
+  if (note) {
+    parts.push(note);
+  }
+  return parts.join('\n');
 }
 
 /**
@@ -403,18 +592,19 @@ function buildListReply(lines: string[], truncated: boolean): string {
  */
 function formatFavoritesList(
   rows: Array<{ fullName: string; createdAt: Date }>,
+  note?: string,
 ): string {
   const allLines = rows.map(
     (row, i) => `${i + 1}. ${row.fullName}（${formatDate(row.createdAt)}）`,
   );
   let lines = allLines;
-  let text = buildListReply(lines, false);
+  let text = buildListReply(lines, false, note);
   if (byteLength(text) <= MAX_LIST_BYTES) {
     return text;
   }
   while (lines.length > 0) {
     lines = lines.slice(0, -1);
-    text = buildListReply(lines, true);
+    text = buildListReply(lines, true, note);
     if (byteLength(text) <= MAX_LIST_BYTES) {
       return text;
     }
@@ -424,18 +614,95 @@ function formatFavoritesList(
 }
 
 /**
- * 「我的收藏」handler：编号列表（owner/repo + 创建日期），≤1800 字节截断；
- * 空列表回友好空态文案；读取或发送失败回「加载失败，请稍后再试」——
- * 失败兜底绝不借用空态文案（用户有收藏却被告知"一个都没有"是谎报）。
+ * 把 GitHub star 列表格式化为 ≤1800 字节的文本：
+ * 每行 `N. owner/repo <裸链接>`（个人微信里可直接点），末行「还有 N 个 · 在 GitHub 看全部」。
+ * 截断时「还有 N 个」按**实际展示条数**重算（剩余 = 总数 - 展示数），绝不虚报。
+ */
+export function formatGithubStarsList(
+  items: GithubStarItem[],
+  total: number,
+  login: string,
+): string {
+  const allLines = items.map(
+    (item, i) =>
+      `${i + 1}. ${item.fullName} https://github.com/${item.fullName}`,
+  );
+  const build = (kept: number): string => {
+    const parts = ['你的 star：', ...allLines.slice(0, kept)];
+    if (kept < allLines.length) {
+      parts.push(LIST_TRUNCATION_NOTE);
+    }
+    const remaining = total - kept;
+    if (remaining > 0) {
+      parts.push(
+        `还有 ${remaining} 个 · 在 GitHub 看全部 https://github.com/${login}?tab=stars`,
+      );
+    }
+    return parts.join('\n');
+  };
+
+  let kept = allLines.length;
+  let text = build(kept);
+  while (kept > 0 && byteLength(text) > MAX_LIST_BYTES) {
+    kept -= 1;
+    text = build(kept);
+  }
+  return text;
+}
+
+/** 本地收藏列表（未绑定 / GitHub 拉取失败时的回退），末尾附一行如实说明。 */
+async function sendLocalFavorites(
+  wecomUserid: string,
+  note: string,
+): Promise<void> {
+  const rows = await loadFavorites(wecomUserid);
+  if (rows.length === 0) {
+    await sendWeComText(wecomUserid, `${EMPTY_FAVORITES_REPLY}\n${note}`);
+    return;
+  }
+  await sendWeComText(wecomUserid, formatFavoritesList(rows, note));
+}
+
+/**
+ * 「我的收藏」handler：**以 GitHub star 为准**。
+ * - 已绑定 → GitHub 实时列表（最近 10 个 + 总数 + 「看全部」链接）
+ * - 未绑定 → 本地 favorites（asc）+ 一行"绑定后显示全部 star"
+ * - 拉取失败 → 回退本地列表并如实说明（绝不谎报为空）
+ * - token 失效（401 / 密文损坏）→ 引导重新绑定
+ * 读取或发送失败回「加载失败，请稍后再试」——失败兜底绝不借用空态文案。
  */
 export async function handleList(msg: InboundMessage): Promise<void> {
   try {
-    const rows = await loadFavorites(msg.fromUserName);
-    if (rows.length === 0) {
-      await sendWeComText(msg.fromUserName, EMPTY_FAVORITES_REPLY);
+    const auth = await loadBindingAuth(msg.fromUserName);
+    if (auth.kind === 'expired') {
+      await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
       return;
     }
-    await sendWeComText(msg.fromUserName, formatFavoritesList(rows));
+    if (auth.kind === 'ok' && auth.login !== null) {
+      const stars = await loadGithubStars(auth.login, auth.token);
+      if (stars.kind === 'auth_failed') {
+        await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
+        return;
+      }
+      if (stars.kind === 'ok') {
+        if (stars.items.length === 0) {
+          await sendWeComText(msg.fromUserName, EMPTY_FAVORITES_REPLY);
+          return;
+        }
+        await sendWeComText(
+          msg.fromUserName,
+          formatGithubStarsList(stars.items, stars.total, auth.login),
+        );
+        return;
+      }
+      await sendLocalFavorites(msg.fromUserName, STARS_FALLBACK_NOTE);
+      return;
+    }
+    // 未绑定：本地收藏 + 绑定引导；已绑定但缺 login（历史行）→ 按"读不到"如实说明。
+    await sendLocalFavorites(
+      msg.fromUserName,
+      auth.kind === 'unbound' ? UNBOUND_STARS_NOTE : STARS_FALLBACK_NOTE,
+    );
   } catch (err) {
     console.error('handleList failed:', err);
     // 失败兜底：与空态文案严格区分，保证用户收到的是"稍后再试"而非"没有收藏"。

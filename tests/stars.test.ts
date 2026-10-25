@@ -115,14 +115,18 @@ import {
   EMPTY_FAVORITES_REPLY,
   EMPTY_SEARCH_CACHE_REPLY,
   FAVORITE_USAGE_REPLY,
+  formatGithubStarsList,
   handleFavorite,
   handleList,
   handleUnfavorite,
   LIST_FAILURE_REPLY,
+  loadGithubStars,
   NO_SEARCH_CACHE_REPLY,
   STAR_FAILURE_REPLY,
+  STARS_FALLBACK_NOTE,
   starRepo,
   UNBOUND_REPLY,
+  UNBOUND_STARS_NOTE,
   UNSTAR_FAILURE_REPLY,
   UNFAVORITE_USAGE_REPLY,
   unstarRepo,
@@ -152,6 +156,44 @@ function stubFetchStatus(status: number): ReturnType<typeof vi.fn> {
 /** fetch 桩：网络错误 reject。 */
 function stubFetchNetworkError(): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn().mockRejectedValue(new Error('network down'));
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+/**
+ * GitHub star 列表桩：
+ * - `per_page=10` → 条目 JSON（full_name）
+ * - `per_page=1`  → 空数组 + `Link: rel="last"` 表达总数（total 为 null 表示不带 Link）
+ * - DELETE（取消 star）→ 204
+ */
+function stubGithubStars(
+  fullNames: string[],
+  total: number | null = fullNames.length,
+): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'DELETE') {
+      return new Response(null, { status: 204 });
+    }
+    const target = String(url);
+    if (/[?&]per_page=1(?:&|$)/.test(target)) {
+      const headers: Record<string, string> = {};
+      if (total !== null) {
+        headers.link = `<${target.split('?')[0]}?per_page=1&page=${total}>; rel="last"`;
+      }
+      return new Response('[]', { status: 200, headers });
+    }
+    return new Response(
+      JSON.stringify(fullNames.map((full_name) => ({ full_name }))),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+/** 按状态码应答、带 headers.json() 的星级接口桩（401/429/500 等错误分支）。 */
+function stubStarsStatus(status: number): ReturnType<typeof vi.fn> {
+  const fetchMock = vi.fn(async () => new Response('[]', { status }));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
@@ -558,24 +600,34 @@ describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
 // handleUnfavorite：取消收藏 N
 // ---------------------------------------------------------------------------
 describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
-  /** 入队"我的收藏"列表行（handleUnfavorite 第一次 select）。 */
+  /** 订阅者行入队（handleUnfavorite 第一次 select）。 */
+  function seedBinding(row: Record<string, unknown>): void {
+    dbMock.selectQueue.push([row]);
+  }
+
+  /** 本地 favorites 行入队（仅在未绑定 / GitHub 拉取失败时才会被读到）。 */
   function seedFavorites(rows: Array<{ fullName: string; createdAt: Date }>): void {
     dbMock.selectQueue.push(rows);
   }
 
-  it('成功：按序号取行 → DELETE unstar 204 → 删 favorites 行 → 回复已取消', async () => {
-    const fetchMock = stubFetchStatus(204);
-    seedFavorites([
-      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
-      { fullName: 'b/two', createdAt: new Date('2026-10-02T00:00:00Z') },
-    ]);
-    dbMock.selectQueue.push([boundSubscriberRow()]);
+  /** 取出 DELETE（取消 star）那一次调用，跳过列表请求。 */
+  function deleteCall(
+    fetchMock: ReturnType<typeof vi.fn>,
+  ): [string, RequestInit] | undefined {
+    return (fetchMock.mock.calls as [string, RequestInit][]).find(
+      ([, init]) => init?.method === 'DELETE',
+    );
+  }
+
+  it('已绑定：按 GitHub 列表（star 时间倒序）的序号 → DELETE unstar 204 → 删 favorites 行 → 回复已取消', async () => {
+    const fetchMock = stubGithubStars(['newest/one', 'older/two'], 2);
+    seedBinding(boundSubscriberRow());
 
     await handleUnfavorite(makeMsg({ content: '取消收藏 2' }));
 
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://api.github.com/user/starred/b/two');
-    expect(init.method).toBe('DELETE');
+    const call = deleteCall(fetchMock);
+    expect(call?.[0]).toBe('https://api.github.com/user/starred/older/two');
+    expect(call?.[1].method).toBe('DELETE');
 
     expect(dbMock.deleteCalls).toHaveLength(1);
     const del = dbMock.deleteCalls[0];
@@ -584,25 +636,34 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
     expect(compiled.sql).toContain('"favorites"."wecom_userid"');
     expect(compiled.sql).toContain('"favorites"."full_name"');
     expect(compiled.params).toContain('alice');
-    expect(compiled.params).toContain('b/two');
+    expect(compiled.params).toContain('older/two');
 
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
-    expect(content).toBe('已取消收藏 b/two');
+    expect(content).toBe('已取消收藏 older/two');
+  });
+
+  it('序号与「我的收藏」一致：第 1 条是最新 star 的那个', async () => {
+    const fetchMock = stubGithubStars(['newest/one', 'older/two'], 2);
+    seedBinding(boundSubscriberRow());
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏一' }));
+
+    const call = deleteCall(fetchMock);
+    expect(call?.[0]).toBe('https://api.github.com/user/starred/newest/one');
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('已取消收藏 newest/one');
   });
 
   it('「取消收藏二」（中文数字）→ 取消第 2 条收藏', async () => {
-    const fetchMock = stubFetchStatus(204);
-    seedFavorites([
-      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
-      { fullName: 'b/two', createdAt: new Date('2026-10-02T00:00:00Z') },
-    ]);
-    dbMock.selectQueue.push([boundSubscriberRow()]);
+    const fetchMock = stubGithubStars(['a/one', 'b/two'], 2);
+    seedBinding(boundSubscriberRow());
 
     await handleUnfavorite(makeMsg({ content: '取消收藏二' }));
 
-    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://api.github.com/user/starred/b/two');
+    expect(deleteCall(fetchMock)?.[0]).toBe(
+      'https://api.github.com/user/starred/b/two',
+    );
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     expect(content).toBe('已取消收藏 b/two');
@@ -610,9 +671,6 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
 
   it('「取消收藏 0」（序号非法）→ 用法提示，不打 GitHub、不删行', async () => {
     const fetchMock = stubFetchStatus(204);
-    seedFavorites([
-      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
-    ]);
 
     await handleUnfavorite(makeMsg({ content: '取消收藏 0' }));
 
@@ -622,20 +680,27 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
     expect(dbMock.deleteCalls).toHaveLength(0);
   });
 
-  it('「取消收藏 26」（超出收藏默认上限 25）→ 取消第 26 条（我的收藏可远超 25 条，删除编号不受收藏上限约束）', async () => {
-    const fetchMock = stubFetchStatus(204);
+  it('已绑定但 star 多于已取的前 10 条：第 26 条在本地 fallback 里同样可删（序号上限 999 不受 25 约束）', async () => {
+    // GitHub 列表拉取失败 → 回退本地 favorites（30 条），序号仍按本地升序解析。
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+      return new Response('[]', { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    seedBinding(boundSubscriberRow());
     seedFavorites(
       Array.from({ length: 30 }, (_, i) => ({
         fullName: `o/r${i + 1}`,
         createdAt: new Date('2026-10-01T00:00:00Z'),
       })),
     );
-    dbMock.selectQueue.push([boundSubscriberRow()]);
 
     await handleUnfavorite(makeMsg({ content: '取消收藏 26' }));
 
-    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('https://api.github.com/user/starred/o/r26');
+    const call = deleteCall(fetchMock);
+    expect(call?.[0]).toBe('https://api.github.com/user/starred/o/r26');
     expect(dbMock.deleteCalls).toHaveLength(1);
     const compiled = compileQuery(dbMock.deleteCalls[0]?.condition);
     expect(compiled.params).toContain('o/r26');
@@ -643,8 +708,25 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
     expect(content).toBe('已取消收藏 o/r26');
   });
 
+  it('已绑定且序号超出已取的 10 条、但 star 总数更多 → 引导去 GitHub 取消，不打 DELETE、不删行', async () => {
+    const fetchMock = stubGithubStars(
+      Array.from({ length: 10 }, (_, i) => `o/r${i + 1}`),
+      25,
+    );
+    seedBinding(boundSubscriberRow());
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 15' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('第 15 个');
+    expect(content).toContain('https://github.com/alice-gh?tab=stars');
+    expect(deleteCall(fetchMock)).toBeUndefined();
+    expect(dbMock.deleteCalls).toHaveLength(0);
+  });
+
   it('「取消收藏 999」（上限内解析成功但列表不足）→ 越界文案「没有第 999 条」', async () => {
-    stubFetchStatus(204);
+    const fetchMock = stubFetchStatus(204);
+    seedBinding({ githubTokenEnc: null, githubLogin: null });
     seedFavorites([
       { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
     ]);
@@ -653,6 +735,7 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
 
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     expect(content).toBe('没有第 999 条');
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(dbMock.deleteCalls).toHaveLength(0);
   });
 
@@ -670,6 +753,7 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
 
   it('N 越界（2 条收藏，取消第 3 条）→ 回复「没有第 3 条」，不打 GitHub、不删行', async () => {
     const fetchMock = stubFetchStatus(204);
+    seedBinding({ githubTokenEnc: null, githubLogin: null });
     seedFavorites([
       { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
       { fullName: 'b/two', createdAt: new Date('2026-10-02T00:00:00Z') },
@@ -684,9 +768,8 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
   });
 
   it('auth_failed（GitHub 401）→ 回复授权已过期，不删 favorites 行', async () => {
-    stubFetchStatus(401);
-    seedFavorites([{ fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') }]);
-    dbMock.selectQueue.push([boundSubscriberRow('expired')]);
+    stubStarsStatus(401);
+    seedBinding(boundSubscriberRow('expired'));
 
     await handleUnfavorite(makeMsg({ content: '取消收藏 1' }));
 
@@ -695,10 +778,11 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
     expect(dbMock.deleteCalls).toHaveLength(0);
   });
 
-  it('GitHub 其他失败状态（500）→ 回复通用失败，不删行，不抛错', async () => {
-    stubFetchStatus(500);
+  it('GitHub 其他失败状态（500）→ 回退本地序号后 unstar 仍可成功', async () => {
+    // 列表 500（回退本地）→ 但 DELETE 也 500 → 通用失败文案。
+    stubStarsStatus(500);
+    seedBinding(boundSubscriberRow());
     seedFavorites([{ fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') }]);
-    dbMock.selectQueue.push([boundSubscriberRow()]);
 
     await expect(
       handleUnfavorite(makeMsg({ content: '取消收藏 1' })),
@@ -709,10 +793,32 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
     expect(dbMock.deleteCalls).toHaveLength(0);
   });
 
+  /** 列表 500、DELETE 正常 204：验证「拉不到 GitHub 就用本地序号」仍能真正取消。 */
+  it('GitHub 列表失败但 unstar 成功 → 按本地序号取消并删行', async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+      return new Response('[]', { status: 500 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    seedBinding(boundSubscriberRow());
+    seedFavorites([{ fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') }]);
+
+    await handleUnfavorite(makeMsg({ content: '取消收藏 1' }));
+
+    expect(deleteCall(fetchMock)?.[0]).toBe(
+      'https://api.github.com/user/starred/a/one',
+    );
+    expect(dbMock.deleteCalls).toHaveLength(1);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe('已取消收藏 a/one');
+  });
+
   it('未绑定 → 引导绑定，不打 GitHub、不删行', async () => {
     const fetchMock = stubFetchStatus(204);
+    seedBinding({ githubTokenEnc: null, githubLogin: null });
     seedFavorites([{ fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') }]);
-    dbMock.selectQueue.push([{ githubTokenEnc: null }]);
 
     await handleUnfavorite(makeMsg({ content: '取消收藏 1' }));
 
@@ -724,10 +830,133 @@ describe('handleUnfavorite（取消收藏 N → unstar + 删行）', () => {
 });
 
 // ---------------------------------------------------------------------------
+// loadGithubStars：GitHub star 实时列表（最近 10 个 + 总数）
+// ---------------------------------------------------------------------------
+describe('loadGithubStars（GitHub star 实时列表）', () => {
+  it('按 star 时间倒序取 10 条，另发一次 per_page=1 读 Link 得总数', async () => {
+    const names = Array.from({ length: 10 }, (_, i) => `o/r${i + 1}`);
+    const fetchMock = stubGithubStars(names, 25);
+
+    const result = await loadGithubStars('alice-gh', 'gho_test_token');
+
+    expect(result).toEqual({
+      kind: 'ok',
+      items: names.map((fullName) => ({ fullName })),
+      total: 25,
+    });
+    const calls = fetchMock.mock.calls as [string, RequestInit][];
+    expect(calls[0][0]).toBe(
+      'https://api.github.com/users/alice-gh/starred?sort=created&direction=desc&per_page=10',
+    );
+    expect(
+      (calls[0][1].headers as Record<string, string>).authorization,
+    ).toBe('Bearer gho_test_token');
+    expect(calls[1][0]).toContain('per_page=1');
+    expect(calls[1][0]).toContain('/users/alice-gh/starred');
+  });
+
+  it('正好 10 条但没有 Link 头 → 总数就是 10（不谎报"还有"）', async () => {
+    const names = Array.from({ length: 10 }, (_, i) => `o/r${i + 1}`);
+    stubGithubStars(names, null);
+
+    const result = await loadGithubStars('alice-gh', 'gho_test_token');
+
+    expect(result.kind).toBe('ok');
+    if (result.kind === 'ok') expect(result.total).toBe(10);
+  });
+
+  it('不足 10 条 → 省掉统计请求，总数 = 本次条数', async () => {
+    const fetchMock = stubGithubStars(['a/one', 'b/two'], 2);
+
+    const result = await loadGithubStars('alice-gh', 'gho_test_token');
+
+    expect(result.kind).toBe('ok');
+    if (result.kind === 'ok') expect(result.total).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('401 → auth_failed（引导重新绑定）', async () => {
+    stubStarsStatus(401);
+    await expect(loadGithubStars('alice-gh', 'bad')).resolves.toEqual({
+      kind: 'auth_failed',
+    });
+  });
+
+  it('429 / 500 → failed（绝不冒充"没有 star"）', async () => {
+    stubStarsStatus(429);
+    await expect(loadGithubStars('alice-gh', 't')).resolves.toEqual({
+      kind: 'failed',
+    });
+    stubStarsStatus(500);
+    await expect(loadGithubStars('alice-gh', 't')).resolves.toEqual({
+      kind: 'failed',
+    });
+  });
+
+  it('网络异常 → failed，不抛出', async () => {
+    stubFetchNetworkError();
+    await expect(loadGithubStars('alice-gh', 't')).resolves.toEqual({
+      kind: 'failed',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatGithubStarsList：编号 + 裸链接 + 「还有 N 个」尾行
+// ---------------------------------------------------------------------------
+describe('formatGithubStarsList（编号 + 链接 + 总数尾行）', () => {
+  it('10 条 + 总数 25 → 逐条带 GitHub 链接，末行「还有 15 个 · 在 GitHub 看全部」', () => {
+    const items = Array.from({ length: 10 }, (_, i) => ({
+      fullName: `owner/repo-${i + 1}`,
+    }));
+
+    const text = formatGithubStarsList(items, 25, 'alice-gh');
+
+    const lines = text.split('\n');
+    expect(lines[0]).toBe('你的 star：');
+    expect(lines[1]).toBe('1. owner/repo-1 https://github.com/owner/repo-1');
+    expect(lines[10]).toBe('10. owner/repo-10 https://github.com/owner/repo-10');
+    expect(lines[11]).toBe(
+      '还有 15 个 · 在 GitHub 看全部 https://github.com/alice-gh?tab=stars',
+    );
+    expect(lines).toHaveLength(12);
+  });
+
+  it('总数等于条数 → 不出现「还有」尾行', () => {
+    const text = formatGithubStarsList([{ fullName: 'a/one' }], 1, 'alice-gh');
+    expect(text).toBe('你的 star：\n1. a/one https://github.com/a/one');
+  });
+
+  it('超长列表截断：≤1800 字节、保靠前、带截断标注，尾行的「还有 N 个」按实际展示数重算', () => {
+    const long = 'x'.repeat(80);
+    const items = Array.from({ length: 10 }, (_, i) => ({
+      fullName: `owner${i}/${long}`,
+    }));
+
+    const text = formatGithubStarsList(items, 25, 'alice-gh');
+
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1800);
+    expect(text).toContain('（内容过长，已截断）');
+    expect(text).toContain('1. owner0/xxx');
+    // 展示了几条，尾行就少几个（剩余 = 总数 - 展示数）。
+    const shown = text.match(/^\d+\. /gm)?.length ?? 0;
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThan(10);
+    expect(text).toContain(`还有 ${25 - shown} 个`);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // handleList：我的收藏
 // ---------------------------------------------------------------------------
 describe('handleList（我的收藏 → 编号列表）', () => {
-  it('按 created_at 升序列出：编号 + owner/repo + 创建日期', async () => {
+  /** 订阅者行入队（handleList 第一次 select）：null 表示无订阅者行。 */
+  function seedBinding(row: Record<string, unknown> | null): void {
+    dbMock.selectQueue.push(row === null ? [] : [row]);
+  }
+
+  it('未绑定 → 本地 favorites 按 created_at 升序：编号 + owner/repo + 创建日期 + 绑定提示', async () => {
+    seedBinding({ githubTokenEnc: null, githubLogin: null });
     dbMock.selectQueue.push([
       { fullName: 'a/one', createdAt: new Date('2026-10-01T13:00:00Z') },
       { fullName: 'b/two', createdAt: new Date('2026-10-05T08:30:00Z') },
@@ -744,25 +973,79 @@ describe('handleList（我的收藏 → 编号列表）', () => {
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     const lines = content.split('\n');
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(4);
     expect(lines[1]).toBe('1. a/one（2026-10-01）');
     expect(lines[2]).toBe('2. b/two（2026-10-05）');
+    expect(lines[3]).toBe(UNBOUND_STARS_NOTE);
+    expect(UNBOUND_STARS_NOTE).toBe('绑定 GitHub 后这里会显示你全部 star');
+  });
+
+  it('已绑定 → 直接读 GitHub star 实时列表（不读本地 favorites 表）', async () => {
+    seedBinding(boundSubscriberRow());
+    stubGithubStars(['o/r1', 'o/r2'], 2);
+
+    await handleList(makeMsg({ content: '我的收藏' }));
+
+    // 只查了一次订阅者表，没有查 favorites。
+    expect(dbMock.selectCalls).toHaveLength(1);
+    expect(dbMock.orderByCalls).toHaveLength(0);
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('1. o/r1 https://github.com/o/r1');
+    expect(content).toContain('2. o/r2 https://github.com/o/r2');
+    expect(content).not.toContain(UNBOUND_STARS_NOTE);
+  });
+
+  it('已绑定且 star 为空 → 空态文案（不谎报失败）', async () => {
+    seedBinding(boundSubscriberRow());
+    stubGithubStars([], 0);
+
+    await handleList(makeMsg({ content: '我的收藏' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(EMPTY_FAVORITES_REPLY);
+  });
+
+  it('已绑定但 GitHub 拉取失败（500）→ 回退本地收藏并如实说明，绝不谎报为空', async () => {
+    seedBinding(boundSubscriberRow());
+    stubStarsStatus(500);
+    dbMock.selectQueue.push([
+      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
+    ]);
+
+    await handleList(makeMsg({ content: '我的收藏' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toContain('1. a/one');
+    expect(content).toContain(STARS_FALLBACK_NOTE);
+    expect(content).not.toBe(EMPTY_FAVORITES_REPLY);
+  });
+
+  it('已绑定但 token 失效（401）→ 引导重新绑定', async () => {
+    seedBinding(boundSubscriberRow('expired'));
+    stubStarsStatus(401);
+
+    await handleList(makeMsg({ content: '我的收藏' }));
+
+    const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
+    expect(content).toBe(AUTH_EXPIRED_REPLY);
   });
 
   it('空收藏 → 友好中文空态回复（不含编号列表）', async () => {
+    seedBinding({ githubTokenEnc: null, githubLogin: null });
     dbMock.selectQueue.push([]);
 
     await handleList(makeMsg({ content: '我的收藏' }));
 
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
-    expect(content).toBe(EMPTY_FAVORITES_REPLY);
+    expect(content.startsWith(EMPTY_FAVORITES_REPLY)).toBe(true);
     expect(content).toContain('收藏');
     expect(content).not.toMatch(/^\d+\./m);
   });
 
   it('长列表截断：总字节 ≤1800、保留靠前条目、末尾标注「（内容过长，已截断）」', async () => {
     // 40+ 条收藏：每行约 55 字节，整列表远超企微 ~2048 字节文本上限。
+    seedBinding({ githubTokenEnc: null, githubLogin: null });
     dbMock.selectQueue.push(
       Array.from({ length: 45 }, (_, i) => ({
         fullName: `owner${i}/repo-with-a-fairly-long-name-${i}`,
@@ -785,6 +1068,7 @@ describe('handleList（我的收藏 → 编号列表）', () => {
   });
 
   it('非空列表发送失败 → 回「加载失败」兜底，绝不回空态文案（不再谎报"没有收藏"）', async () => {
+    seedBinding({ githubTokenEnc: null, githubLogin: null });
     dbMock.selectQueue.push([
       { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
     ]);
@@ -918,11 +1202,8 @@ describe('router 分发顺序（五路由 + search 兜底）', () => {
   });
 
   it('端到端：「取消收藏一。」经真实 handleUnfavorite 也成功', async () => {
-    stubFetchStatus(204);
+    stubGithubStars(['a/one'], 1);
     dbMock.selectQueue.push([{ wecomUserid: 'alice' }]); // ensureSubscriber：老用户
-    dbMock.selectQueue.push([
-      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
-    ]);
     dbMock.selectQueue.push([boundSubscriberRow()]);
     resetHandlers();
     registerHandlers({ unfavorite: handleUnfavorite });
@@ -965,10 +1246,7 @@ describe('出站兜底日志（零日志盲区补齐）', () => {
   });
 
   it('unfavorite：确认发送失败且兜底也失败 → 记两条日志', async () => {
-    stubFetchStatus(204);
-    seedFavorites([
-      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
-    ]);
+    stubGithubStars(['a/one'], 1);
     dbMock.selectQueue.push([boundSubscriberRow()]);
     apiMock.sendWeComText.mockRejectedValue(new Error('wecom down'));
 
@@ -983,6 +1261,7 @@ describe('出站兜底日志（零日志盲区补齐）', () => {
   });
 
   it('list：首条发送失败且兜底也失败 → 记两条日志', async () => {
+    dbMock.selectQueue.push([{ githubTokenEnc: null, githubLogin: null }]);
     seedFavorites([
       { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
     ]);
@@ -1021,9 +1300,6 @@ describe('出站兜底日志（零日志盲区补齐）', () => {
   });
 
   it('unfavorite：tokenEnc 解密失败 → AUTH_EXPIRED + console.warn 解密日志', async () => {
-    seedFavorites([
-      { fullName: 'a/one', createdAt: new Date('2026-10-01T00:00:00Z') },
-    ]);
     dbMock.selectQueue.push([
       { githubTokenEnc: 'garbage-not-encrypted', githubLogin: 'alice-gh' },
     ]);
@@ -1035,7 +1311,7 @@ describe('出站兜底日志（零日志盲区补齐）', () => {
       AUTH_EXPIRED_REPLY,
     );
     expect(console.warn).toHaveBeenCalledWith(
-      'unfavorite token decrypt failed:',
+      'github token decrypt failed:',
       expect.any(Error),
     );
   });

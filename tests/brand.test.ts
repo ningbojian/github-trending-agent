@@ -56,3 +56,35 @@ describe('BRAND_ICON_SVG', () => {
     expect(geometry(BRAND_ICON_SVG)).toBe(geometry(source));
   });
 });
+
+/** 取出「歪头」那一组几何（图标本体），两边共用的部分。 */
+function iconCore(svg: string): string {
+  const match = svg.match(/<g transform="rotate\(-5 256 268\)">([\s\S]*?)<\/g>/);
+  if (!match) throw new Error('找不到 rotate(-5 256 268) 图标组');
+  return match[1]
+    .replace(/url\(#[^)]+\)/g, 'url(#GRAD)')
+    .replace(/>\s+</g, '><')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+describe('横版字标 docs/assets/logo-lockup.svg', () => {
+  const lockup = readFileSync('docs/assets/logo-lockup.svg', 'utf8');
+
+  it('图标本体与 BRAND_ICON_SVG 同源（改一处必须同步另一处）', () => {
+    expect(iconCore(lockup)).toBe(iconCore(BRAND_ICON_SVG));
+  });
+
+  it('沿用品牌色，且没有外链或位图', () => {
+    expect(lockup).toContain('#3B82F6');
+    expect(lockup).toContain('#2563EB');
+    expect(lockup).toContain('#0B1220');
+    expect(lockup).not.toContain('<image');
+    expect(lockup.replace('xmlns="http://www.w3.org/2000/svg"', '')).not.toMatch(/https?:/);
+  });
+
+  it('两行字标文案齐全（主字 + 副字）', () => {
+    expect(lockup).toContain('GitHub 热榜');
+    expect(lockup).toContain('每日简报');
+  });
+});

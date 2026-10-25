@@ -3,7 +3,15 @@ import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
 import { sendWeComMarkdown } from '../wecom/api.js';
 import { formatEntryLine } from '../wecom/markdown.js';
+import {
+  getDailySnapshot,
+  selectEntriesForPreferences,
+  type DigestSnapshot,
+} from './digest-snapshot.js';
 import { loadRepoSummaries } from './repo-summary.js';
+import { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
+
+export { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
 
 /**
  * 每日简报：按订阅者偏好取近 7 天 topN 热榜条目，每条一行
@@ -52,22 +60,6 @@ function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8');
 }
 
-const shanghaiDateFormatter = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Asia/Shanghai',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-});
-
-/**
- * 北京时间日期（YYYY-MM-DD）。
- * Vercel 运行时为 UTC：直接 toISOString 会在早上 8 点前错前一天，
- * 简报头部日期必须按东八区计算。Task 5 的推送时间门控复用同一时区约定。
- */
-export function shanghaiToday(now: Date = new Date()): string {
-  return shanghaiDateFormatter.format(now);
-}
-
 /** 简报默认推送时间（北京时间 HH:MM；preferences 缺省/非法时使用）。 */
 export const DEFAULT_PUSH_TIME = '09:00';
 /** 推送间隔下限（天）。 */
@@ -77,31 +69,6 @@ export const MAX_INTERVAL_DAYS = 30;
 
 /** pushTime 合法形态：24 小时制「HH:MM」（00:00–23:59）。 */
 const PUSH_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-
-// hourCycle: 'h23' —— h24 会在午夜输出 "24:00"，门控分钟数与回执都会算错。
-const shanghaiTimeFormatter = new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Asia/Shanghai',
-  hour: '2-digit',
-  minute: '2-digit',
-  hourCycle: 'h23',
-});
-
-/**
- * 北京时间「HH:MM」（补零，h23：午夜为 00:00）。
- * Task 5 推送时间门控与「推送时间」回执共用；now 可注入供测试。
- */
-export function shanghaiHHMM(now: Date = new Date()): string {
-  const parts = shanghaiTimeFormatter.formatToParts(now);
-  const hour = parts.find((part) => part.type === 'hour')?.value ?? '00';
-  const minute = parts.find((part) => part.type === 'minute')?.value ?? '00';
-  return `${hour}:${minute}`;
-}
-
-/** 北京时间当日分钟数（0–1439），与 preferences.pushTime 的分钟数同刻度比较。 */
-export function shanghaiMinutes(now: Date = new Date()): number {
-  const [hour, minute] = shanghaiHHMM(now).split(':');
-  return Number(hour) * 60 + Number(minute);
-}
 
 function headerLine(date: string): string {
   return `📊 今日 GitHub 热榜简报（${date}）`;
@@ -225,12 +192,22 @@ async function loadSummariesSafe(
 function assemble(
   header: string,
   lines: string[],
+  intro?: string | null,
 ): { text: string; keptCount: number } {
   if (lines.length === 0) {
-    return { text: `${header}\n\n${EMPTY_NOTICE}`, keptCount: 0 };
+    const parts = [header];
+    if (intro) {
+      parts.push('', intro);
+    }
+    parts.push('', EMPTY_NOTICE);
+    return { text: parts.join('\n'), keptCount: 0 };
   }
   const build = (kept: string[], truncated: boolean): string => {
-    const parts = [header, '', ...kept];
+    const parts = [header];
+    if (intro) {
+      parts.push('', intro);
+    }
+    parts.push('', ...kept);
     if (truncated) {
       parts.push(TRUNCATION_NOTE);
     }
@@ -348,6 +325,46 @@ export async function buildDigestWithEntries(
   return {
     content: text,
     entries: shownEntries
+      .slice(0, keptCount)
+      .map((entry) => ({ fullName: entry.fullName })),
+  };
+}
+
+/**
+ * 从当日快照构建单个订阅者的简报（企微渠道）：
+ * - 选择层与邮件共用 selectEntriesForPreferences（语言过滤 + 关键词排序 + 条数）
+ * - Abstract 作为开头概览（快照构建失败时省略，格式与既有简报一致）
+ * - 仍走 assemble 的 3800 字节截断；entries 与消息实际展示顺序对齐
+ */
+export async function buildDigestFromSnapshot(
+  sub: {
+    preferences: {
+      languages?: unknown;
+      keywords?: unknown;
+      digestCount?: unknown;
+    };
+  },
+  snapshot: DigestSnapshot,
+): Promise<{ content: string; entries: { fullName: string }[] }> {
+  const { languages, keywords, digestCount } = normalizePreferences(
+    sub.preferences,
+  );
+  const selected = selectEntriesForPreferences(snapshot.items, {
+    languages,
+    keywords,
+    digestCount,
+  });
+  const lines = selected.map((item, index) =>
+    formatEntryLine(index + 1, item, item.summary),
+  );
+  const { text, keptCount } = assemble(
+    headerLine(snapshot.date),
+    lines,
+    snapshot.abstract,
+  );
+  return {
+    content: text,
+    entries: selected
       .slice(0, keptCount)
       .map((entry) => ({ fullName: entry.fullName })),
   };
@@ -487,6 +504,26 @@ async function rollbackClaim(id: number): Promise<void> {
 }
 
 /**
+ * 首日简报（加入应用时的礼包）发送成功后记为「今日已发」：
+ * 让当天的整点 tick 因「北京日期已发」而跳过，避免同一天收到两份简报。
+ *
+ * 回填的是**北京当日 00:00** 而不是 now()。原因：pushDigests 的间隔门控同时要求
+ * `last_digest_at <= now() - intervalDays 天`；若记成 now()（如 14:00），次日 09:00
+ * 只过了 19 小时，永远不满足 24h，用户会被永久推到「每天 14:00」（且逐次漂移）。
+ * 回填当日 00:00 等价于「今天这个名额已经用掉」，明天起恢复按 pushTime 正常推送
+ * （对 intervalDays=N 同样成立：第 N 天的 pushTime 必已满 N×24h）。
+ * 定时推送不走此函数（那边用条件 UPDATE 抢占，见 claimDigest）。
+ */
+export async function markDigestSent(wecomUserid: string): Promise<void> {
+  await db()
+    .update(subscribers)
+    .set({
+      lastDigestAt: sql`(date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai')`,
+    })
+    .where(eq(subscribers.wecomUserid, wecomUserid));
+}
+
+/**
  * 向所有 active 订阅者推送每日简报（markdown 通道），按 Task 5 门控逐个放行：
  * 1. 北京时间分钟数 `nowMin >= pushMin`（pushTime 非法按 09:00）；
  * 2. 当日未发且已满 intervalDays 天（JS 预检，避免无谓写库）；
@@ -505,6 +542,9 @@ export async function pushDigests(
     .select()
     .from(subscribers)
     .where(eq(subscribers.active, true));
+
+  // 当日快照只构建/读取一次，两个渠道共用；失败返回 null → 逐订阅者回退。
+  const snapshot = await getDailySnapshot(now);
 
   const nowMinutes = shanghaiMinutes(now);
   const today = shanghaiToday(now);
@@ -531,7 +571,9 @@ export async function pushDigests(
         skipped += 1;
         continue;
       }
-      const { content, entries } = await buildDigestWithEntries(sub, now);
+      const { content, entries } = snapshot
+        ? await buildDigestFromSnapshot(sub, snapshot)
+        : await buildDigestWithEntries(sub, now);
       await sendWeComMarkdown(sub.wecomUserid, content);
       sent += 1;
       try {

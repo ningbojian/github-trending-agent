@@ -11,6 +11,30 @@ vi.mock('../src/wecom/api', () => ({
   sendWeComText: vi.fn(),
 }));
 
+/**
+ * Task 6：router 在分发前调用 ensureSubscriber / sendWelcomeFlow。
+ * 这里只替换这两个协作者，其余 onboarding 导出（各 handler）保持真实实现——
+ * 测试用 registerHandlers 覆盖具体 handler，不依赖它们的行为。
+ * 未 mock 时 ensureSubscriber 会真的连库（config 缺失 → warn），测试被噪音淹没。
+ */
+const subscribeFlowMock = vi.hoisted(() => ({
+  ensureSubscriber: vi.fn(),
+  sendWelcomeFlow: vi.fn(),
+}));
+
+vi.mock('../src/wecom/onboarding', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../src/wecom/onboarding')>();
+  return { ...actual, ensureSubscriber: subscribeFlowMock.ensureSubscriber };
+});
+
+// onboarding 会 `export { WELCOME_MESSAGE } from './welcome.js'`；
+// mock 里补上该导出，避免 re-export 绑定在 mock 模块上解析失败。
+vi.mock('../src/wecom/welcome', () => ({
+  sendWelcomeFlow: subscribeFlowMock.sendWelcomeFlow,
+  WELCOME_MESSAGE: '欢迎',
+}));
+
 function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
   return {
     toUserName: 'gh_agent',
@@ -39,6 +63,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(sendWeComText).mockReset();
   vi.mocked(sendWeComText).mockResolvedValue(undefined);
+  // 默认按老用户处理：事件静默、文本不触发送礼包流程。
+  subscribeFlowMock.ensureSubscriber.mockReset();
+  subscribeFlowMock.ensureSubscriber.mockResolvedValue(false);
+  subscribeFlowMock.sendWelcomeFlow.mockReset();
+  subscribeFlowMock.sendWelcomeFlow.mockResolvedValue(undefined);
   resetHandlers();
   registerHandlers({
     help: helpHandler,
@@ -99,11 +128,12 @@ describe('routeMessage 分发', () => {
     expect(searchHandler).not.toHaveBeenCalled();
   });
 
-  it('非文本消息（event）静默忽略', async () => {
+  it('非文本、非 enter_agent 的事件静默忽略', async () => {
     await routeMessage(
-      makeMsg({ msgType: 'event', content: '<xml/>' }),
+      makeMsg({ msgType: 'event', event: 'change_contact', content: '<xml/>' }),
     );
     expect(searchHandler).not.toHaveBeenCalled();
+    expect(subscribeFlowMock.ensureSubscriber).not.toHaveBeenCalled();
   });
 
   it('handler 可被后续注册覆盖（Task 9/12/13 插桩机制）', async () => {
@@ -112,6 +142,85 @@ describe('routeMessage 分发', () => {
     await routeMessage(makeMsg({ content: 'go web 框架' }));
     expect(replacement).toHaveBeenCalledTimes(1);
     expect(searchHandler).not.toHaveBeenCalled();
+  });
+});
+
+describe('enter_agent 事件 —— 加入即自动收到简报', () => {
+  it('新用户进入应用 → 建订阅者行并送出礼包（欢迎 + 首日简报）', async () => {
+    subscribeFlowMock.ensureSubscriber.mockResolvedValue(true);
+
+    await routeMessage(
+      makeMsg({ msgType: 'event', event: 'enter_agent', content: '' }),
+    );
+
+    expect(subscribeFlowMock.ensureSubscriber).toHaveBeenCalledTimes(1);
+    expect(subscribeFlowMock.sendWelcomeFlow).toHaveBeenCalledTimes(1);
+    expect(subscribeFlowMock.sendWelcomeFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromUserName: 'alice',
+        msgType: 'event',
+        event: 'enter_agent',
+      }),
+    );
+    // 事件消息不进入文本分发：不搜索、不回帮助、不发用法提示。
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(helpHandler).not.toHaveBeenCalled();
+    expect(sendWeComText).not.toHaveBeenCalled();
+  });
+
+  it('老用户进入应用 → 不再打扰（不送礼包、不发任何消息）', async () => {
+    subscribeFlowMock.ensureSubscriber.mockResolvedValue(false);
+
+    await routeMessage(
+      makeMsg({ msgType: 'event', event: 'enter_agent', content: '' }),
+    );
+
+    expect(subscribeFlowMock.ensureSubscriber).toHaveBeenCalledTimes(1);
+    expect(subscribeFlowMock.sendWelcomeFlow).not.toHaveBeenCalled();
+    expect(sendWeComText).not.toHaveBeenCalled();
+  });
+
+  it('礼包流程抛错 → routeMessage 不 reject（fail-open，聊天分发不受影响）', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    subscribeFlowMock.ensureSubscriber.mockResolvedValue(true);
+    subscribeFlowMock.sendWelcomeFlow.mockRejectedValue(new Error('digest down'));
+
+    await expect(
+      routeMessage(
+        makeMsg({ msgType: 'event', event: 'enter_agent', content: '' }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      'enter_agent handling failed:',
+      expect.objectContaining({ message: 'digest down' }),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('首条 text（新用户）→ 先送礼包，再回复原消息（保证「收藏 N」指向用户最后看到的消息）', async () => {
+    subscribeFlowMock.ensureSubscriber.mockResolvedValue(true);
+
+    await routeMessage(makeMsg({ content: 'python 热榜' }));
+
+    expect(subscribeFlowMock.sendWelcomeFlow).toHaveBeenCalledTimes(1);
+    expect(searchHandler).toHaveBeenCalledTimes(1);
+    const welcomeOrder =
+      subscribeFlowMock.sendWelcomeFlow.mock.invocationCallOrder[0]!;
+    const searchOrder = searchHandler.mock.invocationCallOrder[0]!;
+    expect(welcomeOrder).toBeLessThan(searchOrder);
+  });
+
+  it('礼包发送失败 → 原消息照常分发（fail-open）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    subscribeFlowMock.ensureSubscriber.mockResolvedValue(true);
+    subscribeFlowMock.sendWelcomeFlow.mockRejectedValue(new Error('send down'));
+
+    await routeMessage(makeMsg({ content: 'python 热榜' }));
+
+    expect(searchHandler).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
 
@@ -306,6 +415,17 @@ describe('「推送时间」「每 N 天」指令路由（锚定分发，用法�
     expect(pushIntervalHandler).toHaveBeenCalledTimes(3);
     expect(searchHandler).not.toHaveBeenCalled();
     expect(pushTimeHandler).not.toHaveBeenCalled();
+  });
+
+  it('strips a trailing period (手机键盘常带) before command matching', async () => {
+    // 「每天 9 点.」「推送时间 20:30.」「每 2 天.」都不能掉进搜索。
+    await routeMessage(makeMsg({ content: '每天 9 点.' }));
+    await routeMessage(makeMsg({ content: '推送时间 20:30.' }));
+    await routeMessage(makeMsg({ content: '每 2 天.' }));
+
+    expect(pushTimeHandler).toHaveBeenCalledTimes(2);
+    expect(pushIntervalHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
   });
 
   it('「每天 star 最多的项目」是合法搜索 → search，绝不进推送时间 handler', async () => {

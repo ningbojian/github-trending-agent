@@ -12,11 +12,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // ---------------------------------------------------------------------------
 const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
+  sendWeComMarkdown: vi.fn(),
 }));
 
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
+  sendWeComMarkdown: apiMock.sendWeComMarkdown,
 }));
+
+/**
+ * 新用户礼包会真的去构建首日简报（Task 6 起 ensureSubscriber 之后的流程）。
+ * 这里只替换礼包的三个副作用，其余 digest 导出（MAX_INTERVAL_DAYS 等）保持真实——
+ * 否则本文件的 db mock 没有 execute()，简报会走失败降级分支，输出被错误日志污染。
+ */
+const digestMock = vi.hoisted(() => ({
+  buildDigestWithEntries: vi.fn(),
+  saveRecentResults: vi.fn(),
+  markDigestSent: vi.fn(),
+}));
+
+vi.mock('../src/agent/digest', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/agent/digest')>();
+  return { ...actual, ...digestMock };
+});
 
 const dbMock = vi.hoisted(() => ({
   /** select 队列：每次 await select 链弹出一项；Error 实例表示该次查询失败。 */
@@ -147,6 +165,17 @@ beforeEach(() => {
   dbMock.insertError = undefined;
   dbMock.updateCalls.length = 0;
   apiMock.sendWeComText.mockResolvedValue(undefined);
+  apiMock.sendWeComMarkdown.mockResolvedValue(undefined);
+  // 礼包里的首日简报：固定一份最简结果，避免走真实 DB/摘要链路。
+  digestMock.buildDigestWithEntries.mockReset();
+  digestMock.buildDigestWithEntries.mockResolvedValue({
+    content: '📊 今日 GitHub 热榜简报',
+    entries: [{ fullName: 'a/one' }],
+  });
+  digestMock.saveRecentResults.mockReset();
+  digestMock.saveRecentResults.mockResolvedValue(undefined);
+  digestMock.markDigestSent.mockReset();
+  digestMock.markDigestSent.mockResolvedValue(undefined);
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   // 全量替换为 mock handler：真实 search/bind/stars handler 绝不触发。
@@ -270,14 +299,13 @@ describe('首条消息 onboarding — 欢迎语', () => {
     expect(searchHandler).not.toHaveBeenCalled();
   });
 
-  it('欢迎语首行即刻可试的示例引导，全文覆盖全部功能说明', () => {
-    expect(WELCOME_MESSAGE.split('\n')[0]).toContain(
-      '试试直接发：本周 python 的 ai 项目',
-    );
-    expect(WELCOME_MESSAGE).toContain('简报');
-    expect(WELCOME_MESSAGE).toContain('绑定');
-    expect(WELCOME_MESSAGE).toContain('订阅');
-    expect(WELCOME_MESSAGE).toContain('退订');
+  it('欢迎语压缩到 3 行以内：身份/自动简报 + 示例 + 「帮助」入口（不再整屏说明书）', () => {
+    const lines = WELCOME_MESSAGE.split('\n');
+    expect(lines.length).toBeLessThanOrEqual(4);
+    expect(lines[0]).toContain('GitHub 热榜助手');
+    expect(WELCOME_MESSAGE).toContain('每日简报');
+    expect(WELCOME_MESSAGE).toContain('本周 python 的 ai 项目');
+    expect(WELCOME_MESSAGE).toContain('帮助');
   });
 });
 
@@ -905,5 +933,28 @@ describe('HELP_MESSAGE —— 推送时间与推送间隔', () => {
     expect(line).toBeDefined();
     expect(line).toContain('1–30');
     expect(line).toContain('每天');
+  });
+
+  it('说明简报加入即自动开通（默认每天 09:00），并区分搜索条数是「前 N 个」', () => {
+    const digestLine = HELP_MESSAGE.split('\n').find((l) =>
+      l.includes('每日简报'),
+    );
+    expect(digestLine).toBeDefined();
+    expect(digestLine).toContain('自动');
+    expect(digestLine).toContain('09:00');
+
+    const searchLine = HELP_MESSAGE.split('\n').find((l) =>
+      l.includes('自然语言搜索'),
+    );
+    expect(searchLine).toBeDefined();
+    expect(searchLine).toContain('前');
+
+    // 注意：搜索行也含「条数」（「条数用「前 5 个」控制」），必须用命令行的
+    // 「条数：」冒号锚定，否则 find 会先命中搜索行。
+    const countLine = HELP_MESSAGE.split('\n').find((l) =>
+      l.includes('条数：'),
+    );
+    expect(countLine).toBeDefined();
+    expect(countLine).toContain('简报');
   });
 });

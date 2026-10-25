@@ -16,6 +16,13 @@ jobs:
     name: 触发简报推送
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      # 失败告警实际消费的真实 secrets（与 daily.yml 同源）
+      WECOM_CORP_ID: ${{ secrets.WECOM_CORP_ID }}
+      WECOM_AGENT_ID: ${{ secrets.WECOM_AGENT_ID }}
+      WECOM_SECRET: ${{ secrets.WECOM_SECRET }}
+      # 可选：未配置时失败告警步骤跳过（仅打 warning）
+      WECOM_ADMIN_USERID: ${{ secrets.WECOM_ADMIN_USERID }}
     steps:
       - name: 触发简报推送（Vercel cron 端点）
         env:
@@ -29,3 +36,35 @@ jobs:
           echo "HTTP ${CODE}"
           cat digest-resp.json; echo
           [ "${CODE}" = 200 ]
+
+      # 简报触发从 daily.yml 迁出后必须保留失败告警：否则 VERCEL_URL/CRON_SECRET
+      # 缺失、端点 500 时只有 Actions 红叉，管理员无从得知所有订阅者都在漏收简报。
+      - name: 失败告警到企业微信管理员
+        if: failure() && env.WECOM_ADMIN_USERID != ''
+        env:
+          ALERT_WORKFLOW: ${{ github.workflow }}
+          ALERT_RUN_ID: ${{ github.run_id }}
+          ALERT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          TOKEN=$(curl -sS "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${WECOM_CORP_ID}&corpsecret=${WECOM_SECRET}" | jq -r '.access_token // empty' || true)
+          if [ -z "${TOKEN}" ]; then
+            echo "::warning::获取企业微信 access_token 失败，跳过告警"
+            exit 0
+          fi
+          # agentid 为自建应用 message/send 的必填字段；errcode 断言防止发送被静默拒绝
+          RESP=$(curl -sS -X POST "https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token=${TOKEN}" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -n \
+              --arg touser "${WECOM_ADMIN_USERID}" \
+              --arg agentid "${WECOM_AGENT_ID}" \
+              --arg content "⚠️ 简报推送触发失败：工作流 ${ALERT_WORKFLOW}，Run ID ${ALERT_RUN_ID}，详情 ${ALERT_RUN_URL}" \
+              '{touser: $touser, agentid: ($agentid | tonumber), msgtype: "text", text: {content: $content}}')")
+          echo "${RESP}"
+          echo "${RESP}" | jq -e '.errcode == 0' > /dev/null || {
+            echo "::error::企业微信告警发送失败：${RESP}"
+            exit 1
+          }
+
+      - name: 未配置管理员时跳过告警
+        if: failure() && env.WECOM_ADMIN_USERID == ''
+        run: echo "::warning::WECOM_ADMIN_USERID 未配置，跳过失败告警"

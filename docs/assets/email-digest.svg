@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="720" viewBox="0 0 660 720" role="img" aria-label="邮箱简报示意：品牌头、今日概览、条目卡片与退订链接">
+  <defs>
+    <style>
+      .t { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; fill: #1f2328; }
+      .muted { fill: #656d76; }
+      .green { fill: #1a7f37; }
+      .link { fill: #0969da; }
+      .card { fill: #ffffff; stroke: #d0d7de; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect width="660" height="720" fill="#f6f8fa"/>
+
+  <!-- 邮件卡片 -->
+  <rect class="card" x="30" y="24" width="600" height="672" rx="12"/>
+
+  <!-- 品牌头 -->
+  <rect x="30" y="24" width="600" height="88" rx="12" fill="#0d1117"/>
+  <rect x="30" y="80" width="600" height="32" fill="#0d1117"/>
+  <text class="t" x="56" y="64" font-size="20" font-weight="700" style="fill:#ffffff">GitHub 热榜</text>
+  <text class="t" x="56" y="88" font-size="13" style="fill:#b1bac4">每日简报</text>
+  <text class="t" x="604" y="88" font-size="12.5" style="fill:#b1bac4" text-anchor="end">2026-10-25 · 北京时间 09:00</text>
+
+  <!-- 问候 + 概览 -->
+  <text class="t" x="56" y="146" font-size="15">你好，这是今天的 GitHub 热榜简报。</text>
+  <rect x="56" y="162" width="548" height="60" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1"/>
+  <text class="t muted" x="72" y="186" font-size="13">今天的榜单集中在 AI 工具与开发效率上，</text>
+  <text class="t muted" x="72" y="206" font-size="13">TypeScript 与 Rust 项目增长最明显。</text>
+
+  <!-- 条目 1 -->
+  <rect class="card" x="56" y="240" width="548" height="88" rx="8"/>
+  <rect x="56" y="240" width="4" height="88" fill="#1a7f37"/>
+  <text class="t muted" x="78" y="270" font-size="13" font-weight="700">#1</text>
+  <text class="t link" x="106" y="270" font-size="14" font-weight="700">openai/openai-python</text>
+  <text class="t green" x="78" y="294" font-size="12">★ 21,345</text>
+  <text class="t green" x="150" y="294" font-size="12">+812 今日</text>
+  <text class="t green" x="236" y="294" font-size="12">新上榜</text>
+  <text class="t muted" x="78" y="316" font-size="12.5">官方 Python SDK，兼容 OpenAI API。</text>
+
+  <!-- 条目 2 -->
+  <rect class="card" x="56" y="340" width="548" height="88" rx="8"/>
+  <rect x="56" y="340" width="4" height="88" fill="#1a7f37"/>
+  <text class="t muted" x="78" y="370" font-size="13" font-weight="700">#2</text>
+  <text class="t link" x="106" y="370" font-size="14" font-weight="700">vercel/next.js</text>
+  <text class="t green" x="78" y="394" font-size="12">★ 128,204</text>
+  <text class="t green" x="158" y="394" font-size="12">+430 今日</text>
+  <text class="t muted" x="78" y="416" font-size="12.5">React 全栈框架，支持 App Router。</text>
+
+  <!-- 条目 3 -->
+  <rect class="card" x="56" y="440" width="548" height="88" rx="8"/>
+  <rect x="56" y="440" width="4" height="88" fill="#1a7f37"/>
+  <text class="t muted" x="78" y="470" font-size="13" font-weight="700">#3</text>
+  <text class="t link" x="106" y="470" font-size="14" font-weight="700">rust-lang/rust</text>
+  <text class="t green" x="78" y="494" font-size="12">★ 99,118</text>
+  <text class="t green" x="150" y="494" font-size="12">+305 今日</text>
+  <text class="t muted" x="78" y="516" font-size="12.5">系统级编程语言，注重安全与性能。</text>
+
+  <text class="t muted" x="56" y="556" font-size="12">……（按设置的条数展示，最多 20 条，不截断）</text>
+
+  <!-- 页脚 -->
+  <line x1="56" y1="580" x2="604" y2="580" stroke="#d0d7de" stroke-width="1"/>
+  <text class="t link" x="56" y="608" font-size="12.5">调整推送时间 / 频率</text>
+  <text class="t muted" x="196" y="608" font-size="12.5">·</text>
+  <text class="t link" x="210" y="608" font-size="12.5">退订</text>
+  <text class="t muted" x="56" y="632" font-size="11.5">你收到这封邮件是因为在落地页订阅了 GitHub 热榜简报。</text>
+  <text class="t muted" x="56" y="652" font-size="11.5">GitHub 热榜 · 非 GitHub 官方产品</text>
+</svg>

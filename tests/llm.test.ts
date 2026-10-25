@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     LLM_PROVIDER: 'anthropic',
     LLM_API_KEY: 'test-llm-api-key',
     LLM_MODEL: 'test-model',
+    LLM_BASE_URL: undefined as string | undefined,
   },
   createAnthropic: vi.fn(),
   createOpenAI: vi.fn(),
@@ -39,6 +40,7 @@ beforeEach(() => {
   mocks.env.LLM_PROVIDER = 'anthropic';
   mocks.env.LLM_API_KEY = 'test-llm-api-key';
   mocks.env.LLM_MODEL = 'test-model';
+  mocks.env.LLM_BASE_URL = undefined;
   mocks.createAnthropic.mockImplementation(() => fakeProvider('anthropic'));
   mocks.createOpenAI.mockImplementation(() => fakeProvider('openai'));
   mocks.createDeepSeek.mockImplementation(() => fakeProvider('deepseek'));
@@ -99,6 +101,26 @@ describe('llm provider branching', () => {
     expect(mocks.createDeepSeek).not.toHaveBeenCalled();
   });
 
+  it('deepseek / ali: honour LLM_BASE_URL for regional endpoints and proxies', () => {
+    // 大陆账号/企业代理常需把 endpoint 指到同区域地址；忽略这个变量会让
+    // 请求打到 SDK 默认（deepseek 直连 / dashscope-intl）而静默失败。
+    mocks.env.LLM_PROVIDER = 'deepseek';
+    mocks.env.LLM_BASE_URL = 'https://proxy.example.com/deepseek';
+    llm();
+    expect(mocks.createDeepSeek).toHaveBeenLastCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://proxy.example.com/deepseek',
+    });
+
+    mocks.env.LLM_PROVIDER = 'ali';
+    mocks.env.LLM_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+    llm();
+    expect(mocks.createAlibaba).toHaveBeenLastCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    });
+  });
+
   it('mimo: reuses the Anthropic client with the MiMo baseURL override', () => {
     mocks.env.LLM_PROVIDER = 'mimo';
     mocks.createAnthropic.mockImplementation(() => fakeProvider('mimo'));
@@ -112,6 +134,69 @@ describe('llm provider branching', () => {
     expect(mocks.createOpenAI).not.toHaveBeenCalled();
     expect(mocks.createDeepSeek).not.toHaveBeenCalled();
     expect(mocks.createAlibaba).not.toHaveBeenCalled();
+  });
+
+  it('zhipu / gemini / moonshot: use the built-in OpenAI-compatible endpoint', () => {
+    mocks.env.LLM_PROVIDER = 'zhipu';
+    expect(llm()).toEqual({ provider: 'openai', modelId: 'test-model' });
+    expect(mocks.createOpenAI).toHaveBeenLastCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+    });
+
+    mocks.env.LLM_PROVIDER = 'gemini';
+    llm();
+    expect(mocks.createOpenAI).toHaveBeenLastCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    });
+
+    mocks.env.LLM_PROVIDER = 'moonshot';
+    llm();
+    expect(mocks.createOpenAI).toHaveBeenLastCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://api.moonshot.cn/v1',
+    });
+  });
+
+  it('custom: uses LLM_BASE_URL as the OpenAI-compatible endpoint', () => {
+    mocks.env.LLM_PROVIDER = 'custom';
+    mocks.env.LLM_BASE_URL = 'https://llm.internal.example.com/v1';
+
+    expect(llm()).toEqual({ provider: 'openai', modelId: 'test-model' });
+    expect(mocks.createOpenAI).toHaveBeenCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://llm.internal.example.com/v1',
+    });
+  });
+
+  it('custom: throws a clear error when LLM_BASE_URL is missing', () => {
+    mocks.env.LLM_PROVIDER = 'custom';
+    mocks.env.LLM_BASE_URL = undefined;
+
+    expect(() => llm()).toThrow(/LLM_BASE_URL/);
+    expect(mocks.createOpenAI).not.toHaveBeenCalled();
+  });
+
+  it('LLM_BASE_URL overrides a preset endpoint (proxy / Azure / self-hosted)', () => {
+    mocks.env.LLM_PROVIDER = 'zhipu';
+    mocks.env.LLM_BASE_URL = 'https://proxy.example.com/v1';
+
+    llm();
+    expect(mocks.createOpenAI).toHaveBeenCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://proxy.example.com/v1',
+    });
+  });
+
+  it('trims and lowercases the provider slug', () => {
+    mocks.env.LLM_PROVIDER = '  Zhipu ';
+
+    expect(llm()).toEqual({ provider: 'openai', modelId: 'test-model' });
+    expect(mocks.createOpenAI).toHaveBeenCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+    });
   });
 
   it('reads env at call time so a changed LLM_PROVIDER switches the branch', () => {
@@ -157,6 +242,20 @@ describe('generateObjectSafe', () => {
     mocks.generateObject.mockRejectedValue(new Error('network down'));
 
     await expect(generateObjectSafe(schema, 'x')).resolves.toBeNull();
+  });
+
+  it('logs the failure reason so a broken provider is visible in the logs', async () => {
+    // 静默 null 会让「未知提供商 / 缺 baseURL / 鉴权失败」永远查不出来，
+    // 表现为线上一直没有中文简介。
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.generateObject.mockRejectedValue(new Error('invalid api key'));
+
+    await generateObjectSafe(schema, 'x');
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(String(spy.mock.calls[0][0])).toContain('provider=anthropic');
+    expect(String(spy.mock.calls[0][1])).toContain('invalid api key');
+    spy.mockRestore();
   });
 
   it('returns null when the returned object fails zod validation', async () => {

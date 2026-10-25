@@ -1,5 +1,40 @@
 import { describe, expect, it } from 'vitest';
-import { buildReplyTextXml, extractTag } from '../src/wecom/xml';
+import { buildReplyTextXml, extractTag, parseInboundXml } from '../src/wecom/xml';
+
+/**
+ * 入站解析：事件消息（MsgType=event）靠 Event 字段区分类型。
+ * enter_agent 是「加入应用」事件——用户一进入就送礼包（欢迎 + 首日简报），
+ * 因此 Event 必须进入 InboundMessage，不能只留在原始 XML 里。
+ */
+describe('parseInboundXml — Event 字段', () => {
+  it('解析 enter_agent 事件：msgType=event 且 event=enter_agent', () => {
+    const msg = parseInboundXml(
+      '<xml>' +
+        '<ToUserName><![CDATA[ww_corp]]></ToUserName>' +
+        '<FromUserName><![CDATA[alice]]></FromUserName>' +
+        '<CreateTime>1409659813</CreateTime>' +
+        '<MsgType><![CDATA[event]]></MsgType>' +
+        '<Event><![CDATA[enter_agent]]></Event>' +
+        '</xml>',
+    );
+
+    expect(msg.msgType).toBe('event');
+    expect(msg.event).toBe('enter_agent');
+    expect(msg.fromUserName).toBe('alice');
+  });
+
+  it('普通 text 消息无 Event 标签 → event 为空串', () => {
+    const msg = parseInboundXml(
+      '<xml>' +
+        '<MsgType><![CDATA[text]]></MsgType>' +
+        '<Content><![CDATA[你好]]></Content>' +
+        '</xml>',
+    );
+
+    expect(msg.msgType).toBe('text');
+    expect(msg.event).toBe('');
+  });
+});
 
 /**
  * 被动回复 text XML：企微 5 秒回调窗口内的唯一回复通道。

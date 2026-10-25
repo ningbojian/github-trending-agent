@@ -30,6 +30,9 @@ export function parseInboundXml(xml: string): InboundMessage {
     msgType: extractTag(xml, 'MsgType'),
     content: extractTag(xml, 'Content'),
     msgId: extractTag(xml, 'MsgId'),
+    // 事件消息（MsgType=event）靠 Event 区分类型：enter_agent = 用户进入应用
+    // （含刚加入应用的首次进入），是「加入即收到首日简报」的触发点。
+    event: extractTag(xml, 'Event'),
   };
 }
 

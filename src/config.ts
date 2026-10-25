@@ -11,10 +11,13 @@ const optionalString = z.preprocess(
 const envSchema = z.object({
   // Neon Postgres（HTTP driver）
   NEON_DATABASE_URL: z.string().min(1),
-  // LLM 提供商（anthropic | openai | deepseek | ali）
+  // LLM 提供商（anthropic | openai | deepseek | ali | mimo | zhipu | moonshot |
+  // doubao | siliconflow | openrouter | gemini | ollama | custom）
   LLM_PROVIDER: z.string().min(1),
   LLM_API_KEY: z.string().min(1),
   LLM_MODEL: z.string().min(1),
+  // 可选：覆盖/自定义 LLM endpoint（OpenAI 兼容协议）。custom 提供商必填。
+  LLM_BASE_URL: optionalString,
   // 企业微信自建应用
   WECOM_CORP_ID: z.string().min(1),
   WECOM_AGENT_ID: z.string().min(1),
@@ -34,6 +37,18 @@ const envSchema = z.object({
   GITHUB_TOKEN: optionalString,
   // 可选：仓库中文简介模式（默认 llm；off = 完全不调 LLM，全部走 description 截断，零 token）
   REPO_SUMMARY_MODE: optionalString,
+  // 可选：邮箱备用通道（Resend）。未配置时邮箱入口显示「即将开放」，企微链路不受影响。
+  RESEND_API_KEY: optionalString,
+  EMAIL_FROM: optionalString,
+  PUBLIC_BASE_URL: optionalString,
+  // 可选：企微成员名额门控。显式 true/false 优先于成员数探测；
+  // WECOM_MEMBER_LIMIT 默认 100（企业认证后按后台上限调整）。
+  WECOM_ACCEPTING: optionalString,
+  WECOM_MEMBER_LIMIT: optionalString,
+  // 可选：落地页的两个引导二维码与显示名（未配置时回退文字指引）。
+  WECOM_JOIN_QR_URL: optionalString,
+  WECOM_PLUGIN_QR_URL: optionalString,
+  WECOM_APP_NAME: optionalString,
   // 安全
   CRON_SECRET: z.string().min(1),
   TOKEN_ENCRYPT_KEY: z.string().min(1),

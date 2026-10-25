@@ -1,4 +1,8 @@
 import { pushDigests } from '../src/agent/digest.js';
+import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
+import { pushEmailDigests } from '../src/email/push.js';
+import { resolveBaseUrl } from '../src/email/tokens.js';
+import { refreshWeComMemberCount } from '../src/wecom/capacity.js';
 import { env } from '../src/config.js';
 
 /**
@@ -54,8 +58,17 @@ export default async function handler(
   }
 
   try {
-    const result = await pushDigests();
-    sendJson(res, 200, result);
+    // 每小时顺带刷新成员数缓存（落地页名额门控用；失败不影响推送）。
+    await refreshWeComMemberCount();
+    // 当天快照只构建一次：企微与邮件两个渠道共用同一轮模型产出。
+    const snapshot = await getDailySnapshot();
+    const wecom = await pushDigests();
+    // cron 没有用户请求头，显式把站点根地址传进邮件推送（否则链接会回落 localhost）。
+    const email = await pushEmailDigests({
+      snapshot,
+      baseUrl: resolveBaseUrl(req.headers),
+    });
+    sendJson(res, 200, { ...wecom, email });
   } catch (err) {
     console.error('cron-push-digest failed:', err);
     // detail 供 Bearer 鉴权后的调用方排障（端点不公开，不引入暴露面）

@@ -88,6 +88,46 @@ export const subscribers = pgTable(
 );
 
 /**
+ * 邮箱订阅者（备用触达通道，与企微成员完全独立）。
+ * - email 去空白、小写化后唯一
+ * - confirmToken 一次性（确认后置 null）；unsubToken 长期有效（设置/退订链接凭证）
+ * - preferences 与企微共用同一套字段语义（digestCount 默认 15，推送窗口 09:00–17:00 整点）
+ * - lastSentAt 用 timestamptz：日期比较依赖 AT TIME ZONE 'Asia/Shanghai'
+ */
+export const emailSubscribers = pgTable(
+  'email_subscribers',
+  {
+    id: serial('id').primaryKey(),
+    email: text('email').notNull(),
+    confirmToken: text('confirm_token'),
+    unsubToken: text('unsub_token').notNull(),
+    confirmed: boolean('confirmed').notNull().default(false),
+    active: boolean('active').notNull().default(true),
+    preferences: jsonb('preferences')
+      .$type<{
+        pushTime: string;
+        intervalDays: number;
+        digestCount: number;
+        languages: string[];
+        keywords: string[];
+      }>()
+      .notNull()
+      .default(
+        sql`'{"pushTime":"09:00","intervalDays":1,"digestCount":15,"languages":[],"keywords":[]}'`,
+      ),
+    lastSentAt: timestamp('last_sent_at', { withTimezone: true }),
+    confirmSentAt: timestamp('confirm_sent_at', { withTimezone: true }),
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+  },
+  (t) => [
+    unique('email_subscribers_email_unique').on(t.email),
+    unique('email_subscribers_unsub_token_unique').on(t.unsubToken),
+  ],
+);
+
+/**
  * 收藏（与用户 GitHub star 双向同步，starred_on_github 记录同步状态）。
  */
 export const favorites = pgTable(

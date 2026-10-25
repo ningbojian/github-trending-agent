@@ -9,3 +9,6 @@ coverage/
 # 本地联调临时脚本与 env 缓存（含凭据，不入库）
 tmp-*
 tmp-local-env-cache.json
+# 编辑器/工具的本机设置（不入库）
+.vscode/
+.claude/settings.local.json

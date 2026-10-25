@@ -21,10 +21,10 @@ import {
   handlePushTime,
   handleSubscribe,
   handleUnsubscribe,
-  WELCOME_MESSAGE,
 } from './onboarding.js';
 import { sendWeComText } from './api.js';
 import { handleSearch } from './reply.js';
+import { sendWelcomeFlow } from './welcome.js';
 
 export interface InboundMessage {
   toUserName: string;
@@ -33,6 +33,8 @@ export interface InboundMessage {
   msgType: string;
   content: string;
   msgId: string;
+  /** 事件类型（MsgType=event 时有值，如 enter_agent）；普通消息为空串。 */
+  event?: string;
 }
 
 export type MessageHandler = (msg: InboundMessage) => Promise<void> | void;
@@ -126,7 +128,7 @@ const PUSH_INTERVAL_PATTERN = new RegExp(
 );
 
 /** 尾部中英文标点（精确/前缀分发与疑似命令判定前统一剥除，「帮助。」也能命中）。 */
-const TRAILING_PUNCT_RE = /[。！？!?；;，,]+$/;
+const TRAILING_PUNCT_RE = /[。！？!?；;，,．.…]+$/;
 
 /** 「我的收藏」带了多余内容时的用法提示。 */
 export const LIST_USAGE_REPLY = '用法：直接回复「我的收藏」即可（无需参数）';
@@ -191,10 +193,28 @@ function dispatchSafely(
 }
 
 /**
+ * enter_agent 事件（用户进入应用，含刚加入应用后的首次进入）：
+ * 确保订阅者行存在；只有新用户才送礼包（欢迎 + 首日简报）。
+ * 老用户每次进入都会触发该事件——绝不重复推送。
+ * 与文本路径同样 fail-open：事件处理失败只记日志，不影响后续消息。
+ */
+async function handleEnterAgent(msg: InboundMessage): Promise<void> {
+  try {
+    const isNew = await ensureSubscriber(msg);
+    if (isNew) {
+      await sendWelcomeFlow(msg);
+    }
+  } catch (err) {
+    console.error('enter_agent handling failed:', err);
+  }
+}
+
+/**
  * 分发一条入站消息：
- * - 非 text 类型：静默忽略（返回 resolved promise）
- * - text 先 ensureSubscriber（首条消息自动开通订阅者行；新用户先收欢迎语，
- *   再继续处理原消息 —— 欢迎语与 handler 回复可能同时到达，欢迎语在前）
+ * - event：仅 enter_agent（新用户礼包），其余事件静默忽略（返回 resolved promise）
+ * - 非 text 非 event：静默忽略
+ * - text 先 ensureSubscriber（首条消息自动开通订阅者行；新用户先送礼包
+ *   （欢迎语 + 首日简报），再继续处理原消息 —— 简报写缓存必须先于原消息回复写缓存）
  * - 分发顺序：「帮助」→「取消收藏 N」→「收藏 N」→「我的收藏」（精确）→
  *   「绑定」（精确）→「订阅 …」（前缀）→「退订」（精确）→「条数 …」（前缀）→
  *   「每天 H 点/推送时间 …」「每 N 天」（锚定）→
@@ -204,6 +224,13 @@ function dispatchSafely(
  *   单次回发兜底文案（routeMessage 实际不再 reject；回调端点的 catch 仅作第二道安全网）。
  */
 export async function routeMessage(msg: InboundMessage): Promise<void> {
+  // Task 6：enter_agent 是「加入即收到首日简报」的第二触发点（另一处是首条文本）。
+  if (msg.msgType === 'event') {
+    if (msg.event === 'enter_agent') {
+      await handleEnterAgent(msg);
+    }
+    return;
+  }
   if (msg.msgType !== 'text') {
     return;
   }
@@ -212,10 +239,11 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
   const isNew = await ensureSubscriber(msg);
   if (isNew) {
     try {
-      await sendWeComText(msg.fromUserName, WELCOME_MESSAGE);
+      // Task 6：礼包 = 欢迎语 + 首日简报；必须先于原消息回复（「收藏 N」缓存顺序）。
+      await sendWelcomeFlow(msg);
     } catch (err) {
-      // 欢迎语发送失败不阻塞原消息处理（fail-open）。
-      console.warn('welcome send failed:', err);
+      // 礼包发送失败不阻塞原消息处理（fail-open）。
+      console.warn('welcome flow failed:', err);
     }
   }
 

@@ -83,6 +83,16 @@ vi.mock('@vercel/functions', () => ({
   },
 }));
 
+/** Task 6：enter_agent 的礼包流程单独测；回调链路只验证「事件被解析并分发给它」。 */
+const welcomeMock = vi.hoisted(() => ({ sendWelcomeFlow: vi.fn() }));
+
+// onboarding 会 `export { WELCOME_MESSAGE } from './welcome.js'`；
+// mock 里补上该导出，避免 re-export 绑定在 mock 模块上解析失败。
+vi.mock('../src/wecom/welcome', () => ({
+  sendWelcomeFlow: welcomeMock.sendWelcomeFlow,
+  WELCOME_MESSAGE: '欢迎',
+}));
+
 function crypt(): WxbizMsgCrypt {
   return new WxbizMsgCrypt(TOKEN, AES_KEY, CORP_ID);
 }
@@ -108,6 +118,7 @@ function inboundXml(
     msgType: string;
     content: string;
     msgId: string;
+    event: string;
   }> = {},
 ): string {
   const {
@@ -115,8 +126,11 @@ function inboundXml(
     msgType = 'text',
     content = 'python 热榜',
     msgId = '1001',
+    event = '',
   } = overrides;
-  return `<xml><ToUserName><![CDATA[${CORP_ID}]]></ToUserName><FromUserName><![CDATA[${fromUserName}]]></FromUserName><CreateTime>1409659813</CreateTime><MsgType><![CDATA[${msgType}]]></MsgType><Content><![CDATA[${content}]]></Content><MsgId><![CDATA[${msgId}]]></MsgId></xml>`;
+  const eventXml =
+    event === '' ? '' : `<Event><![CDATA[${event}]]></Event>`;
+  return `<xml><ToUserName><![CDATA[${CORP_ID}]]></ToUserName><FromUserName><![CDATA[${fromUserName}]]></FromUserName><CreateTime>1409659813</CreateTime><MsgType><![CDATA[${msgType}]]></MsgType><Content><![CDATA[${content}]]></Content>${eventXml}<MsgId><![CDATA[${msgId}]]></MsgId></xml>`;
 }
 
 function mockRes() {
@@ -177,6 +191,8 @@ beforeEach(() => {
   dbState.insertValues = [];
   resetHandlers();
   resetAccessTokenCache();
+  welcomeMock.sendWelcomeFlow.mockReset();
+  welcomeMock.sendWelcomeFlow.mockResolvedValue(undefined);
   registerHandlers({
     help: helpHandler,
     favorite: favoriteHandler,
@@ -275,6 +291,7 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
       msgType: 'text',
       content: 'python 热榜',
       msgId: '1001',
+      event: '',
     });
     expect(res.statusCode).toBe(200);
   });
@@ -305,7 +322,33 @@ describe('POST /api/wecom-callback — 解密 + 异步分发时序', () => {
     expect(res.body).toBe('');
   });
 
-  it('签名无效时返回 401 且不分发', async () => {
+  it('enter_agent 事件（新用户）→ 解析出 Event 并异步送礼包，事件不可被动回复（200 空串）', async () => {
+    dbState.selectRows = []; // 新用户：ensureSubscriber 走 insert
+
+    const { req, res } = postRequest(
+      inboundXml({ msgType: 'event', event: 'enter_agent', content: '' }),
+    );
+
+    handler(req, res);
+
+    // 事件消息没有被动回复通道：响应体必须是空串（text 才带回执 XML）。
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('');
+
+    await flushAsync();
+
+    expect(welcomeMock.sendWelcomeFlow).toHaveBeenCalledTimes(1);
+    expect(welcomeMock.sendWelcomeFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromUserName: 'alice',
+        msgType: 'event',
+        event: 'enter_agent',
+      }),
+    );
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('签名校验失败（msg_signature 错误）→ 401，且不再分发', async () => {
     const { req, res } = postRequest(inboundXml());
     req.query.msg_signature = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
 

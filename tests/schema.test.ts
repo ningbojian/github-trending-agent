@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import {
+  emailSubscribers,
   favorites,
   kvCache,
   repos,
@@ -145,6 +146,85 @@ describe('subscribers', () => {
     );
     expect(githubLogin?.notNull).toBe(false);
     expect(githubTokenEnc?.notNull).toBe(false);
+  });
+});
+
+describe('email_subscribers', () => {
+  it('defines the email_subscribers table with the expected columns', () => {
+    const cfg = getTableConfig(emailSubscribers);
+    expect(cfg.name).toBe('email_subscribers');
+    expect(columnNames(emailSubscribers)).toEqual([
+      'active',
+      'confirm_sent_at',
+      'confirm_token',
+      'confirmed',
+      'confirmed_at',
+      'consecutive_failures',
+      'created_at',
+      'email',
+      'id',
+      'last_sent_at',
+      'preferences',
+      'unsub_token',
+    ]);
+  });
+
+  it('enforces unique(email) 与 unique(unsub_token)', () => {
+    expect(uniqueCombos(emailSubscribers)).toContain('email');
+    expect(uniqueCombos(emailSubscribers)).toContain('unsub_token');
+  });
+
+  it('last_sent_at / confirm_sent_at 为带时区 timestamptz', () => {
+    const cfg = getTableConfig(emailSubscribers);
+    for (const name of ['last_sent_at', 'confirm_sent_at']) {
+      const column = cfg.columns.find((c) => c.name === name);
+      expect(column?.columnType).toBe('PgTimestamp');
+      expect(
+        (column as unknown as { withTimezone?: boolean } | undefined)
+          ?.withTimezone,
+      ).toBe(true);
+      expect(column?.notNull).toBe(false);
+    }
+  });
+
+  it('confirm_token 可空（确认后置 NULL），unsub_token 必填', () => {
+    const cfg = getTableConfig(emailSubscribers);
+    expect(
+      cfg.columns.find((column) => column.name === 'confirm_token')?.notNull,
+    ).toBe(false);
+    expect(
+      cfg.columns.find((column) => column.name === 'unsub_token')?.notNull,
+    ).toBe(true);
+  });
+
+  it('stores preferences as jsonb and defaults to the 09:00/每天/15 条 profile', () => {
+    const preferences = getTableConfig(emailSubscribers).columns.find(
+      (column) => column.name === 'preferences',
+    );
+    expect(preferences?.columnType).toBe('PgJsonb');
+    expect(preferences?.notNull).toBe(true);
+    // 默认值以 sql 片段形式存储（与 subscribers.preferences 同风格），
+    // 因此序列化后按字段名/取值断言。
+    const def = JSON.stringify(preferences?.default);
+    expect(def).toContain('pushTime');
+    expect(def).toContain('09:00');
+    expect(def).toContain('intervalDays');
+    expect(def).toContain('digestCount');
+    expect(def).toContain('15');
+  });
+
+  it('confirmed 默认 false、active 默认 true、consecutive_failures 默认 0', () => {
+    const cfg = getTableConfig(emailSubscribers);
+    expect(
+      cfg.columns.find((column) => column.name === 'confirmed')?.default,
+    ).toBe(false);
+    expect(cfg.columns.find((column) => column.name === 'active')?.default).toBe(
+      true,
+    );
+    expect(
+      cfg.columns.find((column) => column.name === 'consecutive_failures')
+        ?.default,
+    ).toBe(0);
   });
 });
 

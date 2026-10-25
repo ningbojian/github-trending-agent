@@ -121,11 +121,45 @@ vi.mock('../src/config', () => ({
   env: { CRON_SECRET: 'unit-test-cron-secret' },
 }));
 
+/**
+ * cron 现在还会：构建/读取当日快照、推送邮件、刷新企微成员数缓存。
+ * - 快照默认 null → pushDigests 走既有 buildDigestWithEntries 路径（本文件断言不变）。
+ * - 选择层保留真实实现（纯函数），避免「测 mock」。
+ */
+const snapshotMock = vi.hoisted(() => ({
+  getDailySnapshot: vi.fn(async (): Promise<unknown> => null),
+}));
+
+vi.mock('../src/agent/digest-snapshot', async () => {
+  const actual = await vi.importActual<
+    typeof import('../src/agent/digest-snapshot')
+  >('../src/agent/digest-snapshot');
+  return { ...actual, getDailySnapshot: snapshotMock.getDailySnapshot };
+});
+
+const emailPushMock = vi.hoisted(() => ({
+  pushEmailDigests: vi.fn(async () => ({ sent: 0, skipped: 0, failed: 0 })),
+}));
+
+vi.mock('../src/email/push', () => ({
+  pushEmailDigests: emailPushMock.pushEmailDigests,
+}));
+
+const capacityMock = vi.hoisted(() => ({
+  refreshWeComMemberCount: vi.fn(async () => null),
+}));
+
+vi.mock('../src/wecom/capacity', () => ({
+  refreshWeComMemberCount: capacityMock.refreshWeComMemberCount,
+}));
+
 import {
   buildDigestForSubscriber,
+  buildDigestFromSnapshot,
   buildDigestWithEntries,
   DIGEST_FOOTER,
   invalidateRecentResults,
+  markDigestSent,
   pushDigests,
   saveRecentResults,
   shanghaiHHMM,
@@ -631,8 +665,112 @@ describe('buildDigestWithEntries — entries 与消息展示一致', () => {
 });
 
 // ---------------------------------------------------------------------------
-// saveRecentResults —— delete+insert 覆盖写（与 search.ts 同语义；空列表不写）
+// buildDigestFromSnapshot —— 快照优先（企微仍走 3800 字节截断）
 // ---------------------------------------------------------------------------
+function makeSnapshotItem(
+  fullName: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    fullName,
+    description: null,
+    topics: [],
+    language: 'rust',
+    stars: 100,
+    starsDelta: 10,
+    isNew: false,
+    htmlUrl: `https://github.com/${fullName}`,
+    summary: `${fullName} 的中文简介。`,
+    ...overrides,
+  };
+}
+
+describe('buildDigestFromSnapshot — 快照优先', () => {
+  const snapshot = {
+    date: '2026-10-25',
+    dataDate: '2026-10-25',
+    abstract: '今天的主题是 AI 工具。',
+    items: [
+      makeSnapshotItem('s/one', { language: 'rust' }),
+      makeSnapshotItem('s/two', { language: 'typescript' }),
+    ],
+  };
+
+  it('selects with the same preference semantics and prefixes the abstract', async () => {
+    const { content, entries } = await buildDigestFromSnapshot(
+      makeSub({
+        preferences: { languages: ['rust'], keywords: [], digestCount: 5 },
+      }),
+      snapshot,
+    );
+
+    expect(content).toContain('📊 今日 GitHub 热榜简报（2026-10-25）');
+    expect(content).toContain('今天的主题是 AI 工具。');
+    expect(content).toContain('s/one');
+    expect(content).toContain('s/one 的中文简介。');
+    expect(content).not.toContain('s/two');
+    expect(entries).toEqual([{ fullName: 's/one' }]);
+  });
+
+  it('keeps the 3800-byte truncation and reports only the shown entries', async () => {
+    const items = Array.from({ length: 20 }, (_, index) =>
+      makeSnapshotItem(`owner${index}/repo-with-a-rather-long-name-${index}`, {
+        stars: 123456,
+        starsDelta: 2345,
+        summary: `这是一段很长的上榜理由编号${index}，用来撑爆字节上限。`.repeat(4),
+      }),
+    );
+    const { content, entries } = await buildDigestFromSnapshot(
+      makeSub({
+        preferences: { languages: [], keywords: [], digestCount: 20 },
+      }),
+      { date: '2026-10-25', dataDate: '2026-10-25', abstract: null, items },
+    );
+
+    expect(content).toContain('（内容过长，已截断）');
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.length).toBeLessThan(20);
+    for (const entry of entries) {
+      expect(content).toContain(entry.fullName);
+    }
+    expect(content).not.toContain('owner19/repo-with-a-rather-long-name-19');
+  });
+
+  it('falls back to the empty notice when nothing matches', async () => {
+    const { content, entries } = await buildDigestFromSnapshot(
+      makeSub({ preferences: { languages: ['go'], keywords: [], digestCount: 5 } }),
+      snapshot,
+    );
+    expect(content).toContain('今日暂无符合条件的热榜项目。');
+    expect(entries).toEqual([]);
+  });
+});
+
+describe('pushDigests — 快照可用时优先且不查 trending 表', () => {
+  it('sends the snapshot content without executing the fallback SQL', async () => {
+    snapshotMock.getDailySnapshot.mockResolvedValueOnce({
+      date: '2026-10-25',
+      dataDate: '2026-10-25',
+      abstract: '快照里的今日概览。',
+      items: [makeSnapshotItem('s/one')],
+    });
+    dbMock.selectRows.push(makeSub());
+    dbMock.claimResults.push([{ id: 1 }]);
+
+    const result = await pushDigests(new Date('2026-10-25T01:00:00Z'));
+
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(dbMock.executeQueries).toHaveLength(0);
+    const content = apiMock.sendWeComMarkdown.mock.calls[0][1] as string;
+    expect(content).toContain('快照里的今日概览。');
+    expect(content).toContain('s/one');
+    // 简报写入 search_caches 的 entries 与消息展示一致。
+    const cached = dbMock.insertCalls.find((call) => call.table === searchCaches);
+    expect(cached?.values.results).toEqual([{ fullName: 's/one' }]);
+  });
+});
+
+
 describe('saveRecentResults — search_caches 覆盖写', () => {
   it('非空 items：先 delete 该用户全部行，再 insert 一行 { fullName }[]', async () => {
     await saveRecentResults('alice', [
@@ -942,6 +1080,25 @@ describe('pushDigests — 推送时间/间隔门控与抢占', () => {
 
     expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
     expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
+    // 成功发送绝不移交回滚：只有抢占（claim）的 update，没有普通 update。
+    // （mutation：把回滚移进 finally 会让这里变红——那会造成每个整点重复推送。）
+    expect(dbMock.updateCalls.filter((c) => c.kind === 'update')).toHaveLength(0);
+  });
+
+  it('pushTime 09:30 的分钟位参与门控：北京 09:29 不发、09:30 发', async () => {
+    dbMock.selectRows.push(
+      subWith({ languages: [], keywords: [], pushTime: '09:30' }),
+    );
+
+    const before = await pushDigests(new Date('2026-10-23T01:29:00Z')); // 北京 09:29
+    expect(before).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
+    expect(dbMock.updateCalls).toHaveLength(0);
+
+    dbMock.executeRows.push(makeEntry('a/one'));
+    const at = await pushDigests(new Date('2026-10-23T01:30:00Z')); // 北京 09:30
+    expect(at).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(1);
   });
 
   it('当天已发（last_digest_at 为北京当日）→ 不重发、不抢占', async () => {
@@ -1060,6 +1217,13 @@ describe('pushDigests — 推送时间/间隔门控与抢占', () => {
     expect(compiled.sql).toContain('"subscribers"."active"');
     expect(compiled.params).toContain(7); // id
     expect(compiled.params).toContain(3); // intervalDays
+    // 日期比较的**方向**必须钉死：上次北京日期 < 今天（而不是 >）。
+    // mutation：把 `<` 翻成 `>` 时本断言变红——那会让所有老用户永久 skipped（只发首日）。
+    const normalized = compiled.sql.replace(/\s+/g, ' ');
+    expect(normalized).toContain(
+      `"subscribers"."last_digest_at" AT TIME ZONE 'Asia/Shanghai')::date < (now() AT TIME ZONE 'Asia/Shanghai')::date`,
+    );
+    expect(normalized).not.toContain(')::date > (');
     // SET last_digest_at = now()（DB 时钟，与条件里的 now() 同源）
     const setValue = compileQuery(claim?.values.lastDigestAt);
     expect(setValue.sql).toContain('now()');
@@ -1109,6 +1273,32 @@ describe('pushDigests — 推送时间/间隔门控与抢占', () => {
 
     expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
     expect(apiMock.sendWeComMarkdown).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// markDigestSent —— 首日简报（加入即送）记账
+// ---------------------------------------------------------------------------
+describe('markDigestSent — 首日简报发送成功后的当日去重', () => {
+  it('按 wecom_userid 回填「北京当日 00:00」（不是 now()，否则 24h 间隔门控会把推送时间永久漂移）', async () => {
+    await markDigestSent('alice');
+
+    expect(dbMock.updateCalls).toHaveLength(1);
+    const update = dbMock.updateCalls[0]!;
+    expect(update.kind).toBe('update');
+    expect(update.table).toBe(subscribers);
+    const setValue = compileQuery(update.values.lastDigestAt);
+    // 关键不变量：回填的是北京墙钟的当日零点，再转回 timestamptz。
+    // mutation：改回 now() → 本断言变红（14:00 入场的用户次日 09:00 永远收不到）。
+    const normalized = setValue.sql.replace(/\s+/g, ' ');
+    expect(normalized).toContain(
+      "date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'",
+    );
+    expect(normalized).not.toMatch(/^now\(\)$/);
+
+    const compiled = compileQuery(update.condition);
+    expect(compiled.sql).toContain('"subscribers"."wecom_userid"');
+    expect(compiled.params).toContain('alice');
   });
 });
 
@@ -1182,7 +1372,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
     expect(dbMock.selectConditions).toHaveLength(0);
   });
 
-  it('Bearer <CRON_SECRET> 正确 → 执行 pushDigests 并返回 {sent, skipped, failed} JSON', async () => {
+  it('Bearer <CRON_SECRET> 正确 → 执行 pushDigests 并返回 {sent, skipped, failed, email} JSON', async () => {
     dbMock.selectRows.push(
       makeSub(),
       makeSub({ id: 2, wecomUserid: 'bob' }),
@@ -1193,9 +1383,24 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
     await handler(cronReq('Bearer unit-test-cron-secret'), res);
 
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body ?? '')).toEqual({ sent: 2, skipped: 0, failed: 0 });
+    expect(JSON.parse(res.body ?? '')).toEqual({
+      sent: 2,
+      skipped: 0,
+      failed: 0,
+      email: { sent: 0, skipped: 0, failed: 0 },
+    });
     expect(res.headers['content-type']).toContain('application/json');
     expect(apiMock.sendWeComMarkdown).toHaveBeenCalledTimes(2);
+    // 两个渠道共用同一份快照：cron 读一次、pushDigests 内再读一次，
+    // 第二次命中 kv_cache（真实环境每天只构建一轮模型）。
+    expect(snapshotMock.getDailySnapshot).toHaveBeenCalledTimes(2);
+    // cron 请求没有用户头，站点根地址由 resolveBaseUrl 兜底后显式传入，
+    // 否则邮件里的设置/退订链接会回落 localhost。
+    expect(emailPushMock.pushEmailDigests).toHaveBeenCalledWith({
+      snapshot: null,
+      baseUrl: 'http://localhost:3000',
+    });
+    expect(capacityMock.refreshWeComMemberCount).toHaveBeenCalledTimes(1);
   });
 });
 

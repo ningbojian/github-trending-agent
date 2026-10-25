@@ -18,10 +18,25 @@ vi.mock('../src/config', () => ({ env: ENV }));
 // ---------------------------------------------------------------------------
 const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
+  // router 现在会加载 ./welcome.js，而 welcome 从 api 里取 sendWeComMarkdown；
+  // mock 工厂必须提供该导出，否则 ESM 绑定期报「No export is defined on the mock」。
+  sendWeComMarkdown: vi.fn(),
 }));
 
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
+  sendWeComMarkdown: apiMock.sendWeComMarkdown,
+}));
+
+/**
+ * router 现在会在新用户路径调送欢迎礼包（欢迎语 + 首日简报）。
+ * 本文件的分发测试只关心「落到哪个 handler」，且多数用例的 select 队列为空
+ * （会被判定为新用户）——真实礼包会多打一条 sendWeComText + 尝试跑真实简报查询。
+ * 整块替换掉，保持既有断言与输出干净。
+ */
+vi.mock('../src/wecom/welcome', () => ({
+  sendWelcomeFlow: vi.fn().mockResolvedValue(undefined),
+  WELCOME_MESSAGE: '欢迎',
 }));
 
 const dbMock = vi.hoisted(() => ({

@@ -61,6 +61,7 @@ import {
   formatSearchReply,
   handleSearch,
 } from '../src/wecom/reply';
+import { ABOUT_REPLY, OFF_TOPIC_REPLY } from '../src/wecom/onboarding';
 import { routeMessage } from '../src/wecom/router';
 
 function makeItem(overrides: Partial<SearchResultItem> = {}): SearchResultItem {
@@ -92,6 +93,7 @@ function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
 
 /** 结构化解析产物：绕开 fallback 的不确定性，直接钉 query 形状。 */
 function makeQuery(overrides: Partial<{
+  intent: 'search' | 'about' | 'off_topic';
   languages: string[];
   keywords: string[];
   period: 'today' | 'week' | 'month' | 'all';
@@ -100,6 +102,7 @@ function makeQuery(overrides: Partial<{
   topN: number;
 }> = {}) {
   return {
+    intent: 'search' as const,
     languages: [],
     keywords: [],
     period: 'week',
@@ -450,6 +453,72 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → 文本发
       expect.objectContaining({ message: 'wecom down' }),
     );
     errorSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 意图边界：about / off_topic 只回文案，绝不检索、绝不写 search_caches。
+// 「收藏 N」只应指向最后一次真实列表，所以边界分支连 searchTrending 都不能碰。
+// ---------------------------------------------------------------------------
+describe('handleSearch 意图边界（about / off_topic 不检索）', () => {
+  async function expectNoSearch(): Promise<void> {
+    expect(searchMock.searchTrending).not.toHaveBeenCalled();
+    expect(summaryMock.loadRepoSummaries).not.toHaveBeenCalled();
+  }
+
+  it('规则命中 about（「你是谁」）→ 回产品介绍，不调模型、不检索', async () => {
+    await handleSearch(makeMsg({ content: '你是谁' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', ABOUT_REPLY);
+    expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
+    await expectNoSearch();
+  });
+
+  it('规则命中 off_topic（「今天天气怎么样」）→ 回边界引导，不调模型、不检索', async () => {
+    await handleSearch(makeMsg({ content: '今天天气怎么样' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', OFF_TOPIC_REPLY);
+    expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
+    await expectNoSearch();
+  });
+
+  it('长句规则拿不准 → 交给 LLM；LLM 判 about 也不检索', async () => {
+    const content = '麻烦你认真介绍一下你自己到底是做什么用的呢';
+    expect(content.length).toBeGreaterThan(20);
+    llmMock.generateObjectSafe.mockResolvedValue(makeQuery({ intent: 'about' }));
+
+    await handleSearch(makeMsg({ content }));
+
+    expect(llmMock.generateObjectSafe).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', ABOUT_REPLY);
+    await expectNoSearch();
+  });
+
+  it('LLM 判 off_topic（「明天下雨吗」这类换过说法的长句）→ 不检索', async () => {
+    const content = '能不能帮我查一下明天上午的天气情况会不会下雨呢';
+    llmMock.generateObjectSafe.mockResolvedValue(
+      makeQuery({ intent: 'off_topic' }),
+    );
+
+    await handleSearch(makeMsg({ content }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith(
+      'alice',
+      OFF_TOPIC_REPLY,
+    );
+    await expectNoSearch();
+  });
+
+  it('intent 缺失（旧解析产物/fallback）按搜索处理，行为不变', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue(makeQuery());
+    searchMock.searchTrending.mockResolvedValue([
+      makeItem({ fullName: 'a/b' }),
+    ]);
+
+    await handleSearch(makeMsg({ content: 'python 热榜' }));
+
+    expect(searchMock.searchTrending).toHaveBeenCalledTimes(1);
   });
 });
 

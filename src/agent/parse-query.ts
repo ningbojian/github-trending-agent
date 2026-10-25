@@ -3,6 +3,11 @@ import { generateObjectSafe } from './llm.js';
 
 /** LLM 结构化解析的输出契约（检索服务 Task 8 消费）。 */
 export const SearchQuerySchema = z.object({
+  /**
+   * 一级意图：search = 找项目；about = 问这个产品是谁；off_topic = 明显无关。
+   * 规则层（intent.ts）已经拦掉高置信的短句，这里主要接住换过说法的长句。
+   */
+  intent: z.enum(['search', 'about', 'off_topic']),
   languages: z.array(z.string()),
   keywords: z.array(z.string()),
   period: z.enum(['today', 'week', 'month', 'all']),
@@ -15,6 +20,7 @@ export type SearchQuery = z.infer<typeof SearchQuerySchema>;
 
 /** 文本无任何信号时的默认查询。 */
 const DEFAULT_SEARCH_QUERY: SearchQuery = {
+  intent: 'search',
   languages: [],
   keywords: [],
   period: 'week',
@@ -56,31 +62,43 @@ function normalizeQuery(query: SearchQuery): SearchQuery {
 function buildPrompt(text: string): string {
   return [
     '你是 GitHub Trending 查询解析器。把用户消息解析成结构化 JSON。',
-    '字段：languages（编程语言，小写）、keywords（主题词，文本未提及则为空数组）、',
+    '字段：intent（search|about|off_topic）、languages（编程语言，小写）、',
+    'keywords（主题词，文本未提及则为空数组）、',
     "period（today|week|month|all）、minStars（star 数门槛，未提及为 null）、",
     "sortBy（stars_delta|stars|new）、topN（返回条数，默认 10）。",
+    'intent 判定：在问这个产品「你是谁/能干什么」→ about；',
+    '与 GitHub 找项目完全无关（天气、股票、翻译、写诗、报时…）→ off_topic；',
+    '其余一律 search —— 「看看热榜」「今天有什么」都属于 search，绝不判成 off_topic。',
     '铁律：只允许从给定文本推断，禁止编造文本中没有的信息；无信号的字段一律用默认值。',
     '「比较火」「热门」「流行」只表示热度排序（sortBy），不得作为 keywords。',
     '',
     '示例 1',
     '输入：本周 python 里 ai 相关的',
-    '输出：{"languages":["python"],"keywords":["ai"],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '输出：{"intent":"search","languages":["python"],"keywords":["ai"],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
     '',
     '示例 2',
     '输入：帮我看下最近 star 增长快的 rust 项目',
-    '输出：{"languages":["rust"],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '输出：{"intent":"search","languages":["rust"],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
     '',
     '示例 3',
     '输入：本月 typescript star 超过 10k 的前 5 个新项目',
-    '输出：{"languages":["typescript"],"keywords":[],"period":"month","minStars":10000,"sortBy":"new","topN":5}',
+    '输出：{"intent":"search","languages":["typescript"],"keywords":[],"period":"month","minStars":10000,"sortBy":"new","topN":5}',
     '',
     '示例 4',
     '输入：啊',
-    '输出：{"languages":[],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '输出：{"intent":"search","languages":[],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
     '',
     '示例 5',
     '输入：找一下本周比较火的Java项目',
-    '输出：{"languages":["java"],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '输出：{"intent":"search","languages":["java"],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '',
+    '示例 6',
+    '输入：你都会些啥',
+    '输出：{"intent":"about","languages":[],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+    '',
+    '示例 7',
+    '输入：明天下雨吗',
+    '输出：{"intent":"off_topic","languages":[],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
     '',
     `输入：${text}`,
     '输出：',
@@ -276,6 +294,7 @@ export function fallbackParse(text: string): SearchQuery {
   }
 
   return {
+    intent: 'search',
     languages,
     keywords,
     period,

@@ -1,7 +1,9 @@
+import { classifyByRules } from '../agent/intent.js';
 import { parseSearchQuery } from '../agent/parse-query.js';
 import { loadRepoSummaries } from '../agent/repo-summary.js';
 import { searchTrending, type SearchResultItem } from '../agent/search.js';
 import { sendWeComText } from './api.js';
+import { ABOUT_REPLY, OFF_TOPIC_REPLY } from './onboarding.js';
 import { formatEntryLine } from './text.js';
 import type { InboundMessage } from './router.js';
 
@@ -94,7 +96,14 @@ async function loadSummariesSafe(
 }
 
 /**
- * 搜索 handler：parse → search → format → sendWeComText。
+ * 搜索 handler：意图判断 → parse → search → format → sendWeComText。
+ *
+ * 意图边界（只拦明显无关）：先跑零成本规则（intent.ts），命中直接回文案；
+ * 规则拿不准才交给 LLM 的结构化解析，再看它的 intent 字段。
+ * about / off_topic 分支**绝不调用 searchTrending**——既不消耗检索配额，
+ * 也不写 search_caches，保证「收藏 N」始终指向用户最后收到的真实列表。
+ * 拿不准一律按搜索处理：漏判退化成老行为，不会误伤「今天有什么」这类正常提问。
+ *
  * 首次检索为空且 query 带关键词时，去掉 keywords 再查一次（关键词常是
  * 用户主题词而非榜单词，ILIKE 易 0 命中，直接放弃等于「没找到」误伤）。
  * 空结果回引导文案；有结果加载中文简介后推送编号列表。
@@ -103,7 +112,26 @@ async function loadSummariesSafe(
  */
 export async function handleSearch(msg: InboundMessage): Promise<void> {
   try {
+    const ruled = classifyByRules(msg.content);
+    if (ruled === 'about') {
+      await sendWeComText(msg.fromUserName, ABOUT_REPLY);
+      return;
+    }
+    if (ruled === 'off_topic') {
+      await sendWeComText(msg.fromUserName, OFF_TOPIC_REPLY);
+      return;
+    }
+
     const query = await parseSearchQuery(msg.content);
+    if (query.intent === 'about') {
+      await sendWeComText(msg.fromUserName, ABOUT_REPLY);
+      return;
+    }
+    if (query.intent === 'off_topic') {
+      await sendWeComText(msg.fromUserName, OFF_TOPIC_REPLY);
+      return;
+    }
+
     let items = await searchTrending(query, msg.fromUserName);
     if (items.length === 0 && query.keywords.length > 0) {
       items = await searchTrending(

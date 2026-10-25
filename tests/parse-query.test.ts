@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../src/agent/llm', () => ({ generateObjectSafe: mocks.generateObjectSafe }));
 
 const DEFAULTS: SearchQuery = {
+  intent: 'search',
   languages: [],
   keywords: [],
   period: 'week',
@@ -116,7 +117,7 @@ describe('parseSearchQuery — LLM path', () => {
     const prompt = mocks.generateObjectSafe.mock.calls[0]?.[1] as string;
     expect(prompt).toContain('找一下本周比较火的Java项目');
     expect(prompt).toContain(
-      '{"languages":["java"],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
+      '{"intent":"search","languages":["java"],"keywords":[],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}',
     );
     expect(prompt).toMatch(/比较火.*热门.*流行/);
     expect(prompt).toContain('不得作为 keywords');
@@ -130,6 +131,7 @@ describe('parseSearchQuery — regex fallback when LLM returns null', () => {
 
   it('"本周 python 里 ai 相关的" → python / ai / week', async () => {
     await expect(parseSearchQuery('本周 python 里 ai 相关的')).resolves.toEqual({
+      intent: 'search',
       languages: ['python'],
       keywords: ['ai'],
       period: 'week',
@@ -141,6 +143,7 @@ describe('parseSearchQuery — regex fallback when LLM returns null', () => {
 
   it('"帮我看下最近 star 增长快的 rust 项目" → rust / week / stars_delta', async () => {
     await expect(parseSearchQuery('帮我看下最近 star 增长快的 rust 项目')).resolves.toEqual({
+      intent: 'search',
       languages: ['rust'],
       keywords: [],
       period: 'week',
@@ -165,6 +168,7 @@ describe('parseSearchQuery — regex fallback when LLM returns null', () => {
 describe('fallbackParse (direct, pure)', () => {
   it('extracts multiple languages and maps 新 → new', () => {
     expect(fallbackParse('python 和 rust 的新项目')).toEqual({
+      intent: 'search',
       languages: ['python', 'rust'],
       keywords: [],
       period: 'week',
@@ -176,6 +180,7 @@ describe('fallbackParse (direct, pure)', () => {
 
   it('extracts period today, minStars and topN', () => {
     expect(fallbackParse('今天 go 项目 5000 star 以上，前 5')).toEqual({
+      intent: 'search',
       languages: ['go'],
       keywords: [],
       period: 'today',
@@ -204,6 +209,7 @@ describe('fallbackParse (direct, pure)', () => {
 
   it('"找一下本周比较火的Java项目" → java / keywords=[] / week（热度语与请求语全部剔除）', () => {
     expect(fallbackParse('找一下本周比较火的Java项目')).toEqual({
+      intent: 'search',
       languages: ['java'],
       keywords: [],
       period: 'week',
@@ -273,6 +279,7 @@ describe('fallbackParse (direct, pure)', () => {
 
   it('新增语言别名 html / css / vue 可识别且不入 keywords', () => {
     expect(fallbackParse('本周 html css vue 项目')).toEqual({
+      intent: 'search',
       languages: ['html', 'css', 'vue'],
       keywords: [],
       period: 'week',

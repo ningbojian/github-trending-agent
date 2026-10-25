@@ -41,6 +41,7 @@ import { buildSearchSql, searchTrending } from '../src/agent/search';
 /** 默认查询（模拟 LLM 已解析的结果），各用例按维度覆盖。 */
 function makeQuery(overrides: Partial<SearchQuery> = {}): SearchQuery {
   return {
+    intent: 'search',
     languages: [],
     keywords: [],
     period: 'week',

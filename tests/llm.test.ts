@@ -136,6 +136,53 @@ describe('llm provider branching', () => {
     expect(mocks.createAlibaba).not.toHaveBeenCalled();
   });
 
+  it('opencode: uses the Go chat-completions endpoint instead of /responses', () => {
+    // OpenCode Go 的网关只提供 OpenAI 兼容的 chat/completions（models.dev:
+    // opencode-go → @ai-sdk/openai-compatible）。@ai-sdk/openai 的默认入口是
+    // /responses，必须显式 .chat()，否则 DeepSeek 这类模型直接 404。
+    mocks.env.LLM_PROVIDER = 'opencode';
+    const chat = vi.fn((modelId: string) => ({
+      provider: 'opencode-chat',
+      modelId,
+    }));
+    const client = Object.assign(vi.fn(), { chat, responses: vi.fn() });
+    mocks.createOpenAI.mockImplementation(() => client as never);
+
+    expect(llm()).toEqual({ provider: 'opencode-chat', modelId: 'test-model' });
+    expect(mocks.createOpenAI).toHaveBeenCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://opencode.ai/inference/go/openai/v1',
+      headers: {
+        'user-agent': 'github-trending-agent/1.0',
+        'x-opencode-session': 'ghtrending-digest',
+      },
+    });
+    expect(chat).toHaveBeenCalledWith('test-model');
+    // 绝不能走默认调用入口（那会打到 /responses）
+    expect(client).not.toHaveBeenCalled();
+    expect(mocks.createAnthropic).not.toHaveBeenCalled();
+  });
+
+  it('opencode: honours LLM_BASE_URL (pay-as-you-go endpoint)', () => {
+    mocks.env.LLM_PROVIDER = 'opencode';
+    mocks.env.LLM_BASE_URL = 'https://opencode.ai/inference/openai/v1';
+    const chat = vi.fn((modelId: string) => ({ provider: 'opencode-chat', modelId }));
+    mocks.createOpenAI.mockImplementation(
+      () => Object.assign(vi.fn(), { chat }) as never,
+    );
+
+    llm();
+
+    expect(mocks.createOpenAI).toHaveBeenCalledWith({
+      apiKey: 'test-llm-api-key',
+      baseURL: 'https://opencode.ai/inference/openai/v1',
+      headers: {
+        'user-agent': 'github-trending-agent/1.0',
+        'x-opencode-session': 'ghtrending-digest',
+      },
+    });
+  });
+
   it('zhipu / gemini / moonshot: use the built-in OpenAI-compatible endpoint', () => {
     mocks.env.LLM_PROVIDER = 'zhipu';
     expect(llm()).toEqual({ provider: 'openai', modelId: 'test-model' });
@@ -212,6 +259,7 @@ describe('llm provider branching', () => {
 
     expect(() => llm()).toThrow(/vertex/);
     expect(() => llm()).toThrow(/anthropic, openai, deepseek, ali, mimo/);
+    expect(() => llm()).toThrow(/opencode/);
     expect(mocks.createAnthropic).not.toHaveBeenCalled();
     expect(mocks.createOpenAI).not.toHaveBeenCalled();
     expect(mocks.createDeepSeek).not.toHaveBeenCalled();

@@ -88,6 +88,7 @@ LLM_MODEL=deepseek-chat      # 模型 ID
 | `deepseek` | DeepSeek 官方 | `deepseek-chat` |
 | `ali` | 阿里云百炼（`@ai-sdk/alibaba`） | `qwen-plus` |
 | `mimo` | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.6-flash` |
+| `opencode` | OpenCode Go 订阅 `https://opencode.ai/inference/go/openai/v1`（chat/completions） | `deepseek-v4.1-flash`、`glm-5.3-flash` |
 | `zhipu` | 智谱 `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` |
 | `moonshot` | Kimi `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` |
 | `doubao` | 火山方舟 `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6`（或推理接入点 ID） |
@@ -98,6 +99,7 @@ LLM_MODEL=deepseek-chat      # 模型 ID
 | `custom` | 由 `LLM_BASE_URL` 指定（**必填**） | 任何 OpenAI 兼容网关 |
 
 - 提供商名不区分大小写、前后空格会被裁掉；填了 `LLM_BASE_URL` 会**覆盖**内置 endpoint（换中转/代理时不用改代码）。
+- `opencode` 走 [OpenCode Console](https://opencode.ai/console/login) 的 key：订阅 Go（$10/月）时留空 `LLM_BASE_URL`；改用按量付费余额时把它设为 `https://opencode.ai/inference/openai/v1`。该网关只提供 chat/completions，代码已固定用 `.chat()` 入口。
 - 模型 key 是**服务端统一配置**（部署方一个 key 服务所有用户），不提供「用户自带大模型 key」：那需要把用户的 key 存入库中并额外加密，收益低、风险高。
 - 只用到结构化输出与短文本生成：换便宜模型完全够用；`REPO_SUMMARY_MODE=off` 可完全关闭简介生成（零 LLM 成本，简介退化为英文 description 截断）。
 - 切换后看 Vercel 日志里的 `[llm] provider=… model=… input_tokens=… output_tokens=…`，出现即调用成功；LLM 任何失败都只降级不报错（搜索回退正则解析、简介省略）。

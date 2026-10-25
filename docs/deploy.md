@@ -49,7 +49,7 @@ select table_name from information_schema.tables
 | 环境变量 | 必填/可选 | 归属服务与取值 |
 | --- | --- | --- |
 | `NEON_DATABASE_URL` | 必填 | Neon：第 1 步的连接串 |
-| `LLM_PROVIDER` | 必填 | LLM：`anthropic` \| `openai` \| `deepseek` \| `ali` \| `mimo` \| `zhipu` \| `moonshot` \| `doubao` \| `siliconflow` \| `openrouter` \| `gemini` \| `ollama` \| `custom`（常见厂商的内置 endpoint 见下表；不区分大小写，前后空格会被裁掉） |
+| `LLM_PROVIDER` | 必填 | LLM：`anthropic` \| `openai` \| `deepseek` \| `ali` \| `mimo` \| `opencode` \| `zhipu` \| `moonshot` \| `doubao` \| `siliconflow` \| `openrouter` \| `gemini` \| `ollama` \| `custom`（常见厂商的内置 endpoint 见下表；不区分大小写，前后空格会被裁掉） |
 | `LLM_API_KEY` | 必填 | LLM：提供商 API Key（`ollama` 本地部署可填任意非空串） |
 | `LLM_MODEL` | 必填 | LLM：模型 ID（如 `claude-sonnet-4-5`、`glm-4.6`、`kimi-k2-0905-preview`、`doubao-seed-1-6`） |
 | `LLM_BASE_URL` | **可选** | LLM：覆盖或自定义 OpenAI 兼容 endpoint（如 `https://your-proxy.example.com/v1`）。`LLM_PROVIDER=custom` 时**必填**；其他提供商填了就覆盖内置 endpoint |
@@ -75,7 +75,7 @@ select table_name from information_schema.tables
 | `WECOM_ACCEPTING` | **可选** | 落地页名额门控：`true`/`false` 显式覆盖，优先于成员数探测 |
 | `WECOM_MEMBER_LIMIT` | **可选** | 名额上限（默认 `100`；企业认证后按后台上限调整） |
 
-**LLM 提供商对照表**（除 `anthropic` / `mimo` 外均走 OpenAI 兼容协议；任一 `LLM_BASE_URL` 都可覆盖）：
+**LLM 提供商对照表**（除 `anthropic` / `mimo` 走 Anthropic 协议外，其余均走 OpenAI 兼容协议；任一 `LLM_BASE_URL` 都可覆盖）：
 
 | `LLM_PROVIDER` | 内置 endpoint | 常见 `LLM_MODEL` 示例 |
 | --- | --- | --- |
@@ -84,6 +84,7 @@ select table_name from information_schema.tables
 | `deepseek` | DeepSeek 官方 | `deepseek-chat` |
 | `ali` | 阿里云百炼（`@ai-sdk/alibaba`） | `qwen-plus` |
 | `mimo` | `https://api.xiaomimimo.com/anthropic` | `mimo-v2.6-flash` |
+| `opencode` | OpenCode Go 订阅 `https://opencode.ai/inference/go/openai/v1`（chat/completions） | `deepseek-v4.1-flash`、`glm-5.3-flash`、`kimi-k3` |
 | `zhipu` | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` |
 | `moonshot` | `https://api.moonshot.cn/v1` | `kimi-k2-0905-preview` |
 | `doubao` | `https://ark.cn-beijing.volces.com/api/v3` | `doubao-seed-1-6`（或推理接入点 ID） |
@@ -94,6 +95,8 @@ select table_name from information_schema.tables
 | `custom` | 由 `LLM_BASE_URL` 指定（必填） | 任何 OpenAI 兼容网关 |
 
 > 只用到结构化输出（`generateObject`）与短文本生成：换成便宜模型即可，`REPO_SUMMARY_MODE=off` 更能把简介成本降到零。模型是否支持 JSON 输出由厂商决定，首次切换后看 Vercel 日志里是否出现 `[llm] provider=… model=…`（有输出即调用成功）。
+
+> **OpenCode Go**：在 <https://opencode.ai/console/login> 订阅 Go（$10/月，仅限单成员 workspace）并创建 API Key，填 `LLM_PROVIDER=opencode`、`LLM_MODEL=deepseek-v4.1-flash`、`LLM_BASE_URL` **留空**。改用按量付费余额时只把 `LLM_BASE_URL` 设为 `https://opencode.ai/inference/openai/v1`。该网关只提供 OpenAI 兼容 chat/completions，代码里固定走 `.chat()`；若模型报区域限制，到 Console → Settings › Privacy 把 Regions 设为 `Global`。
 
 4. 部署（Production）。记下**生产域名**（形如 `github-trending-agent.vercel.app`）——它就是第 5 步 Actions secret `VERCEL_URL` 的值。
 
@@ -130,10 +133,11 @@ curl -i https://<domain>/api/oauth-github
 
 **应用图标**
 
-- 上传 [assets/icon-750.png](assets/icon-750.png)（750×750 PNG）；源文件是 [assets/icon.svg](assets/icon.svg)。需要别的尺寸时，临时 `npm i -D @resvg/resvg-js` 用同一份 SVG 重新导出即可（PNG 只用于上传后台，应用运行时不依赖该包）。
-- 微信插件会话、聊天列表会把它当头像显示（圆形或圆角方形裁切）：图形主体都落在中心安全区内，裁切不会缺角，24px 下仍能认出。
+- 上传 [assets/icon-750.png](assets/icon-750.png)（750×750 PNG）；源文件是 [assets/icon.svg](assets/icon.svg)。改了造型后用同一份 SVG 重新导出：临时 `npm i -D @resvg/resvg-js` → `npx --yes tsx` 或一小段 Node 脚本渲染 750 / 512 两档，用完 `npm uninstall`（PNG 只用于上传后台，应用运行时不依赖该包）。
+- 微信插件会话、聊天列表会把它当头像显示（圆形或圆角方形裁切）：图形主体（天线、眼睛、微笑、气泡尾巴）都落在中心半径 205 的安全区内，裁切不会缺角。
 - 「我的企业 → 企业信息」的企业 logo 也可以用同一张图，保持入口一致。
-- 原创几何图形（深底 + 绿色对话气泡 + 白色上升折线），不含第三方商标/字体/图库素材，可商用；落地页与 favicon 用的是同一造型的内联副本。
+- 原创几何图形（深海军蓝底 `#0B1220` + 蓝青渐变气泡机器人 `#3B82F6 → #2563EB`，青色天线点 `#22D3EE`），不含第三方商标/字体/图库素材，可商用；落地页与 favicon 用的是同一造型的内联副本（[src/brand.ts](../src/brand.ts)）。
+- 品牌色的语义分工：**蓝色是品牌色**（按钮、链接、卡片描边）；**绿色只用于数据**（邮件里的「+N 今日 / 新上榜」沿用 GitHub 的增长绿 `#1a7f37`），不要把它们互换。
 
 **验证**
 

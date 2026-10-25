@@ -20,11 +20,19 @@ const LLM_PROVIDERS = [
   'openrouter',
   'gemini',
   'ollama',
+  'opencode',
   'custom',
 ] as const;
 
 /** 小米 MiMo 开放平台：Anthropic 兼容协议 endpoint。 */
 const MIMO_BASE_URL = 'https://api.xiaomimimo.com/anthropic';
+
+/**
+ * OpenCode Go 订阅的推理网关（OpenAI 兼容 chat/completions）。
+ * 按量付费（Console 余额）用同一客户端，只把 LLM_BASE_URL 指到
+ * https://opencode.ai/inference/openai/v1 即可。
+ */
+const OPENCODE_GO_BASE_URL = 'https://opencode.ai/inference/go/openai/v1';
 
 /**
  * OpenAI 兼容协议的常见厂商 endpoint（`LLM_BASE_URL` 可覆盖任意一家）。
@@ -75,6 +83,18 @@ export function llm(): LanguageModel {
     case 'mimo':
       // 小米 MiMo 提供 Anthropic 兼容协议，复用 Anthropic 客户端并覆盖 baseURL。
       return createAnthropic({ apiKey, baseURL: baseURL ?? MIMO_BASE_URL })(modelId);
+    case 'opencode':
+      // OpenCode Go 网关是 OpenAI 兼容 chat/completions：必须显式 .chat()，
+      // 因为 @ai-sdk/openai 的默认入口是 /responses（多数第三方模型不支持）。
+      return createOpenAI({
+        apiKey,
+        baseURL: baseURL?.trim() || OPENCODE_GO_BASE_URL,
+        // 官方建议：用自己的 UA 标识客户端，并用稳定会话 ID 便于路由与缓存。
+        headers: {
+          'user-agent': 'github-trending-agent/1.0',
+          'x-opencode-session': 'ghtrending-digest',
+        },
+      }).chat(modelId);
     default:
       break;
   }

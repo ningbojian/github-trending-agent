@@ -1,20 +1,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="t d">
   <title id="t">GitHub 热榜 · 每日简报</title>
-  <desc id="d">深色底上的绿色对话气泡，内含白色上升折线箭头。</desc>
+  <desc id="d">深海军蓝底上的蓝青色机器人头像：圆眼、微笑与一根天线，轮廓同时是一枚对话气泡。</desc>
   <!--
     原创品牌图标：仅由几何图形构成，不含任何第三方商标、字体或图库素材。
+    概念是「气泡机器人」——对话气泡做头（产品每天在微信里跟你说话），
+    天线 + 圆眼 + 微笑让它一眼是机器人，而不是聊天软件。
     可用于本项目及其商业运营；企业微信后台使用 docs/assets/icon-750.png。
     图形安全区：所有内容位于中心半径 205 以内，圆形/圆角方形裁切均不损失主体。
   -->
   <defs>
-    <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="128" y1="148" x2="392" y2="392">
-      <stop offset="0" stop-color="#2ea043"/>
-      <stop offset="1" stop-color="#1a7f37"/>
+    <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="112" y1="150" x2="400" y2="380">
+      <stop offset="0" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#2563EB"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" fill="#0d1117"/>
-  <path d="M156 306 L156 386 Q156 408 176 398 L246 358 Z" fill="url(#g)"/>
-  <rect x="96" y="136" width="320" height="232" rx="62" fill="url(#g)"/>
-  <path d="M164 310 L228 244 L272 292 L314 240" fill="none" stroke="#ffffff" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M348 188 L360 262 L282 210 Z" fill="#ffffff" stroke="#ffffff" stroke-width="8" stroke-linejoin="round"/>
+  <rect width="512" height="512" fill="#0B1220"/>
+  <g transform="rotate(-5 256 268)">
+    <circle cx="256" cy="88" r="27" fill="#22D3EE" opacity="0.18"/>
+    <rect x="248" y="96" width="16" height="60" rx="8" fill="#3B82F6"/>
+    <circle cx="256" cy="88" r="19" fill="#22D3EE"/>
+    <path d="M176 348 L150 416 Q147 426 161 419 L246 378 Z" fill="url(#g)"/>
+    <rect x="112" y="150" width="288" height="230" rx="70" fill="url(#g)"/>
+    <circle cx="204" cy="252" r="29" fill="#ffffff"/>
+    <circle cx="308" cy="252" r="29" fill="#ffffff"/>
+    <circle cx="204" cy="259" r="13" fill="#0B1220"/>
+    <circle cx="308" cy="259" r="13" fill="#0B1220"/>
+    <path d="M214 316 Q256 342 298 316" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/>
+  </g>
 </svg>

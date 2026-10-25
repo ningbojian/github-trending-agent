@@ -1,4 +1,5 @@
 import { and, eq, sql } from 'drizzle-orm';
+import { BRAND } from '../src/brand.js';
 import { db } from '../src/db/client.js';
 import { emailSubscribers } from '../src/db/schema.js';
 import { getDailySnapshot, selectEntriesForPreferences } from '../src/agent/digest-snapshot.js';
@@ -105,7 +106,7 @@ export default async function handler(
   const settings = `${baseUrl}/api/email-settings?t=${encodeURIComponent(row.unsubToken)}`;
   const unsubscribe = `${baseUrl}/api/email-unsubscribe?t=${encodeURIComponent(row.unsubToken)}`;
   const links = `<div style="margin-top:18px;font-size:14px;line-height:1.8;">
-    <a href="${escapeHtml(settings)}" style="color:#0969da;">调整推送时间 / 频率</a><br>
+    <a href="${escapeHtml(settings)}" style="color:${BRAND.colors.link};">调整推送时间 / 频率</a><br>
     <a href="${escapeHtml(unsubscribe)}" style="color:#656d76;">退订</a>
   </div>`;
 

@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { BRAND } from '../src/brand.js';
 import { db } from '../src/db/client.js';
 import { emailSubscribers, kvCache } from '../src/db/schema.js';
 import { emailConfigured, sendEmail } from '../src/email/send.js';
@@ -88,7 +89,7 @@ function formPage(email = ''): string {
     <label for="email" style="display:block;font-size:14px;margin-bottom:6px;">邮箱地址</label>
     <input id="email" name="email" type="email" required value="${escapeHtml(email)}"
       style="width:100%;box-sizing:border-box;padding:12px 14px;font-size:16px;border:1px solid #d0d7de;border-radius:8px;">
-    <button type="submit" style="margin-top:16px;width:100%;padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:#1a7f37;color:#ffffff;font-weight:600;">订阅</button>
+    <button type="submit" style="margin-top:16px;width:100%;padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:${BRAND.colors.accent};color:#ffffff;font-weight:600;">订阅</button>
   </form>
   <div style="margin-top:16px;font-size:12px;color:#656d76;line-height:1.6;">
     我们只发送简报，不发其他邮件；每封邮件都带退订链接。
@@ -144,7 +145,7 @@ function confirmMail(to: string, confirmUrl: string, resume: boolean): OutgoingM
     html: renderPage({
       title,
       body: `<div style="font-size:14px;line-height:1.7;color:#1f2328;">${lead}链接 48 小时内有效。</div>
-      <div style="margin-top:18px;"><a href="${escapeHtml(confirmUrl)}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:#1a7f37;color:#ffffff;font-size:15px;text-decoration:none;font-weight:600;">${resume ? '恢复订阅' : '确认订阅'}</a></div>
+      <div style="margin-top:18px;"><a href="${escapeHtml(confirmUrl)}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:${BRAND.colors.accent};color:#ffffff;font-size:15px;text-decoration:none;font-weight:600;">${resume ? '恢复订阅' : '确认订阅'}</a></div>
       <div style="margin-top:16px;font-size:12px;color:#656d76;line-height:1.6;">如果这不是你本人操作，忽略本邮件即可。</div>`,
     }),
   };
@@ -173,7 +174,7 @@ function manageMail(
       title: '订阅管理',
       body: `<div style="font-size:14px;line-height:1.7;color:#1f2328;">你好，这是你的 GitHub 热榜简报订阅管理链接。</div>
       <div style="margin-top:18px;font-size:14px;line-height:1.9;">
-        <a href="${escapeHtml(settingsUrl)}" style="color:#0969da;">调整推送时间 / 频率</a><br>
+        <a href="${escapeHtml(settingsUrl)}" style="color:${BRAND.colors.link};">调整推送时间 / 频率</a><br>
         <a href="${escapeHtml(unsubscribeUrl)}" style="color:#656d76;">退订</a>
       </div>
       <div style="margin-top:16px;font-size:12px;color:#656d76;line-height:1.6;">如果这不是你本人操作，忽略本邮件即可。</div>`,

@@ -25,17 +25,17 @@ function button(label: string, href: string | null): string {
   if (href === null) {
     return `<div style="display:inline-block;padding:12px 20px;border-radius:8px;background:#eaeef2;color:${c.muted};font-size:15px;">${escapeHtml(label)}</div>`;
   }
-  return `<a href="${escapeHtml(href)}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:${c.green};color:#ffffff;font-size:15px;text-decoration:none;font-weight:600;">${escapeHtml(label)}</a>`;
+  return `<a href="${escapeHtml(href)}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:${c.accent};color:#ffffff;font-size:15px;text-decoration:none;font-weight:600;">${escapeHtml(label)}</a>`;
 }
 
 function badge(text: string): string {
   const c = BRAND.colors;
-  return `<span style="display:inline-block;background:${c.greenBg};color:${c.green};border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;">${escapeHtml(text)}</span>`;
+  return `<span style="display:inline-block;background:${c.accentSoft};color:${c.accent};border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;">${escapeHtml(text)}</span>`;
 }
 
 function card(title: string, body: string, options: { recommended?: boolean; muted?: boolean } = {}): string {
   const c = BRAND.colors;
-  const border = options.muted ? c.cardBorder : c.green;
+  const border = options.muted ? c.cardBorder : c.accent;
   return `<div style="border:1px solid ${c.cardBorder};border-left:4px solid ${border};border-radius:10px;padding:18px 18px 20px;margin:0 0 16px;background:${options.muted ? '#fafbfc' : '#ffffff'};">
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
     <div style="font-size:17px;font-weight:700;">${escapeHtml(title)}</div>
@@ -54,7 +54,7 @@ function wecomCard(options: JoinPageOptions): string {
   ]
     .map(
       (step, index) =>
-        `<li style="margin:6px 0;"><span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:${c.greenBg};color:${c.green};font-size:12px;font-weight:700;margin-right:8px;">${index + 1}</span>${step}</li>`,
+        `<li style="margin:6px 0;"><span style="display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:${c.accentSoft};color:${c.accent};font-size:12px;font-weight:700;margin-right:8px;">${index + 1}</span>${step}</li>`,
     )
     .join('');
 

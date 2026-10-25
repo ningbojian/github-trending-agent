@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { BRAND } from '../src/brand.js';
 import { db } from '../src/db/client.js';
 import { emailSubscribers } from '../src/db/schema.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
@@ -30,7 +31,7 @@ function donePage(baseUrl: string): string {
     title: '已退订',
     body: `<div style="font-size:14px;line-height:1.7;color:#1f2328;">你已不再收到 GitHub 热榜简报。</div>
     <div style="margin-top:16px;font-size:14px;">
-      <a href="${escapeHtml(`${baseUrl}/api/subscribe`)}" style="color:#0969da;">重新订阅</a>
+      <a href="${escapeHtml(`${baseUrl}/api/subscribe`)}" style="color:${BRAND.colors.link};">重新订阅</a>
     </div>`,
   });
 }

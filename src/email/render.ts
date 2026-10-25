@@ -50,18 +50,18 @@ function renderItemHtml(index: number, item: DigestSnapshotItem): string {
   ];
   if (item.starsDelta > 0) {
     badges.push(
-      `<span style="display:inline-block;background:${c.greenBg};border-radius:999px;padding:2px 8px;font-size:12px;color:${c.green};margin-left:6px;">+${formatNumber(item.starsDelta)} 今日</span>`,
+      `<span style="display:inline-block;background:${c.growthBg};border-radius:999px;padding:2px 8px;font-size:12px;color:${c.growth};margin-left:6px;">+${formatNumber(item.starsDelta)} 今日</span>`,
     );
   }
   if (item.isNew) {
     badges.push(
-      `<span style="display:inline-block;background:${c.greenBg};border-radius:999px;padding:2px 8px;font-size:12px;color:${c.green};margin-left:6px;">新上榜</span>`,
+      `<span style="display:inline-block;background:${c.growthBg};border-radius:999px;padding:2px 8px;font-size:12px;color:${c.growth};margin-left:6px;">新上榜</span>`,
     );
   }
   const url = item.htmlUrl || `https://github.com/${item.fullName}`;
   const summary = item.summary?.trim();
   return `<tr>
-  <td style="padding:14px 0 14px 12px;border-bottom:1px solid #eaeef2;border-left:3px solid ${c.green};">
+  <td style="padding:14px 0 14px 12px;border-bottom:1px solid #eaeef2;border-left:3px solid ${c.accent};">
     <div style="font-size:14px;color:${c.muted};">#${index}</div>
     <div style="margin-top:2px;">
       <a href="${escapeHtml(url)}" style="color:${c.link};text-decoration:none;font-family:${BRAND.monoFontFamily};font-size:15px;font-weight:600;">${escapeHtml(item.fullName)}</a>

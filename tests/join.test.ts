@@ -14,6 +14,7 @@ vi.mock('../src/email/send', () => ({
 }));
 
 import handler, { renderJoinPage } from '../api/join';
+import { BRAND } from '../src/brand';
 
 interface MockRes {
   statusCode: number;
@@ -149,6 +150,17 @@ describe('renderJoinPage', () => {
       appName: '<script>x</script>',
     });
     expect(html).not.toContain('<script>x</script>');
+  });
+
+  it('uses the brand accent for the primary CTA（防止再次写死绿色）', () => {
+    const html = renderJoinPage({
+      accepting: true,
+      emailReady: true,
+      appName: 'GitHub 热榜',
+    });
+    expect(html).toContain(`background:${BRAND.colors.accent}`);
+    expect(html).not.toContain('#1a7f37');
+    expect(html).not.toContain('#dafbe1');
   });
 });
 

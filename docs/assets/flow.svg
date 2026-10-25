@@ -9,7 +9,7 @@
       .s { font-size: 13px; fill: #656d76; }
       .flow { stroke: #8b949e; stroke-width: 2; fill: none; marker-end: url(#arrow); }
       .box { fill: #ffffff; stroke: #d0d7de; stroke-width: 1.5; }
-      .accent { fill: #dafbe1; stroke: #1a7f37; stroke-width: 1.5; }
+      .accent { fill: #DBEAFE; stroke: #2563EB; stroke-width: 1.5; }
     </style>
   </defs>
 

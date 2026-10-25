@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { BRAND } from '../src/brand.js';
 import { db } from '../src/db/client.js';
 import { emailSubscribers } from '../src/db/schema.js';
 import {
@@ -72,7 +73,7 @@ function form(options: {
     ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:#ffebe9;color:#cf222e;font-size:14px;">${escapeHtml(options.error)}</div>`
     : '';
   const notice = options.notice
-    ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:#dafbe1;color:#1a7f37;font-size:14px;">${escapeHtml(options.notice)}</div>`
+    ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:${BRAND.colors.accentSoft};color:${BRAND.colors.accent};font-size:14px;">${escapeHtml(options.notice)}</div>`
     : '';
   const inactive = options.inactive
     ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:#fff8c5;color:#7d4e00;font-size:14px;">当前处于退订状态，保存设置不会自动恢复订阅。</div>`
@@ -133,7 +134,7 @@ function form(options: {
         <input name="keywords" type="text" value="${escapeHtml(preferences.keywords.join(', '))}"
           style="width:100%;box-sizing:border-box;padding:12px 14px;font-size:16px;border:1px solid #d0d7de;border-radius:8px;">
       </div>
-      <button type="submit" style="width:100%;padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:#1a7f37;color:#ffffff;font-weight:600;">保存设置</button>
+      <button type="submit" style="width:100%;padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:${BRAND.colors.accent};color:#ffffff;font-weight:600;">保存设置</button>
     </form>
     <div style="margin-top:18px;font-size:14px;">
       <a href="${escapeHtml(unsubscribe)}" style="color:#656d76;">退订</a>

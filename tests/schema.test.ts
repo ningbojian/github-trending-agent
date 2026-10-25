@@ -106,6 +106,9 @@ describe('subscribers', () => {
       'github_token_enc',
       'id',
       'last_digest_at',
+      'llm_base_url',
+      'llm_key_enc',
+      'llm_model',
       'preferences',
       'wecom_userid',
     ]);

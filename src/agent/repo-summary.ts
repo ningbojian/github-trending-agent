@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { env } from '../config.js';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
-import { generateObjectSafe } from './llm.js';
+import { generateObjectSafe, type LlmChoice } from './llm.js';
 
 /**
  * 仓库中文简介（全局 kv 缓存 + 批量 LLM + 失败降级）。
@@ -149,9 +149,14 @@ function buildPrompt(items: SummaryInput[]): string {
  * 批量加载仓库中文简介；key 与输入 fullName 对齐。
  * 无 description 且无法生成的条目不出现在返回 Map 中。
  * 空输入直接返回空 Map（零查询）。
+ *
+ * `choice` 决定用谁的模型：默认运营方（每日推送）；互动传 `{ kind: 'none' }`
+ * 表示用户没配 Key —— 此时**只读**共享缓存，不调模型也不写缓存，
+ * 未命中退回 description 截断，运营方与用户的额度都不花。
  */
 export async function loadRepoSummaries(
   items: SummaryInput[],
+  choice: LlmChoice = { kind: 'operator' },
 ): Promise<Map<string, string>> {
   const result = new Map<string, string>();
   if (items.length === 0) return result;
@@ -191,6 +196,17 @@ export async function loadRepoSummaries(
   }
   if (misses.length === 0) return result;
 
+  // 用户没配 Key：不调模型、不写缓存，未命中直接退回 description 截断。
+  if (choice.kind === 'none') {
+    for (const item of misses) {
+      const zh = item.description && isChinese(item.description)
+        ? truncateChars(item.description, ZH_MAX_CHARS)
+        : fallbackZh(item.description);
+      if (zh !== null) result.set(item.fullName, zh);
+    }
+    return result;
+  }
+
   // 2) 中文 description 直接截断 28 字（不进 LLM），长 TTL 写缓存。
   const writes: CacheWrite[] = [];
   const llmTargets: SummaryInput[] = [];
@@ -209,7 +225,11 @@ export async function loadRepoSummaries(
   if (llmTargets.length > 0 && env.REPO_SUMMARY_MODE !== 'off') {
     let out: z.infer<typeof summariesSchema> | null = null;
     try {
-      out = await generateObjectSafe(summariesSchema, buildPrompt(llmTargets));
+      // 运营方路径保持两参调用（既有测试与诊断记录的入参形状不变）。
+      out =
+        choice.kind === 'user'
+          ? await generateObjectSafe(summariesSchema, buildPrompt(llmTargets), choice.config)
+          : await generateObjectSafe(summariesSchema, buildPrompt(llmTargets));
     } catch {
       out = null;
     }

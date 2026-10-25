@@ -20,6 +20,10 @@ const summaryMock = vi.hoisted(() => ({
   loadRepoSummaries: vi.fn(),
 }));
 
+const userLlmMock = vi.hoisted(() => ({
+  loadUserLlm: vi.fn(),
+}));
+
 const dbMock = vi.hoisted(() => ({
   failExecute: false,
 }));
@@ -38,6 +42,10 @@ vi.mock('../src/agent/search', () => ({
 
 vi.mock('../src/agent/repo-summary', () => ({
   loadRepoSummaries: summaryMock.loadRepoSummaries,
+}));
+
+vi.mock('../src/agent/user-llm', () => ({
+  loadUserLlm: userLlmMock.loadUserLlm,
 }));
 
 // db 兜底 mock：router 的 stars/onboarding 模块图需要 db 导出存在（本文件不经其路径）。
@@ -113,6 +121,13 @@ function makeQuery(overrides: Partial<{
   };
 }
 
+/** 用户自备 LLM 配置（单元测试假值）。 */
+const USER_LLM = {
+  baseUrl: 'https://api.deepseek.com/v1',
+  model: 'deepseek-chat',
+  apiKey: 'sk-unit-test-00000000',
+};
+
 beforeEach(() => {
   apiMock.sendWeComText.mockReset();
   apiMock.sendWeComText.mockResolvedValue(undefined);
@@ -122,6 +137,9 @@ beforeEach(() => {
   searchMock.searchTrending.mockResolvedValue([]);
   summaryMock.loadRepoSummaries.mockReset();
   summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
+  // 默认「用户已配好自己的 Key」：既有用例都是「LLM 路径」的断言。
+  userLlmMock.loadUserLlm.mockReset();
+  userLlmMock.loadUserLlm.mockResolvedValue(USER_LLM);
   dbMock.failExecute = false;
 });
 
@@ -290,8 +308,11 @@ describe('handleSearch（全链：LLM 解析 → 检索 → 摘要 → 文本发
     ];
     expect(query.languages).toEqual(['python']);
     expect(query.keywords).toEqual(['ai']);
-    // 摘要按同一 items 注入
-    expect(summaryMock.loadRepoSummaries).toHaveBeenCalledWith(items);
+    // 摘要按同一 items 注入，且用的是用户自己的 Key（不烧运营方额度）
+    expect(summaryMock.loadRepoSummaries).toHaveBeenCalledWith(items, {
+      kind: 'user',
+      config: USER_LLM,
+    });
     // 只走文本通道（markdown 在微信里不可见）
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     expect(apiMock.sendWeComText).toHaveBeenCalledWith(
@@ -519,6 +540,59 @@ describe('handleSearch 意图边界（about / off_topic 不检索）', () => {
     await handleSearch(makeMsg({ content: 'python 热榜' }));
 
     expect(searchMock.searchTrending).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Token 归属：互动用用户自己的 Key；没配就零调用（规则解析 + 只读缓存）。
+// ---------------------------------------------------------------------------
+describe('handleSearch Token 归属', () => {
+  it('配好自己的 Key → 解析与简介都带上该配置（烧用户额度）', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue(makeQuery());
+    searchMock.searchTrending.mockResolvedValue([makeItem({ fullName: 'a/b' })]);
+
+    await handleSearch(makeMsg({ content: 'python 热榜' }));
+
+    expect(userLlmMock.loadUserLlm).toHaveBeenCalledWith('alice');
+    expect(llmMock.generateObjectSafe.mock.calls[0]?.[2]).toEqual(USER_LLM);
+    expect(summaryMock.loadRepoSummaries).toHaveBeenCalledWith(
+      expect.any(Array),
+      { kind: 'user', config: USER_LLM },
+    );
+  });
+
+  it('没配 Key → 一次模型都不调，列表照常回（零成本）', async () => {
+    userLlmMock.loadUserLlm.mockResolvedValue(null);
+    searchMock.searchTrending.mockResolvedValue([makeItem({ fullName: 'a/b' })]);
+
+    await handleSearch(makeMsg({ content: '本周 python 的 ai 项目' }));
+
+    expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
+    expect(summaryMock.loadRepoSummaries).toHaveBeenCalledWith(
+      expect.any(Array),
+      { kind: 'none' },
+    );
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('1. a/b');
+  });
+
+  it('没配 Key 时规则解析仍能识别语言与关键词（不至于完全退化）', async () => {
+    userLlmMock.loadUserLlm.mockResolvedValue(null);
+    searchMock.searchTrending.mockResolvedValue([makeItem({ fullName: 'a/b' })]);
+
+    await handleSearch(makeMsg({ content: '本周 python 的 ai 项目' }));
+
+    const [query] = searchMock.searchTrending.mock.calls[0] as [
+      { languages: string[]; keywords: string[] },
+    ];
+    expect(query.languages).toEqual(['python']);
+    expect(query.keywords).toEqual(['ai']);
+  });
+
+  it('规则命中的边界分支不查用户配置（不必为无关消息读库）', async () => {
+    await handleSearch(makeMsg({ content: '你是谁' }));
+
+    expect(userLlmMock.loadUserLlm).not.toHaveBeenCalled();
   });
 });
 

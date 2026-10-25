@@ -6,6 +6,7 @@ import {
   routeMessage,
   type InboundMessage,
 } from '../src/wecom/router';
+import { SET_MODEL_USAGE_REPLY } from '../src/wecom/llm-settings';
 
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: vi.fn(),
@@ -58,6 +59,9 @@ const unsubscribeHandler = vi.fn();
 const digestCountHandler = vi.fn();
 const pushTimeHandler = vi.fn();
 const pushIntervalHandler = vi.fn();
+const setModelHandler = vi.fn();
+const myModelHandler = vi.fn();
+const clearModelHandler = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -81,6 +85,9 @@ beforeEach(() => {
     digestCount: digestCountHandler,
     pushTime: pushTimeHandler,
     pushInterval: pushIntervalHandler,
+    setModel: setModelHandler,
+    myModel: myModelHandler,
+    clearModel: clearModelHandler,
   });
 });
 
@@ -451,6 +458,36 @@ describe('「推送时间」「每 N 天」指令路由（锚定分发，用法�
     expect(searchHandler).not.toHaveBeenCalled();
     // router 层不重复拦截（与「条数」一致：回执统一由 handler 负责）。
     expect(sendWeComText).not.toHaveBeenCalled();
+  });
+});
+
+describe('自备模型命令（设置模型 / 我的模型 / 清除模型）', () => {
+  it('三个命令精确匹配到各自的 handler，不落搜索', async () => {
+    await routeMessage(makeMsg({ content: '设置模型' }));
+    await routeMessage(makeMsg({ content: '我的模型' }));
+    await routeMessage(makeMsg({ content: '清除模型' }));
+
+    expect(setModelHandler).toHaveBeenCalledTimes(1);
+    expect(myModelHandler).toHaveBeenCalledTimes(1);
+    expect(clearModelHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('尾部标点同样命中（「设置模型。」）', async () => {
+    await routeMessage(makeMsg({ content: '设置模型。' }));
+
+    expect(setModelHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「设置模型 用 deepseek」不是合法指令 → 回用法提示，不落搜索', async () => {
+    await routeMessage(makeMsg({ content: '设置模型 用 deepseek' }));
+
+    expect(vi.mocked(sendWeComText).mock.calls[0]?.[1]).toBe(
+      SET_MODEL_USAGE_REPLY,
+    );
+    expect(setModelHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
   });
 });
 

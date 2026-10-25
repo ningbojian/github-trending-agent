@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { generateObjectSafe, llm } from '../src/agent/llm';
+import { generateObjectSafe, llm, llmFor } from '../src/agent/llm';
 
 /**
  * env 惰性单例策略（同 callback.test.ts）：用 vi.mock 固定 src/config，
@@ -262,6 +262,92 @@ describe('llm provider branching', () => {
     expect(mocks.createOpenAI).not.toHaveBeenCalled();
     expect(mocks.createDeepSeek).not.toHaveBeenCalled();
     expect(mocks.createAlibaba).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateObjectSafe — 用户自备 Key（override）', () => {
+  const schema = z.object({ ok: z.boolean() });
+  const OVERRIDE = {
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+    apiKey: 'sk-user-own-key-123456',
+  };
+
+  it('走 createOpenAICompatible + chatModel（与 opencode 同一个理由：最朴素的 chat/completions）', async () => {
+    mocks.generateObject.mockResolvedValue({ object: { ok: true } });
+
+    await generateObjectSafe(schema, 'p', OVERRIDE);
+
+    expect(mocks.createOpenAICompatible).toHaveBeenCalledWith({
+      name: 'user',
+      baseURL: OVERRIDE.baseUrl,
+      apiKey: OVERRIDE.apiKey,
+    });
+    expect(mocks.generateObject).toHaveBeenCalledWith({
+      model: { provider: 'opencode-chat', modelId: OVERRIDE.model },
+      schema,
+      prompt: 'p',
+    });
+    // 用户自己的 Key 生效时，运营方 env 的 provider 完全不该参与
+    expect(mocks.createAnthropic).not.toHaveBeenCalled();
+    expect(mocks.createOpenAI).not.toHaveBeenCalled();
+  });
+
+  it('日志把 provider 记为 user，方便区分「烧的是谁的额度」', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    mocks.generateObject.mockResolvedValue({ object: { ok: true } });
+
+    await generateObjectSafe(schema, 'p', OVERRIDE);
+
+    expect(String(log.mock.calls[0][0])).toContain('provider=user');
+    expect(String(log.mock.calls[0][0])).toContain(`model=${OVERRIDE.model}`);
+    log.mockRestore();
+  });
+
+  it('失败原因里的 Key 一律脱敏（日志与 llm:last-error 都不得出现明文）', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.generateObject.mockRejectedValue(
+      new Error(`401 invalid key: ${OVERRIDE.apiKey} (header Authorization)`),
+    );
+
+    await expect(generateObjectSafe(schema, 'p', OVERRIDE)).resolves.toBeNull();
+
+    const logged = JSON.stringify(error.mock.calls);
+    expect(logged).not.toContain(OVERRIDE.apiKey);
+    expect(logged).toContain('sk-***');
+    const recorded = JSON.stringify(mocks.recordLlmFailure.mock.calls);
+    expect(recorded).not.toContain(OVERRIDE.apiKey);
+    expect(recorded).toContain('provider');
+    error.mockRestore();
+  });
+
+  it('运营方 env 坏掉时，override 仍然可用（不读 env 的模型配置）', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(mocks.env, 'LLM_PROVIDER');
+    Object.defineProperty(mocks.env, 'LLM_PROVIDER', {
+      configurable: true,
+      get() {
+        throw new Error('Invalid environment variables');
+      },
+    });
+    mocks.generateObject.mockResolvedValue({ object: { ok: true } });
+
+    try {
+      await expect(generateObjectSafe(schema, 'p', OVERRIDE)).resolves.toEqual({
+        ok: true,
+      });
+    } finally {
+      if (descriptor) Object.defineProperty(mocks.env, 'LLM_PROVIDER', descriptor);
+    }
+  });
+});
+
+describe('llmFor', () => {
+  it('用给定配置建模型，不碰任何 env', () => {
+    mocks.env.LLM_PROVIDER = 'vertex'; // 未知提供商：只要读了 env 就会抛
+
+    expect(
+      llmFor({ baseUrl: 'https://x.example.com/v1', model: 'm', apiKey: 'k' }),
+    ).toEqual({ provider: 'opencode-chat', modelId: 'm' });
   });
 });
 

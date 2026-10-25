@@ -118,6 +118,48 @@ export function llm(): LanguageModel {
   );
 }
 
+/** 用户自备 Key 的配置（与 agent/user-llm 的 UserLlmConfig 结构一致）。 */
+export interface LlmOverride {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}
+
+/**
+ * 谁付这笔账：
+ * - operator：运营方 env.LLM_*（每日推送这类基础功能）
+ * - user：用户自己的 Key（互动）
+ * - none：不调模型（用户没配 Key → 规则解析 + 只读共享缓存）
+ */
+export type LlmChoice =
+  | { kind: 'operator' }
+  | { kind: 'user'; config: LlmOverride }
+  | { kind: 'none' };
+
+/**
+ * 用给定配置建模型（用户自备 Key）。
+ *
+ * 统一走 OpenAI 兼容的 chatModel：用户填的是「OpenAI 兼容 endpoint」，
+ * 用 .chatModel() 发出的才是最朴素的 /chat/completions —— 与 opencode
+ * 分支同一个理由（不能变成 OpenAI 专有的 json_schema Structured Outputs，
+ * 否则 DeepSeek / 智谱这类后端直接 400）。
+ */
+export function llmFor(config: LlmOverride): LanguageModel {
+  return createOpenAICompatible({
+    name: 'user',
+    baseURL: config.baseUrl.trim(),
+    apiKey: config.apiKey,
+  }).chatModel(config.model);
+}
+
+/**
+ * 从模型或网络错误里抹掉疑似 Key（`sk-` 开头的长串）。
+ * 用户自己的 Key 绝不能出现在 Vercel 日志或 kv_cache 的 llm:last-error 里。
+ */
+export function redactKey(text: string): string {
+  return text.replace(/sk-[\w-]{8,}/g, 'sk-***');
+}
+
 /**
  * 读取当前的 provider/model 标签用于日志与诊断记录。
  *
@@ -143,10 +185,18 @@ function llmLabel(): { provider: string; model: string } {
 export async function generateObjectSafe<T>(
   schema: ZodSchema<T>,
   prompt: string,
+  override?: LlmOverride,
 ): Promise<T | null> {
-  const { provider, model } = llmLabel();
+  // override 模式下不读运营方 env：用户的 Key 与 env 配置好坏无关。
+  const { provider, model } = override
+    ? { provider: 'user', model: override.model }
+    : llmLabel();
   try {
-    const result = await generateObject({ model: llm(), schema, prompt });
+    const result = await generateObject({
+      model: override ? llmFor(override) : llm(),
+      schema,
+      prompt,
+    });
     const usage = result.usage as
       | {
           inputTokens?: number;
@@ -166,7 +216,8 @@ export async function generateObjectSafe<T>(
   } catch (err) {
     // 不打印内容，只打印原因：配置错（未知提供商、缺 baseURL）与鉴权/网络失败
     // 都不能静默——否则线上只会「一直没有中文简介」，无从排查。
-    const message = err instanceof Error ? err.message : String(err);
+    // 原因里可能带出用户自己的 Key（如 401 回显 Authorization），一律脱敏。
+    const message = redactKey(err instanceof Error ? err.message : String(err));
     console.error(`[llm] provider=${provider} model=${model} failed:`, message);
     await recordLlmFailure({ provider, model, message });
     return null;

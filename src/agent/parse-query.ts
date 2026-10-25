@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { generateObjectSafe } from './llm.js';
+import { generateObjectSafe, type LlmChoice } from './llm.js';
 
 /** LLM 结构化解析的输出契约（检索服务 Task 8 消费）。 */
 export const SearchQuerySchema = z.object({
@@ -307,9 +307,22 @@ export function fallbackParse(text: string): SearchQuery {
 /**
  * 先 LLM 结构化解析（严格 prompt：只允许从文本推断，禁止编造）；
  * generateObjectSafe 返回 null（SDK 失败/校验失败/未知提供商）时回退 fallbackParse。
+ *
+ * `choice` 决定用谁的 Key：默认运营方；互动传 `{ kind: 'none' }`（用户没配 Key）
+ * 时**完全不调模型**，直接规则解析 —— 零成本。
  */
-export async function parseSearchQuery(text: string): Promise<SearchQuery> {
-  const result = await generateObjectSafe(SearchQuerySchema, buildPrompt(text));
+export async function parseSearchQuery(
+  text: string,
+  choice: LlmChoice = { kind: 'operator' },
+): Promise<SearchQuery> {
+  if (choice.kind === 'none') {
+    return fallbackParse(text);
+  }
+  // 运营方路径保持两参调用（既有测试/诊断记录的入参形状不变）。
+  const result =
+    choice.kind === 'user'
+      ? await generateObjectSafe(SearchQuerySchema, buildPrompt(text), choice.config)
+      : await generateObjectSafe(SearchQuerySchema, buildPrompt(text));
   if (result === null) {
     return fallbackParse(text);
   }

@@ -313,6 +313,53 @@ describe('loadRepoSummaries — 中文直取与 REPO_SUMMARY_MODE=off', () => {
 // ---------------------------------------------------------------------------
 // 空输入 / 返回值对齐
 // ---------------------------------------------------------------------------
+describe('loadRepoSummaries — LlmChoice（互动不烧运营方 token）', () => {
+  const config = {
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+    apiKey: 'sk-user-000000000000',
+  };
+
+  it('kind: none → 只读共享缓存，不调模型、不写缓存，未命中退回 description 截断', async () => {
+    dbMock.selectRows = [cacheRow('a/one', '缓存里的中文简介', 'desc one')];
+
+    const map = await loadRepoSummaries(
+      [
+        { fullName: 'a/one', description: 'desc one' },
+        { fullName: 'b/two', description: 'An English description for two' },
+      ],
+      { kind: 'none' },
+    );
+
+    expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
+    expect(dbMock.insertValues).toHaveLength(0);
+    expect(map.get('a/one')).toBe('缓存里的中文简介');
+    expect(map.get('b/two')).toBe('An English description for two');
+  });
+
+  it('kind: user → 用用户配置调一次，成功后仍写回共享缓存（下个用户免费受益）', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue({
+      summaries: [{ fullName: 'a/one', zh: '写着玩的简介' }],
+    });
+
+    const map = await loadRepoSummaries(
+      [{ fullName: 'a/one', description: 'desc' }],
+      { kind: 'user', config },
+    );
+
+    expect(llmMock.generateObjectSafe).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      config,
+    );
+    expect(map.get('a/one')).toBe('写着玩的简介');
+    expect(dbMock.insertValues).toHaveLength(1);
+    const ttl =
+      (dbMock.insertValues[0]!.expiresAt as Date).getTime() - Date.now();
+    expect(ttl).toBeGreaterThan(LONG_TTL_MS - 5000);
+  });
+});
+
 describe('loadRepoSummaries — 边界', () => {
   it('空输入：直接返回空 Map，不查库、不调 LLM、不写缓存', async () => {
     const map = await loadRepoSummaries([]);

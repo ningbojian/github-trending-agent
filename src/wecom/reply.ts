@@ -1,7 +1,9 @@
 import { classifyByRules } from '../agent/intent.js';
+import type { LlmChoice } from '../agent/llm.js';
 import { parseSearchQuery } from '../agent/parse-query.js';
 import { loadRepoSummaries } from '../agent/repo-summary.js';
 import { searchTrending, type SearchResultItem } from '../agent/search.js';
+import { loadUserLlm } from '../agent/user-llm.js';
 import { sendWeComText } from './api.js';
 import { ABOUT_REPLY, OFF_TOPIC_REPLY } from './onboarding.js';
 import { formatEntryLine } from './text.js';
@@ -86,9 +88,10 @@ export function formatSearchReply(
  */
 async function loadSummariesSafe(
   items: SearchResultItem[],
+  choice: LlmChoice,
 ): Promise<Map<string, string>> {
   try {
-    return await loadRepoSummaries(items);
+    return await loadRepoSummaries(items, choice);
   } catch (err) {
     console.error('loadRepoSummaries failed (degrade to no-summary):', err);
     return new Map();
@@ -103,6 +106,10 @@ async function loadSummariesSafe(
  * about / off_topic 分支**绝不调用 searchTrending**——既不消耗检索配额，
  * 也不写 search_caches，保证「收藏 N」始终指向用户最后收到的真实列表。
  * 拿不准一律按搜索处理：漏判退化成老行为，不会误伤「今天有什么」这类正常提问。
+ *
+ * Token 归属：互动一律用**用户自己的 Key**（`设置模型` 配的）；没配就
+ * `{ kind: 'none' }` —— 规则解析 + 只读共享缓存，运营方额度一分不花。
+ * 每日推送仍走运营方 Key（app 内其他路径，不经过这里）。
  *
  * 首次检索为空且 query 带关键词时，去掉 keywords 再查一次（关键词常是
  * 用户主题词而非榜单词，ILIKE 易 0 命中，直接放弃等于「没找到」误伤）。
@@ -122,7 +129,12 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
       return;
     }
 
-    const query = await parseSearchQuery(msg.content);
+    const userLlm = await loadUserLlm(msg.fromUserName);
+    const choice: LlmChoice = userLlm
+      ? { kind: 'user', config: userLlm }
+      : { kind: 'none' };
+
+    const query = await parseSearchQuery(msg.content, choice);
     if (query.intent === 'about') {
       await sendWeComText(msg.fromUserName, ABOUT_REPLY);
       return;
@@ -143,7 +155,7 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
       await sendWeComText(msg.fromUserName, EMPTY_RESULT_REPLY);
       return;
     }
-    const summaries = await loadSummariesSafe(items);
+    const summaries = await loadSummariesSafe(items, choice);
     await sendWeComText(msg.fromUserName, formatSearchReply(items, summaries));
   } catch (err) {
     console.error('handleSearch failed:', err);

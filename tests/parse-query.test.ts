@@ -124,6 +124,36 @@ describe('parseSearchQuery — LLM path', () => {
   });
 });
 
+describe('parseSearchQuery — LlmChoice（谁的 Key）', () => {
+  it('kind: none → 完全不调模型，直接走规则解析', async () => {
+    const result = await parseSearchQuery('本周 python 的 ai 项目', { kind: 'none' });
+
+    expect(result).toEqual(fallbackParse('本周 python 的 ai 项目'));
+    expect(mocks.generateObjectSafe).not.toHaveBeenCalled();
+  });
+
+  it('kind: user → 把用户配置作为第三参传下去', async () => {
+    const config = { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', apiKey: 'sk-x-123456789' };
+    mocks.generateObjectSafe.mockResolvedValue(null);
+
+    await parseSearchQuery('rust 项目', { kind: 'user', config });
+
+    expect(mocks.generateObjectSafe).toHaveBeenCalledWith(
+      SearchQuerySchema,
+      expect.any(String),
+      config,
+    );
+  });
+
+  it('默认（不传）→ 仍走运营方 Key，第三参为空（老路径行为不变）', async () => {
+    mocks.generateObjectSafe.mockResolvedValue(null);
+
+    await parseSearchQuery('rust 项目');
+
+    expect(mocks.generateObjectSafe.mock.calls[0]).toHaveLength(2);
+  });
+});
+
 describe('parseSearchQuery — regex fallback when LLM returns null', () => {
   beforeEach(() => {
     mocks.generateObjectSafe.mockResolvedValue(null);

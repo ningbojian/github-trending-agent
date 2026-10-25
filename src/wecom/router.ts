@@ -14,6 +14,14 @@ import {
 import { bindHandler } from '../github/oauth.js';
 import { NUMBER_TOKEN_PATTERN } from './cn-number.js';
 import {
+  CLEAR_MODEL_USAGE_REPLY,
+  MY_MODEL_USAGE_REPLY,
+  SET_MODEL_USAGE_REPLY,
+  handleClearModel,
+  handleMyModel,
+  handleSetModel,
+} from './llm-settings.js';
+import {
   ensureSubscriber,
   handleDigestCount,
   handleHelp,
@@ -51,6 +59,9 @@ export interface Handlers {
   digestCount: MessageHandler;
   pushTime: MessageHandler;
   pushInterval: MessageHandler;
+  setModel: MessageHandler;
+  myModel: MessageHandler;
+  clearModel: MessageHandler;
 }
 
 /** 未注册时的静默 stub。 */
@@ -68,6 +79,9 @@ let handlers: Handlers = {
   digestCount: stub,
   pushTime: stub,
   pushInterval: stub,
+  setModel: stub,
+  myModel: stub,
+  clearModel: stub,
 };
 
 /**
@@ -92,6 +106,9 @@ export function resetHandlers(): void {
     digestCount: stub,
     pushTime: stub,
     pushInterval: stub,
+    setModel: stub,
+    myModel: stub,
+    clearModel: stub,
   };
 }
 
@@ -161,6 +178,16 @@ function suspectedCommandUsage(content: string): string | null {
   if (content.startsWith('退订')) {
     return UNSUBSCRIBE_USAGE_REPLY;
   }
+  // 三个模型命令同形的前缀兜底：错字/带参数都别被当成搜索词发出去。
+  if (content.startsWith('设置模型')) {
+    return SET_MODEL_USAGE_REPLY;
+  }
+  if (content.startsWith('清除模型')) {
+    return CLEAR_MODEL_USAGE_REPLY;
+  }
+  if (content.startsWith('我的模型')) {
+    return MY_MODEL_USAGE_REPLY;
+  }
   return null;
 }
 
@@ -218,6 +245,7 @@ async function handleEnterAgent(msg: InboundMessage): Promise<void> {
  * - 分发顺序：「帮助」→「取消收藏 N」→「收藏 N」→「我的收藏」（精确）→
  *   「绑定」（精确）→「订阅 …」（前缀）→「退订」（精确）→「条数 …」（前缀）→
  *   「每天 H 点/推送时间 …」「每 N 天」（锚定）→
+ *   「设置模型」「我的模型」「清除模型」（精确）→
  *   疑似命令（以命令词开头却非合法指令 → 用法提示）→ 其余 text → search。
  *   精确匹配允许尾部中英文标点（「帮助。」「收藏 1！」）；「帮助」只精确匹配，
  *   「帮助我找 python」等长句仍走搜索。handler 异常由 dispatchSafely 捕获并
@@ -286,6 +314,16 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
   if (PUSH_INTERVAL_PATTERN.test(content)) {
     return dispatchSafely(handlers.pushInterval, normalized);
   }
+  // 自备模型：精确匹配（「设置模型 用 deepseek」由下面的疑似命令兜住）。
+  if (content === '设置模型') {
+    return dispatchSafely(handlers.setModel, normalized);
+  }
+  if (content === '我的模型') {
+    return dispatchSafely(handlers.myModel, normalized);
+  }
+  if (content === '清除模型') {
+    return dispatchSafely(handlers.clearModel, normalized);
+  }
   // 疑似命令容错：以命令词开头却不是合法指令 → 回用法提示，绝不静默掉进搜索。
   const usage = suspectedCommandUsage(content);
   if (usage !== null) {
@@ -312,4 +350,7 @@ registerHandlers({
   digestCount: handleDigestCount,
   pushTime: handlePushTime,
   pushInterval: handlePushInterval,
+  setModel: handleSetModel,
+  myModel: handleMyModel,
+  clearModel: handleClearModel,
 });

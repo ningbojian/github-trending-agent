@@ -1,9 +1,4 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHash,
-  randomBytes,
-} from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { env } from '../config.js';
 import { db } from '../db/client.js';
@@ -120,47 +115,11 @@ export async function exchangeCode(
 }
 
 // ---------------------------------------------------------------------------
-// token 加解密（AES-256-GCM，密钥由 TOKEN_ENCRYPT_KEY 派生）
+// token 加解密：实现已抽到 src/crypto/secret.ts（LLM Key 也用它），
+// 这里原样转出，保持既有导入路径不变。
 // ---------------------------------------------------------------------------
 
-const ALGO = 'aes-256-gcm';
-/** GCM 推荐 IV 长度 12 字节。 */
-const IV_BYTES = 12;
-/** GCM 认证标签 16 字节。 */
-const TAG_BYTES = 16;
-
-/** 密钥派生：sha256(TOKEN_ENCRYPT_KEY)（确定性，32 字节正好喂 aes-256）。 */
-function encryptionKey(): Buffer {
-  return createHash('sha256').update(env.TOKEN_ENCRYPT_KEY, 'utf8').digest();
-}
-
-/**
- * 加密明文（用户 GitHub token）。
- * 输出 base64(iv(12) || tag(16) || ciphertext)，每次随机 IV。
- */
-export function encryptSecret(plain: string): string {
-  const iv = randomBytes(IV_BYTES);
-  const cipher = createCipheriv(ALGO, encryptionKey(), iv);
-  const ciphertext = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, ciphertext]).toString('base64');
-}
-
-/** 解密 encryptSecret 的输出；篡改/畸形输入经 GCM 校验后抛错。 */
-export function decryptSecret(payload: string): string {
-  const raw = Buffer.from(payload, 'base64');
-  if (raw.length < IV_BYTES + TAG_BYTES) {
-    throw new Error('decryptSecret: payload too short');
-  }
-  const iv = raw.subarray(0, IV_BYTES);
-  const tag = raw.subarray(IV_BYTES, IV_BYTES + TAG_BYTES);
-  const ciphertext = raw.subarray(IV_BYTES + TAG_BYTES);
-  const decipher = createDecipheriv(ALGO, encryptionKey(), iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString(
-    'utf8',
-  );
-}
+export { decryptSecret, encryptSecret } from '../crypto/secret.js';
 
 // ---------------------------------------------------------------------------
 // bindHandler

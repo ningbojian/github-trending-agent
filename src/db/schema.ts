@@ -78,6 +78,14 @@ export const subscribers = pgTable(
       .default(sql`'{"languages":[],"keywords":[]}'`),
     githubLogin: text('github_login'),
     githubTokenEnc: text('github_token_enc'),
+    /**
+     * 用户自备的 LLM（互动专用）：接口地址 / 模型名 / 加密后的 Key。
+     * 每日推送仍走运营方 key；互动（解析搜索意图、生成中文简介）用这三个字段。
+     * 三列同时为空 = 未配置 → 互动退回规则解析 + 共享缓存，零 token。
+     */
+    llmBaseUrl: text('llm_base_url'),
+    llmModel: text('llm_model'),
+    llmKeyEnc: text('llm_key_enc'),
     active: boolean('active').notNull().default(true),
     // timestamptz（withTimezone: true）：门控 SQL 用 AT TIME ZONE 'Asia/Shanghai'
     // 做北京时间日期比较——裸 timestamp 在 Neon 的 UTC 会话时区下会算错日期。

@@ -8,6 +8,10 @@ import { isWeComAccepting } from '../src/wecom/capacity.js';
  * 顺序原则：先企微（成员 + 微信插件），邮箱入口始终可见；名额已满时邮箱升为推荐。
  */
 
+/** 仓库内自带的二维码；环境变量可按需覆盖（例如换成企微后台新导出的邀请码）。 */
+export const DEFAULT_JOIN_QR_URL = '/docs/assets/wecom-join-qr.png';
+export const DEFAULT_PLUGIN_QR_URL = '/docs/assets/wecom-plugin-qr.png';
+
 export interface JoinRequest {
   method?: string;
 }
@@ -48,7 +52,9 @@ function card(title: string, body: string, options: { recommended?: boolean; mut
 function wecomCard(options: JoinPageOptions): string {
   const c = BRAND.colors;
   const steps = [
-    '扫码加入企业（是否审核取决于管理员设置）。',
+    options.joinQrUrl
+      ? '扫码加入企业（是否审核取决于管理员设置）。'
+      : '向管理员索要企业邀请链接，加入后继续下一步。',
     `在微信里按提示启用「企业微信插件」。`,
     `在插件会话里给「${escapeHtml(options.appName)}」发一句「你好」，立即收到欢迎语和今日简报。`,
   ]
@@ -58,13 +64,17 @@ function wecomCard(options: JoinPageOptions): string {
     )
     .join('');
 
-  const qr = [options.joinQrUrl, options.pluginQrUrl]
-    .filter((url): url is string => Boolean(url))
-    .map(
-      (url) =>
-        `<img src="${escapeHtml(url)}" alt="二维码" style="display:inline-block;width:132px;height:132px;margin:8px 12px 8px 0;border:1px solid ${c.cardBorder};border-radius:8px;">`,
-    )
-    .join('');
+  // 两张二维码并排时长得一样，必须配图注，否则用户不知道先扫哪张。
+  const qrTile = (url: string, caption: string): string =>
+    `<div style="display:inline-block;text-align:center;margin:8px 12px 8px 0;vertical-align:top;">
+      <img src="${escapeHtml(url)}" alt="${escapeHtml(caption)}二维码" style="display:block;width:132px;height:132px;border:1px solid ${c.cardBorder};border-radius:8px;background:#ffffff;">
+      <div style="font-size:12px;color:${c.muted};margin-top:6px;">${escapeHtml(caption)}</div>
+    </div>`;
+
+  const qr = [
+    options.joinQrUrl ? qrTile(options.joinQrUrl, '加入企业') : '',
+    options.pluginQrUrl ? qrTile(options.pluginQrUrl, '微信插件') : '',
+  ].join('');
 
   return card(
     '在微信里每天收简报、随时提问',
@@ -142,8 +152,8 @@ export default async function handler(
   const html = renderJoinPage({
     accepting,
     emailReady: emailConfigured(),
-    joinQrUrl: process.env.WECOM_JOIN_QR_URL,
-    pluginQrUrl: process.env.WECOM_PLUGIN_QR_URL,
+    joinQrUrl: process.env.WECOM_JOIN_QR_URL?.trim() || DEFAULT_JOIN_QR_URL,
+    pluginQrUrl: process.env.WECOM_PLUGIN_QR_URL?.trim() || DEFAULT_PLUGIN_QR_URL,
     appName: process.env.WECOM_APP_NAME?.trim() || 'GitHub 热榜',
   });
   sendHtml(res, 200, html);

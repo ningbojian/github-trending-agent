@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
 
 const state = vi.hoisted(() => ({
   accepting: true,
@@ -13,7 +14,7 @@ vi.mock('../src/email/send', () => ({
   emailConfigured: () => state.emailReady,
 }));
 
-import handler, { renderJoinPage } from '../api/join';
+import handler, { DEFAULT_JOIN_QR_URL, DEFAULT_PLUGIN_QR_URL, renderJoinPage } from '../api/join';
 import { BRAND } from '../src/brand';
 
 interface MockRes {
@@ -137,10 +138,43 @@ describe('renderJoinPage', () => {
       accepting: true,
       emailReady: true,
       appName: '热榜助手',
+      joinQrUrl: '/join.png',
+      pluginQrUrl: '/plugin.png',
     });
     expect(html).toContain('扫码加入企业');
     expect(html).toContain('企业微信插件');
     expect(html).toContain('给「热榜助手」发一句「你好」');
+  });
+
+  it('labels each QR so users know which one to scan', () => {
+    const html = renderJoinPage({
+      accepting: true,
+      emailReady: true,
+      appName: 'GitHub 热榜',
+      joinQrUrl: '/join.png',
+      pluginQrUrl: '/plugin.png',
+    });
+    expect(html).toContain('alt="加入企业二维码"');
+    expect(html).toContain('alt="微信插件二维码"');
+  });
+
+  it('never tells users to scan a QR that is not rendered', () => {
+    // 没配二维码时旧版仍然写着「扫码加入企业」，下面却一片空白 —— 死路。
+    const html = renderJoinPage({ accepting: true, emailReady: true, appName: 'GitHub 热榜' });
+    expect(html).not.toContain('扫码加入企业');
+    expect(html).not.toContain('<img');
+    expect(html).toContain('向管理员索要企业邀请链接');
+  });
+
+  it('只配了一个二维码时，另一张不会留下空占位', () => {
+    const html = renderJoinPage({
+      accepting: true,
+      emailReady: true,
+      appName: 'GitHub 热榜',
+      pluginQrUrl: '/plugin.png',
+    });
+    expect(html).toContain('src="/plugin.png"');
+    expect(html).not.toContain('alt="加入企业二维码"');
   });
 
   it('escapes the app name', () => {
@@ -180,12 +214,28 @@ describe('GET /api/join', () => {
     expect(res.body).toContain('给「热榜助手」发一句「你好」');
   });
 
-  it('falls back to the default app name and no QR images', async () => {
+  it('defaults to the QR assets shipped in the repo', async () => {
+    const res = mockRes();
+    await handler({ method: 'GET' }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain(`src="${DEFAULT_JOIN_QR_URL}"`);
+    expect(res.body).toContain(`src="${DEFAULT_PLUGIN_QR_URL}"`);
+  });
+
+  it('ships the default QR assets as real PNGs', () => {
+    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+    for (const url of [DEFAULT_JOIN_QR_URL, DEFAULT_PLUGIN_QR_URL]) {
+      const path = url.replace(/^\//, '');
+      expect(existsSync(path), path).toBe(true);
+      expect([...readFileSync(path).subarray(0, 8)], path).toEqual(signature);
+    }
+  });
+
+  it('falls back to the default app name', async () => {
     const res = mockRes();
     await handler({}, res);
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain('给「GitHub 热榜」发一句「你好」');
-    expect(res.body).not.toContain('<img');
   });
 
   it('reflects capacity state from the probe', async () => {

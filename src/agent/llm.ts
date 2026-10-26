@@ -176,16 +176,32 @@ function llmLabel(): { provider: string; model: string } {
 }
 
 /**
+ * 单次生成的默认超时：摘要批量是 10 个仓库合并成一次调用，要留足余量。
+ * 互动路径（解析搜索意图）另有更短的上限——见 parse-query.ts。
+ */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
+export interface GenerateOptions {
+  /** 覆盖默认超时（毫秒）。超时即中止请求，安全函数返回 null。 */
+  timeoutMs?: number;
+}
+
+/**
  * 对 prompt 做结构化对象生成；SDK 抛错、返回对象未过 zod 校验、
  * 网络失败等任何失败均返回 null，绝不 reject。
  * 成功后打印用量（provider/model/输入输出 token，不含内容），便于在
  * Vercel 日志核对成本；失败时除日志外还写一条 6 小时的诊断记录到
  * kv_cache（`llm:last-error`），因为线上往往拿不到 Vercel 日志。
+ *
+ * 刻意关掉 SDK 的重试（默认 2 次）并加硬超时：这条链路上本就有一条
+ * 「失败立刻走规则解析」的免费退路，重试只会把一次 3 秒的失败拖成十几秒，
+ * 而用户那头看到的是「正在处理」迟迟不结束。
  */
 export async function generateObjectSafe<T>(
   schema: ZodSchema<T>,
   prompt: string,
   override?: LlmOverride,
+  options: GenerateOptions = {},
 ): Promise<T | null> {
   // override 模式下不读运营方 env：用户的 Key 与 env 配置好坏无关。
   const { provider, model } = override
@@ -196,6 +212,8 @@ export async function generateObjectSafe<T>(
       model: override ? llmFor(override) : llm(),
       schema,
       prompt,
+      maxRetries: 0,
+      abortSignal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
     });
     const usage = result.usage as
       | {

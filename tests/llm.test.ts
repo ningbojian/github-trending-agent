@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { generateObjectSafe, llm, llmFor } from '../src/agent/llm';
+import { DEFAULT_TIMEOUT_MS, generateObjectSafe, llm, llmFor } from '../src/agent/llm';
 
 /**
  * env 惰性单例策略（同 callback.test.ts）：用 vi.mock 固定 src/config，
@@ -287,6 +287,8 @@ describe('generateObjectSafe — 用户自备 Key（override）', () => {
       model: { provider: 'opencode-chat', modelId: OVERRIDE.model },
       schema,
       prompt: 'p',
+      maxRetries: 0,
+      abortSignal: expect.any(AbortSignal),
     });
     // 用户自己的 Key 生效时，运营方 env 的 provider 完全不该参与
     expect(mocks.createAnthropic).not.toHaveBeenCalled();
@@ -367,6 +369,8 @@ describe('generateObjectSafe', () => {
       model: { provider: 'anthropic', modelId: 'test-model' },
       schema,
       prompt: 'summarize this repo',
+      maxRetries: 0,
+      abortSignal: expect.any(AbortSignal),
     });
   });
 
@@ -452,5 +456,52 @@ describe('generateObjectSafe', () => {
     } finally {
       if (descriptor) Object.defineProperty(mocks.env, 'LLM_PROVIDER', descriptor);
     }
+  });
+});
+
+describe('generateObjectSafe — 重试与超时', () => {
+  const schema = z.object({ ok: z.boolean() });
+
+  it('一次失败就是一次失败：maxRetries 为 0，不串行重试三次', async () => {
+    // SDK 默认 maxRetries = 2：provider 抽风时会串行重试三次才回退，
+    // 而这条链路上本来就有一条「失败立即走正则」的免费退路。
+    mocks.generateObject.mockResolvedValue({ object: { ok: true } });
+
+    await generateObjectSafe(schema, 'p');
+
+    expect(mocks.generateObject.mock.calls[0][0].maxRetries).toBe(0);
+  });
+
+  it('超时会真的中止请求并立刻回退成 null，而不是挂到平台超时', async () => {
+    // 真实 SDK 会监听 abortSignal；这里用 mock 复现同一行为，
+    // 断言的是「超时信号确实被接上并触发了」。
+    mocks.generateObject.mockImplementation(
+      ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          abortSignal.addEventListener('abort', () =>
+            reject(new Error('The operation was aborted')),
+          );
+        }),
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const started = Date.now();
+
+    await expect(
+      generateObjectSafe(schema, 'p', undefined, { timeoutMs: 20 }),
+    ).resolves.toBeNull();
+
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('默认超时 30 秒（摘要批量要留足余量）', async () => {
+    mocks.generateObject.mockResolvedValue({ object: { ok: true } });
+
+    await generateObjectSafe(schema, 'p');
+
+    const signal = mocks.generateObject.mock.calls[0][0]
+      .abortSignal as AbortSignal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(signal.aborted).toBe(false);
+    expect(DEFAULT_TIMEOUT_MS).toBe(30_000);
   });
 });

@@ -305,6 +305,12 @@ export function fallbackParse(text: string): SearchQuery {
 }
 
 /**
+ * 互动路径的解析超时：用户正等着回复，8 秒还没结果不如直接走规则解析
+ * （fallbackParse 是免费的，且对绝大多数问法足够准）。
+ */
+export const INTERACTIVE_TIMEOUT_MS = 8_000;
+
+/**
  * 先 LLM 结构化解析（严格 prompt：只允许从文本推断，禁止编造）；
  * generateObjectSafe 返回 null（SDK 失败/校验失败/未知提供商）时回退 fallbackParse。
  *
@@ -318,11 +324,11 @@ export async function parseSearchQuery(
   if (choice.kind === 'none') {
     return fallbackParse(text);
   }
-  // 运营方路径保持两参调用（既有测试/诊断记录的入参形状不变）。
+  const options = { timeoutMs: INTERACTIVE_TIMEOUT_MS };
   const result =
     choice.kind === 'user'
-      ? await generateObjectSafe(SearchQuerySchema, buildPrompt(text), choice.config)
-      : await generateObjectSafe(SearchQuerySchema, buildPrompt(text));
+      ? await generateObjectSafe(SearchQuerySchema, buildPrompt(text), choice.config, options)
+      : await generateObjectSafe(SearchQuerySchema, buildPrompt(text), undefined, options);
   if (result === null) {
     return fallbackParse(text);
   }

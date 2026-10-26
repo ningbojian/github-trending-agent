@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   fallbackParse,
+  INTERACTIVE_TIMEOUT_MS,
   parseSearchQuery,
   SearchQuerySchema,
   type SearchQuery,
@@ -64,6 +65,8 @@ describe('parseSearchQuery — LLM path', () => {
     expect(mocks.generateObjectSafe).toHaveBeenCalledWith(
       SearchQuerySchema,
       expect.stringContaining('今天 go 里 agent 相关的'),
+      undefined,
+      { timeoutMs: INTERACTIVE_TIMEOUT_MS },
     );
   });
 
@@ -142,6 +145,7 @@ describe('parseSearchQuery — LlmChoice（谁的 Key）', () => {
       SearchQuerySchema,
       expect.any(String),
       config,
+      { timeoutMs: INTERACTIVE_TIMEOUT_MS },
     );
   });
 
@@ -150,7 +154,19 @@ describe('parseSearchQuery — LlmChoice（谁的 Key）', () => {
 
     await parseSearchQuery('rust 项目');
 
-    expect(mocks.generateObjectSafe.mock.calls[0]).toHaveLength(2);
+    expect(mocks.generateObjectSafe.mock.calls[0][0]).toBe(SearchQuerySchema);
+    expect(mocks.generateObjectSafe.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it('互动路径只给 8 秒：超时不如直接回退正则', async () => {
+    mocks.generateObjectSafe.mockResolvedValue(null);
+
+    await parseSearchQuery('rust 项目');
+
+    expect(INTERACTIVE_TIMEOUT_MS).toBe(8_000);
+    expect(mocks.generateObjectSafe.mock.calls[0][3]).toEqual({
+      timeoutMs: 8_000,
+    });
   });
 });
 
@@ -191,7 +207,12 @@ describe('parseSearchQuery — regex fallback when LLM returns null', () => {
     await parseSearchQuery('啊');
 
     expect(mocks.generateObjectSafe).toHaveBeenCalledTimes(1);
-    expect(mocks.generateObjectSafe).toHaveBeenCalledWith(SearchQuerySchema, expect.any(String));
+    expect(mocks.generateObjectSafe).toHaveBeenCalledWith(
+      SearchQuerySchema,
+      expect.any(String),
+      undefined,
+      { timeoutMs: INTERACTIVE_TIMEOUT_MS },
+    );
   });
 });
 

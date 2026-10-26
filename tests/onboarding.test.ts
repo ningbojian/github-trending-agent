@@ -18,6 +18,13 @@ vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
 }));
 
+// trace 会多写一次 kv_cache insert，与本文件的写库次数断言无关 → 只透传。
+vi.mock('../src/obs/trace', () => ({
+  withTrace: (_meta: unknown, fn: () => Promise<unknown>) => fn(),
+  note: () => {},
+  traceError: () => {},
+}));
+
 /**
  * 新用户礼包会真的去构建首日简报（Task 6 起 ensureSubscriber 之后的流程）。
  * 这里只替换礼包的三个副作用，其余 digest 导出（MAX_INTERVAL_DAYS 等）保持真实——

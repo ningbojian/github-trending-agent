@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { note } from '../obs/trace.js';
 import { generateObjectSafe, type LlmChoice } from './llm.js';
 import { readCachedQuery, writeCachedQuery } from './query-cache.js';
 
@@ -327,6 +328,7 @@ export async function parseSearchQuery(
   }
   const cached = await readCachedQuery(text);
   if (cached !== null) {
+    note('parse-source', 'cache');
     return cached;
   }
   const options = { timeoutMs: INTERACTIVE_TIMEOUT_MS };
@@ -335,8 +337,10 @@ export async function parseSearchQuery(
       ? await generateObjectSafe(SearchQuerySchema, buildPrompt(text), choice.config, options)
       : await generateObjectSafe(SearchQuerySchema, buildPrompt(text), undefined, options);
   if (result === null) {
+    note('parse-source', 'fallback');
     return fallbackParse(text);
   }
+  note('parse-source', 'llm');
   const query = normalizeQuery(result);
   // 只缓存模型产出的结果：fallbackParse 本来就免费，缓存它没有意义。
   void writeCachedQuery(text, query);

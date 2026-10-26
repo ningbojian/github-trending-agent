@@ -33,6 +33,7 @@ import {
 import { sendWeComText } from './api.js';
 import { handleSearch } from './reply.js';
 import { sendWelcomeFlow } from './welcome.js';
+import { note, traceError, withTrace } from '../obs/trace.js';
 
 export interface InboundMessage {
   toUserName: string;
@@ -209,8 +210,11 @@ function dispatchSafely(
   handler: MessageHandler,
   msg: InboundMessage,
 ): Promise<void> {
+  // 一处埋点覆盖全部命令分支：函数名就是路径名（handleHelp / handleSearch…）。
+  note('handler', handler.name || 'anonymous');
   return dispatch(handler, msg).catch(async (err: unknown) => {
     console.error('handler failed:', err);
+    traceError(err);
     try {
       await sendWeComText(msg.fromUserName, HANDLER_FAILURE_REPLY);
     } catch (fallbackErr) {
@@ -233,6 +237,7 @@ async function handleEnterAgent(msg: InboundMessage): Promise<void> {
     }
   } catch (err) {
     console.error('enter_agent handling failed:', err);
+    traceError(err);
   }
 }
 
@@ -252,6 +257,24 @@ async function handleEnterAgent(msg: InboundMessage): Promise<void> {
  *   单次回发兜底文案（routeMessage 实际不再 reject；回调端点的 catch 仅作第二道安全网）。
  */
 export async function routeMessage(msg: InboundMessage): Promise<void> {
+  // 整个分发过程一条 trace：下游任意位置 note() 都挂到这次调用上。
+  // 放在这里而不是各个 handler 里，是为了让「哪条命令」与「后续几步」在同一条记录里。
+  return withTrace(
+    {
+      kind:
+        msg.msgType === 'event'
+          ? 'event'
+          : msg.msgType === 'text'
+            ? 'text'
+            : 'other',
+      userid: msg.fromUserName,
+      text: msg.content,
+    },
+    () => routeMessageInner(msg),
+  );
+}
+
+async function routeMessageInner(msg: InboundMessage): Promise<void> {
   // Task 6：enter_agent 是「加入即收到首日简报」的第二触发点（另一处是首条文本）。
   if (msg.msgType === 'event') {
     if (msg.event === 'enter_agent') {
@@ -272,6 +295,7 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
     } catch (err) {
       // 礼包发送失败不阻塞原消息处理（fail-open）。
       console.warn('welcome flow failed:', err);
+      note('welcome-failed', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -327,6 +351,7 @@ export async function routeMessage(msg: InboundMessage): Promise<void> {
   // 疑似命令容错：以命令词开头却不是合法指令 → 回用法提示，绝不静默掉进搜索。
   const usage = suspectedCommandUsage(content);
   if (usage !== null) {
+    note('route', 'suspected-command');
     return dispatchSafely(
       (m) => sendWeComText(m.fromUserName, usage),
       normalized,

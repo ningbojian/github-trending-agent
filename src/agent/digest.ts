@@ -1,6 +1,7 @@
 import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
+import { note, traceError, withTrace } from '../obs/trace.js';
 import { sendWeComText } from '../wecom/api.js';
 import { formatEntryLine } from '../wecom/text.js';
 import { loadAbstractSafe } from './abstract.js';
@@ -574,10 +575,15 @@ export async function pushDigests(
         skipped += 1;
         continue;
       }
+      // 只给真正要发的这次调用建 trace：没到点/间隔未到/抢锁失败的订阅者
+      // 每个整点都会跑一遍，全记下来只会把真正有用的记录淹掉。
+      await withTrace({ kind: 'push', userid: sub.wecomUserid }, async () => {
+      note('digest-source', snapshot ? 'snapshot' : 'rebuild');
       const { content, entries } = snapshot
         ? await buildDigestFromSnapshot(sub, snapshot)
         : await buildDigestWithEntries(sub, now);
       await sendWeComText(sub.wecomUserid, content);
+      note('send', `ok ${Buffer.byteLength(content, 'utf8')} 字节`);
       sent += 1;
       try {
         await saveRecentResults(sub.wecomUserid, entries);
@@ -595,9 +601,11 @@ export async function pushDigests(
           );
         }
       }
+      });
     } catch (err) {
       failed += 1;
       console.error(`pushDigests failed for ${sub.wecomUserid}:`, err);
+      traceError(err);
       if (claimed) {
         await rollbackClaim(sub.id);
       }

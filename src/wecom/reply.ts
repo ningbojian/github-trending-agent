@@ -4,6 +4,7 @@ import { parseSearchQuery } from '../agent/parse-query.js';
 import { loadRepoSummaries } from '../agent/repo-summary.js';
 import { searchTrending, type SearchResultItem } from '../agent/search.js';
 import { loadUserLlm } from '../agent/user-llm.js';
+import { note, traceError } from '../obs/trace.js';
 import { sendWeComText } from './api.js';
 import { ABOUT_REPLY, OFF_TOPIC_REPLY } from './onboarding.js';
 import { formatEntryLine } from './text.js';
@@ -94,6 +95,7 @@ async function loadSummariesSafe(
     return await loadRepoSummaries(items, choice);
   } catch (err) {
     console.error('loadRepoSummaries failed (degrade to no-summary):', err);
+    traceError(err);
     return new Map();
   }
 }
@@ -120,11 +122,14 @@ async function loadSummariesSafe(
 export async function handleSearch(msg: InboundMessage): Promise<void> {
   try {
     const ruled = classifyByRules(msg.content);
+    note('rule-intent', ruled ?? 'null');
     if (ruled === 'about') {
+      note('reply', 'about');
       await sendWeComText(msg.fromUserName, ABOUT_REPLY);
       return;
     }
     if (ruled === 'off_topic') {
+      note('reply', 'off_topic');
       await sendWeComText(msg.fromUserName, OFF_TOPIC_REPLY);
       return;
     }
@@ -133,13 +138,21 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     const choice: LlmChoice = userLlm
       ? { kind: 'user', config: userLlm }
       : { kind: 'none' };
+    note('llm-choice', userLlm ? `user:${userLlm.model}` : 'none');
 
     const query = await parseSearchQuery(msg.content, choice);
+    note(
+      'query',
+      `intent=${query.intent} langs=[${query.languages.join(',')}] ` +
+        `kw=[${query.keywords.join(',')}] period=${query.period} topN=${query.topN}`,
+    );
     if (query.intent === 'about') {
+      note('reply', 'about');
       await sendWeComText(msg.fromUserName, ABOUT_REPLY);
       return;
     }
     if (query.intent === 'off_topic') {
+      note('reply', 'off_topic');
       await sendWeComText(msg.fromUserName, OFF_TOPIC_REPLY);
       return;
     }
@@ -150,15 +163,22 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
         { ...query, keywords: [] },
         msg.fromUserName,
       );
+      note('search-retry', '去掉关键词再查一次');
     }
+    note('search', `${items.length} 条`);
     if (items.length === 0) {
+      note('reply', 'empty');
       await sendWeComText(msg.fromUserName, EMPTY_RESULT_REPLY);
       return;
     }
     const summaries = await loadSummariesSafe(items, choice);
-    await sendWeComText(msg.fromUserName, formatSearchReply(items, summaries));
+    note('summaries', `${summaries.size}/${items.length} 有中文简介`);
+    const reply = formatSearchReply(items, summaries);
+    await sendWeComText(msg.fromUserName, reply);
+    note('send', `ok ${Buffer.byteLength(reply, 'utf8')} 字节`);
   } catch (err) {
     console.error('handleSearch failed:', err);
+    traceError(err);
     try {
       await sendWeComText(msg.fromUserName, ERROR_REPLY);
     } catch (fallbackErr) {

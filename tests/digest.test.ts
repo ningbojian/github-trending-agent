@@ -48,6 +48,16 @@ vi.mock('../src/wecom/api', () => ({
 }));
 
 /**
+ * trace 会给每条消息往 kv_cache 多写一行 insert：本文件大量断言 insert 次数，
+ * 让它只透传执行、不落库。trace 本身由 tests/trace.test.ts 覆盖。
+ */
+vi.mock('../src/obs/trace', () => ({
+  withTrace: (_meta: unknown, fn: () => Promise<unknown>) => fn(),
+  note: () => {},
+  traceError: () => {},
+}));
+
+/**
  * Abstract 单独打桩：回退构建会给简报加一段开头概览，
  * 但这层不该在 digest 的测试里真去碰模型（配置缺失会走 recordLlmFailure 写库，
  * 污染本文件对 insert/delete 次数的断言）。

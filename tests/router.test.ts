@@ -12,6 +12,19 @@ vi.mock('../src/wecom/api', () => ({
   sendWeComText: vi.fn(),
 }));
 
+// router 的埋点只关心「记了哪几步」，不需要真的落库。
+const traceMock = vi.hoisted(() => ({
+  notes: [] as Array<[string, string | undefined]>,
+}));
+
+vi.mock('../src/obs/trace', () => ({
+  withTrace: (_meta: unknown, fn: () => Promise<unknown>) => fn(),
+  note: (name: string, detail?: string) => {
+    traceMock.notes.push([name, detail]);
+  },
+  traceError: () => {},
+}));
+
 /**
  * Task 6：router 在分发前调用 ensureSubscriber / sendWelcomeFlow。
  * 这里只替换这两个协作者，其余 onboarding 导出（各 handler）保持真实实现——
@@ -72,6 +85,7 @@ beforeEach(() => {
   subscribeFlowMock.ensureSubscriber.mockResolvedValue(false);
   subscribeFlowMock.sendWelcomeFlow.mockReset();
   subscribeFlowMock.sendWelcomeFlow.mockResolvedValue(undefined);
+  traceMock.notes.length = 0;
   resetHandlers();
   registerHandlers({
     help: helpHandler,
@@ -92,6 +106,12 @@ beforeEach(() => {
 });
 
 describe('routeMessage 分发', () => {
+  it('每条消息都记下命中的 handler（trace 里能看出走了哪条路）', async () => {
+    await routeMessage(makeMsg({ content: '帮助' }));
+
+    expect(traceMock.notes.some(([name]) => name === 'handler')).toBe(true);
+  });
+
   it('content 为「帮助」→ helpHandler', async () => {
     await routeMessage(makeMsg({ content: '帮助' }));
     expect(helpHandler).toHaveBeenCalledTimes(1);

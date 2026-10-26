@@ -82,6 +82,13 @@ vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
 }));
 
+// trace 会多写一次 kv_cache insert，与本文件的写库次数断言无关 → 只透传。
+vi.mock('../src/obs/trace', () => ({
+  withTrace: (_meta: unknown, fn: () => Promise<unknown>) => fn(),
+  note: () => {},
+  traceError: () => {},
+}));
+
 import {
   bindHandler,
   buildAuthorizeUrl,

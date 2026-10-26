@@ -13,9 +13,15 @@ import {
  */
 const mocks = vi.hoisted(() => ({
   generateObjectSafe: vi.fn(),
+  readCachedQuery: vi.fn(async () => null as SearchQuery | null),
+  writeCachedQuery: vi.fn(async () => {}),
 }));
 
 vi.mock('../src/agent/llm', () => ({ generateObjectSafe: mocks.generateObjectSafe }));
+vi.mock('../src/agent/query-cache', () => ({
+  readCachedQuery: mocks.readCachedQuery,
+  writeCachedQuery: mocks.writeCachedQuery,
+}));
 
 const DEFAULTS: SearchQuery = {
   intent: 'search',
@@ -167,6 +173,52 @@ describe('parseSearchQuery — LlmChoice（谁的 Key）', () => {
     expect(mocks.generateObjectSafe.mock.calls[0][3]).toEqual({
       timeoutMs: 8_000,
     });
+  });
+});
+
+describe('parseSearchQuery — 解析结果缓存', () => {
+  beforeEach(() => {
+    mocks.generateObjectSafe.mockReset();
+    mocks.readCachedQuery.mockReset();
+    mocks.readCachedQuery.mockResolvedValue(null);
+    mocks.writeCachedQuery.mockReset();
+    mocks.writeCachedQuery.mockResolvedValue(undefined);
+  });
+
+  it('命中缓存 → 一次模型都不调，直接用缓存的查询', async () => {
+    const cached = llmQuery({ languages: ['go'], keywords: ['agent'] });
+    mocks.readCachedQuery.mockResolvedValue(cached);
+
+    await expect(parseSearchQuery('今天 go 里 agent 相关的')).resolves.toEqual(cached);
+    expect(mocks.generateObjectSafe).not.toHaveBeenCalled();
+  });
+
+  it('未命中 → 调一次模型，并把规范化后的结果写回缓存', async () => {
+    mocks.generateObjectSafe.mockResolvedValue(
+      llmQuery({ languages: [' Python '], topN: 99 }),
+    );
+
+    const result = await parseSearchQuery('python 项目');
+
+    expect(mocks.generateObjectSafe).toHaveBeenCalledTimes(1);
+    expect(mocks.writeCachedQuery).toHaveBeenCalledWith('python 项目', result);
+    expect(result.languages).toEqual(['python']);
+    expect(result.topN).toBe(25);
+  });
+
+  it('模型失败回退正则 → 不写缓存（正则本来免费，缓存它没有意义）', async () => {
+    mocks.generateObjectSafe.mockResolvedValue(null);
+
+    await parseSearchQuery('rust 项目');
+
+    expect(mocks.writeCachedQuery).not.toHaveBeenCalled();
+  });
+
+  it('没配 Key（kind: none）→ 缓存既不读也不写', async () => {
+    await parseSearchQuery('rust 项目', { kind: 'none' });
+
+    expect(mocks.readCachedQuery).not.toHaveBeenCalled();
+    expect(mocks.writeCachedQuery).not.toHaveBeenCalled();
   });
 });
 

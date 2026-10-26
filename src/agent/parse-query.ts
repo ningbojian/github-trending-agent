@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { generateObjectSafe, type LlmChoice } from './llm.js';
+import { readCachedQuery, writeCachedQuery } from './query-cache.js';
 
 /** LLM 结构化解析的输出契约（检索服务 Task 8 消费）。 */
 export const SearchQuerySchema = z.object({
@@ -311,11 +312,11 @@ export function fallbackParse(text: string): SearchQuery {
 export const INTERACTIVE_TIMEOUT_MS = 8_000;
 
 /**
- * 先 LLM 结构化解析（严格 prompt：只允许从文本推断，禁止编造）；
+ * 先查共享缓存，再 LLM 结构化解析（严格 prompt：只允许从文本推断，禁止编造）；
  * generateObjectSafe 返回 null（SDK 失败/校验失败/未知提供商）时回退 fallbackParse。
  *
  * `choice` 决定用谁的 Key：默认运营方；互动传 `{ kind: 'none' }`（用户没配 Key）
- * 时**完全不调模型**，直接规则解析 —— 零成本。
+ * 时**完全不调模型、也不碰缓存**，直接规则解析 —— 零成本。
  */
 export async function parseSearchQuery(
   text: string,
@@ -323,6 +324,10 @@ export async function parseSearchQuery(
 ): Promise<SearchQuery> {
   if (choice.kind === 'none') {
     return fallbackParse(text);
+  }
+  const cached = await readCachedQuery(text);
+  if (cached !== null) {
+    return cached;
   }
   const options = { timeoutMs: INTERACTIVE_TIMEOUT_MS };
   const result =
@@ -332,5 +337,8 @@ export async function parseSearchQuery(
   if (result === null) {
     return fallbackParse(text);
   }
-  return normalizeQuery(result);
+  const query = normalizeQuery(result);
+  // 只缓存模型产出的结果：fallbackParse 本来就免费，缓存它没有意义。
+  void writeCachedQuery(text, query);
+  return query;
 }

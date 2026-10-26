@@ -26,6 +26,7 @@ const userLlmMock = vi.hoisted(() => ({
 
 const dbMock = vi.hoisted(() => ({
   failExecute: false,
+  insertValues: [] as Record<string, unknown>[],
 }));
 
 vi.mock('../src/wecom/api', () => ({
@@ -49,6 +50,7 @@ vi.mock('../src/agent/user-llm', () => ({
 }));
 
 // db 兜底 mock：router 的 stars/onboarding 模块图需要 db 导出存在（本文件不经其路径）。
+// insert 供匿名意图日志（intent-log）走真实实现，断言落库形状。
 vi.mock('../src/db/client', () => ({
   db: () => ({
     execute: async () => {
@@ -57,6 +59,12 @@ vi.mock('../src/db/client', () => ({
       }
       return { rows: [] };
     },
+    insert: () => ({
+      values: (row: unknown) => {
+        dbMock.insertValues.push(row as Record<string, unknown>);
+        return { onConflictDoUpdate: async () => undefined };
+      },
+    }),
   }),
 }));
 
@@ -141,6 +149,7 @@ beforeEach(() => {
   userLlmMock.loadUserLlm.mockReset();
   userLlmMock.loadUserLlm.mockResolvedValue(USER_LLM);
   dbMock.failExecute = false;
+  dbMock.insertValues = [];
 });
 
 // ---------------------------------------------------------------------------
@@ -540,6 +549,67 @@ describe('handleSearch 意图边界（about / off_topic 不检索）', () => {
     await handleSearch(makeMsg({ content: 'python 热榜' }));
 
     expect(searchMock.searchTrending).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 匿名意图日志：只记规则层没学到的样本（规则漏判 / 0 结果 / ≤10 字短句）。
+// ---------------------------------------------------------------------------
+describe('handleSearch 匿名意图日志', () => {
+  /**
+   * 同一次调用还会写 parse 缓存（parse:v1:*），所以只看 intent-miss 那几行。
+   */
+  function missRows(): Array<{ key: string; value: Record<string, unknown> }> {
+    return dbMock.insertValues.filter((row) =>
+      String(row.key).startsWith('intent-miss:'),
+    ) as Array<{ key: string; value: Record<string, unknown> }>;
+  }
+
+  it('LLM 判 off_topic（规则漏判）→ 记一条匿名样本', async () => {
+    // >30 字：规则只认短句，这句必须落到模型手里才判得出来。
+    const content = '麻烦你帮我看看明天上午上海的天气怎么样会不会下雨需不需要带伞出门';
+    expect(content.length).toBeGreaterThan(30);
+    llmMock.generateObjectSafe.mockResolvedValue(
+      makeQuery({ intent: 'off_topic' }),
+    );
+
+    await handleSearch(makeMsg({ content }));
+
+    expect(llmMock.generateObjectSafe).toHaveBeenCalledTimes(1);
+    const rows = missRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].key).toMatch(/^intent-miss:\d{8}:[0-9a-f]{40}$/);
+    // 只存原话与最终意图——不含 userid 等任何身份字段。
+    expect(rows[0].value).toEqual({ text: content, final: 'off_topic' });
+  });
+
+  it('规则命中 off_topic → 不记（这句话规则已经认识）', async () => {
+    await handleSearch(makeMsg({ content: '今天天气怎么样' }));
+
+    expect(missRows()).toHaveLength(0);
+  });
+
+  it('正常搜索（有结果、且不是短句）→ 不记', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue(
+      makeQuery({ languages: ['python'], keywords: ['ai'] }),
+    );
+    searchMock.searchTrending.mockResolvedValue([makeItem()]);
+
+    await handleSearch(makeMsg({ content: '本周 python 的 ai 项目' }));
+
+    expect(searchMock.searchTrending).toHaveBeenCalledTimes(1);
+    expect(missRows()).toHaveLength(0);
+  });
+
+  it('搜出来 0 条 → 记（多半是没听懂用户想搜什么）', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue(makeQuery());
+    searchMock.searchTrending.mockResolvedValue([]);
+
+    await handleSearch(makeMsg({ content: '那个最近很火的那个啥来着' }));
+
+    const rows = missRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].value.final).toBe('search');
   });
 });
 

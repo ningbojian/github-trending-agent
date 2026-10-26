@@ -417,6 +417,37 @@ curl -i https://<domain>/api/oauth-github
 
 **风险与取舍**：不配置的用户，互动仍可用但只有英文原描述（共享缓存命中时是中文）。这正符合「互动不烧运营方额度」的要求；要提升体验就配 Key。`TOKEN_ENCRYPT_KEY` 缺失时「设置模型」直接回「服务未配置加密密钥」，不生成链接。
 
+### 10.4 运行日志：每次调用走了哪条路 + 规则层怎么长大
+
+**一次调用 = 一条 trace**（`src/obs/trace.ts`，写 `kv_cache`，保留 7 天，不建表）。一条入站消息的「路由 → 规则意图 → 模型选择 → 解析来源 → 检索条数 → 简介命中 → 发送字节」按顺序记在 `steps` 里，每步带距上一步的 `ms`，一眼看出慢在哪一段。每日推送同理（`kind=push`，每个真正发送的订阅者一条）。
+
+打开（手机浏览器也能看，服务端渲染，无需登录）：
+
+```
+https://ghtrending.cyou/api/trace?secret=<CRON_SECRET>&n=50
+https://ghtrending.cyou/api/trace?secret=<CRON_SECRET>&u=<wecom_userid>   # 只看某个人
+```
+
+- `n` 默认 50、上限 200；`u` 按 userid 过滤。
+- 鉴权复用 `CRON_SECRET`（`?secret=` 或 `Authorization: Bearer`），错了一律 401。
+- 时间一律北京时间；`✓`/`✗` 表示整条调用成不成功（`✗` 展开能看到脱敏后的错误）。
+- 原话截断 80 字；`sk-` 开头的 Key 一律打成 `sk-***`，**密钥不进 trace**。
+
+**为什么不用 Vercel Function Logs**：要登录控制台、只留几天、没有请求 id——同一条消息的六七步是互不关联的散行，多用户并发时根本串不起来。
+
+**规则层的语料来源（匿名意图日志）**：`src/agent/intent-log.ts` 只记三类「规则层没学到」的输入——模型判成 `about`/`off_topic` 的长句、搜出来 0 条的查询、≤10 字的短句。正常搜索不记；样本里**没有 userid**，只有原话（≤60 字）与最终意图，key 按天分桶（同日同句一行），120 天过期。
+
+攒几天后跑这条，排前面的就是下一批该写进 `ABOUT_PATTERNS` / `OFF_TOPIC_TOPICS`（`src/agent/intent.ts`）的说法：
+
+```sql
+select value->>'text' as text, value->>'final' as final, count(*) as days
+from kv_cache
+where key like 'intent-miss:%' and expires_at > now()
+group by 1, 2 order by 3 desc limit 20;
+```
+
+规则层每长大一点，就少一次模型调用、少一次误判——而且互动的模型调用本来就烧用户自己的 Key，运营方在这条链路上不产生开销。
+
 ---
 
 ## 附：观察指标落地准备

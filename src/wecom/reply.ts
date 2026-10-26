@@ -1,4 +1,5 @@
-import { classifyByRules } from '../agent/intent.js';
+import { classifyByRules, type Intent } from '../agent/intent.js';
+import { recordIntentMiss, shouldLogMiss } from '../agent/intent-log.js';
 import type { LlmChoice } from '../agent/llm.js';
 import { parseSearchQuery } from '../agent/parse-query.js';
 import { loadRepoSummaries } from '../agent/repo-summary.js';
@@ -101,6 +102,21 @@ async function loadSummariesSafe(
 }
 
 /**
+ * 规则层没学到的样本才记（匿名；同日同句只留一行）。不 await：
+ * 日志是副产品，绝不许拖慢给用户的回复。
+ */
+function logIntentMiss(
+  ruleIntent: Intent | null,
+  finalIntent: Intent,
+  resultCount: number,
+  text: string,
+): void {
+  if (shouldLogMiss({ ruleIntent, finalIntent, resultCount, text })) {
+    void recordIntentMiss(text, finalIntent);
+  }
+}
+
+/**
  * 搜索 handler：意图判断 → parse → search → format → sendWeComText。
  *
  * 意图边界（只拦明显无关）：先跑零成本规则（intent.ts），命中直接回文案；
@@ -112,6 +128,10 @@ async function loadSummariesSafe(
  * Token 归属：互动一律用**用户自己的 Key**（`设置模型` 配的）；没配就
  * `{ kind: 'none' }` —— 规则解析 + 只读共享缓存，运营方额度一分不花。
  * 每日推送仍走运营方 Key（app 内其他路径，不经过这里）。
+ *
+ * 匿名意图日志：规则漏判的 about / off_topic、0 条结果的搜索、≤10 字的短句
+ * 会记一条匿名样本（src/agent/intent-log.ts），用来反推下一批该补的规则；
+ * 正常搜索不记，样本里也不含任何身份字段。
  *
  * 首次检索为空且 query 带关键词时，去掉 keywords 再查一次（关键词常是
  * 用户主题词而非榜单词，ILIKE 易 0 命中，直接放弃等于「没找到」误伤）。
@@ -148,11 +168,13 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     );
     if (query.intent === 'about') {
       note('reply', 'about');
+      logIntentMiss(ruled, 'about', 0, msg.content);
       await sendWeComText(msg.fromUserName, ABOUT_REPLY);
       return;
     }
     if (query.intent === 'off_topic') {
       note('reply', 'off_topic');
+      logIntentMiss(ruled, 'off_topic', 0, msg.content);
       await sendWeComText(msg.fromUserName, OFF_TOPIC_REPLY);
       return;
     }
@@ -168,9 +190,11 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     note('search', `${items.length} 条`);
     if (items.length === 0) {
       note('reply', 'empty');
+      logIntentMiss(ruled, 'search', 0, msg.content);
       await sendWeComText(msg.fromUserName, EMPTY_RESULT_REPLY);
       return;
     }
+    logIntentMiss(ruled, 'search', items.length, msg.content);
     const summaries = await loadSummariesSafe(items, choice);
     note('summaries', `${summaries.size}/${items.length} 有中文简介`);
     const reply = formatSearchReply(items, summaries);

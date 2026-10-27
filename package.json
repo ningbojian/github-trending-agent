@@ -11,7 +11,12 @@
     "test": "vitest run",
     "dev": "vercel dev",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "eval": "tsx evals/cli.ts --compare",
+    "eval:ci": "tsx evals/cli.ts --compare",
+    "eval:llm": "tsx evals/cli.ts --llm --compare",
+    "eval:baseline": "tsx evals/cli.ts --update-baseline",
+    "eval:seed": "tsx evals/seed-from-intent-log.ts"
   },
   "dependencies": {
     "@ai-sdk/alibaba": "^2.0.73",

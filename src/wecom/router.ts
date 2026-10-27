@@ -12,7 +12,6 @@ import {
   UNFAVORITE_USAGE_REPLY,
 } from '../github/stars.js';
 import { bindHandler } from '../github/oauth.js';
-import { NUMBER_TOKEN_PATTERN } from './cn-number.js';
 import { handleInterested, handleNotInterested } from './feedback.js';
 import {
   CLEAR_MODEL_USAGE_REPLY,
@@ -33,6 +32,7 @@ import {
 } from './onboarding.js';
 import { sendWeComText } from './api.js';
 import { handleSearch } from './reply.js';
+import { decideTextRoute, normalizeCommandText, type UsageKey } from './route-decision.js';
 import {
   CANCEL_SUBSCRIPTION_USAGE_REPLY,
   MY_SUBSCRIPTION_USAGE_REPLY,
@@ -136,56 +136,6 @@ export function resetHandlers(): void {
   };
 }
 
-/** 「取消收藏 <数字>」——支持有/无空格、阿拉伯/中文数字（须先于「收藏 N」判断）。 */
-const UNFAVORITE_PATTERN = new RegExp(`^取消收藏\\s*${NUMBER_TOKEN_PATTERN}$`);
-
-/** 「收藏 <数字>」——支持有/无空格、阿拉伯/中文数字。 */
-const FAVORITE_PATTERN = new RegExp(`^收藏\\s*${NUMBER_TOKEN_PATTERN}$`);
-
-/** 「订阅 …」——前缀匹配（「退订」首字为「退」，不会被吞掉）。 */
-const SUBSCRIBE_PATTERN = /^订阅/;
-
-/**
- * 「取消订阅 <关键词>」——动词后必须是空白或句子结束（裸「取消订阅」命中，
- * 由 handler 回用法提示；「取消订阅rpa」无空白 → 疑似命令提示）。
- */
-const CANCEL_SUBSCRIPTION_PATTERN = /^取消订阅(?:\s|$)/;
-
-/**
- * 「不感兴趣 …」/「感兴趣 …」——动词后必须是空白或句子结束。
- * 具体作用在哪些条目（整批 / 序号 / 仓库名）由 handler 解析；
- * 这里只负责「别把口味指令当搜索词发出去」。
- * 「不感兴趣」必须先判：它是「感兴趣」的超集前缀吗？不是，但顺序保持与旧实现一致。
- */
-const NOT_INTERESTED_PATTERN = /^不感兴趣(?:\s|$)/;
-const INTERESTED_PATTERN = /^感兴趣(?:\s|$)/;
-
-/** 「条数 …」——前缀匹配（裸「条数」/非法输入由 handler 回用法提示）。 */
-const DIGEST_COUNT_PATTERN = /^条数/;
-
-/**
- * 「每天 H 点」/「推送时间 HH:MM」——**锚定整句**（时间可省略：裸「推送时间」
- * 由 handler 回用法提示）。「每天 star 最多的项目」是合法搜索，绝不能被吞。
- * 尾标点在分发前已剥除（「每天 9 点。」同样命中）。
- * 注意：分钟 token 必须写成 `(?:TOKEN)?` —— NUMBER_TOKEN_PATTERN 自带 `+`，
- * 直接 `TOKEN?` 会变成惰性 `+?`（分钟变成必填），「每天 9 点」就永远不命中。
- */
-const PUSH_TIME_PATTERN = new RegExp(
-  `^(每天|推送时间)(?:\\s*${NUMBER_TOKEN_PATTERN}(?:\\s*[:：点时]\\s*(?:${NUMBER_TOKEN_PATTERN})?)?\\s*分?)?\\s*$`,
-);
-
-/**
- * 「每 N 天(推送|简报)?」——**锚定整句**（N 为阿拉伯/中文数字）。
- * 「每两天更新的项目」等带后缀的句子不命中，照常落搜索。
- * 与 PUSH_TIME_PATTERN 互斥：「每天」无 N 不命中本式；「每 2 天」无「每天」前缀不命中上式。
- */
-const PUSH_INTERVAL_PATTERN = new RegExp(
-  `^每\\s*${NUMBER_TOKEN_PATTERN}\\s*天(推送|简报)?$`,
-);
-
-/** 尾部中英文标点（精确/前缀分发与疑似命令判定前统一剥除，「帮助。」也能命中）。 */
-const TRAILING_PUNCT_RE = /[。！？!?；;，,．.…]+$/;
-
 /** 「我的收藏」带了多余内容时的用法提示。 */
 export const LIST_USAGE_REPLY = '用法：直接回复「我的收藏」即可（无需参数）';
 
@@ -196,45 +146,22 @@ export const BIND_USAGE_REPLY = '用法：直接回复「绑定」即可（无�
 export const UNSUBSCRIBE_USAGE_REPLY = '用法：直接回复「退订」即可（无需参数）';
 
 /**
- * 疑似命令判定：精确/前缀分发全部未命中、即将 fallthrough 到搜索前，
- * 若内容以命令词开头却不是合法指令（如「收藏一下」「我的收藏列表」），
- * 回对应用法提示而不是把命令错字当搜索词发出去。
- * 「帮助」刻意不在列：长句（「帮助我找 python」）是合法的搜索请求，只精确匹配。
+ * 疑似命令键 → 用法提示文案。
+ * 决策（「这是哪条疑似命令」）在 route-decision.ts，文案留在这里：
+ * 评测只关心走了哪条路，改文案不该影响路由判定。
  */
-function suspectedCommandUsage(content: string): string | null {
-  if (content.startsWith('取消收藏')) {
-    return UNFAVORITE_USAGE_REPLY;
-  }
-  if (content.startsWith('收藏')) {
-    return FAVORITE_USAGE_REPLY;
-  }
-  if (content.startsWith('我的收藏')) {
-    return LIST_USAGE_REPLY;
-  }
-  if (content.startsWith('我的订阅')) {
-    return MY_SUBSCRIPTION_USAGE_REPLY;
-  }
-  if (content.startsWith('取消订阅')) {
-    return CANCEL_SUBSCRIPTION_USAGE_REPLY;
-  }
-  if (content.startsWith('绑定')) {
-    return BIND_USAGE_REPLY;
-  }
-  if (content.startsWith('退订')) {
-    return UNSUBSCRIBE_USAGE_REPLY;
-  }
-  // 三个模型命令同形的前缀兜底：错字/带参数都别被当成搜索词发出去。
-  if (content.startsWith('设置模型')) {
-    return SET_MODEL_USAGE_REPLY;
-  }
-  if (content.startsWith('清除模型')) {
-    return CLEAR_MODEL_USAGE_REPLY;
-  }
-  if (content.startsWith('我的模型')) {
-    return MY_MODEL_USAGE_REPLY;
-  }
-  return null;
-}
+const USAGE_REPLIES: Record<UsageKey, string> = {
+  unfavorite: UNFAVORITE_USAGE_REPLY,
+  favorite: FAVORITE_USAGE_REPLY,
+  list: LIST_USAGE_REPLY,
+  mySubscription: MY_SUBSCRIPTION_USAGE_REPLY,
+  cancelSubscription: CANCEL_SUBSCRIPTION_USAGE_REPLY,
+  bind: BIND_USAGE_REPLY,
+  unsubscribe: UNSUBSCRIBE_USAGE_REPLY,
+  setModel: SET_MODEL_USAGE_REPLY,
+  clearModel: CLEAR_MODEL_USAGE_REPLY,
+  myModel: MY_MODEL_USAGE_REPLY,
+};
 
 /** 把 handler 调用包成 promise（同步抛错也转为 rejected promise）。 */
 function dispatch(handler: MessageHandler, msg: InboundMessage): Promise<void> {
@@ -349,76 +276,18 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
   // 若仍传原始文本，「收藏 1。」会在 router 命中后于 handler 静默掉（死消息）。
   const normalized: InboundMessage = {
     ...msg,
-    content: msg.content.trim().replace(TRAILING_PUNCT_RE, '').trim(),
+    content: normalizeCommandText(msg.content),
   };
-  const content = normalized.content;
-  if (content === '帮助') {
-    return dispatchSafely(handlers.help, normalized);
-  }
-  if (UNFAVORITE_PATTERN.test(content)) {
-    return dispatchSafely(handlers.unfavorite, normalized);
-  }
-  if (FAVORITE_PATTERN.test(content)) {
-    return dispatchSafely(handlers.favorite, normalized);
-  }
-  if (content === '我的收藏') {
-    return dispatchSafely(handlers.list, normalized);
-  }
-  // 「我的订阅」只读展示当前设置（精确匹配；「我的订阅列表」由疑似命令兜住）。
-  if (content === '我的订阅') {
-    return dispatchSafely(handlers.mySubscription, normalized);
-  }
-  // 口味反馈：「不感兴趣」先判，避免被「感兴趣」前缀规则吞并。
-  // 动词后的目标（序号/仓库名）交给 handler 解析；「感兴趣xxx」无空白仍走搜索。
-  if (NOT_INTERESTED_PATTERN.test(content)) {
-    return dispatchSafely(handlers.notInterested, normalized);
-  }
-  if (INTERESTED_PATTERN.test(content)) {
-    return dispatchSafely(handlers.interested, normalized);
-  }
-  // Task 11：精确匹配「绑定」（trim 后），避免吞掉「绑定 XXX」类消息。
-  if (content === '绑定') {
-    return dispatchSafely(handlers.bind, normalized);
-  }
-  if (SUBSCRIBE_PATTERN.test(content)) {
-    return dispatchSafely(handlers.subscribe, normalized);
-  }
-  // 冲突提示给的命令：只删一个订阅词，必须判在「退订」之前（两者都以「订」结尾）。
-  if (CANCEL_SUBSCRIPTION_PATTERN.test(content)) {
-    return dispatchSafely(handlers.cancelSubscription, normalized);
-  }
-  if (content === '退订') {
-    return dispatchSafely(handlers.unsubscribe, normalized);
-  }
-  if (DIGEST_COUNT_PATTERN.test(content)) {
-    return dispatchSafely(handlers.digestCount, normalized);
-  }
-  if (PUSH_TIME_PATTERN.test(content)) {
-    return dispatchSafely(handlers.pushTime, normalized);
-  }
-  if (PUSH_INTERVAL_PATTERN.test(content)) {
-    return dispatchSafely(handlers.pushInterval, normalized);
-  }
-  // 自备模型：精确匹配（「设置模型 用 deepseek」由下面的疑似命令兜住）。
-  if (content === '设置模型') {
-    return dispatchSafely(handlers.setModel, normalized);
-  }
-  if (content === '我的模型') {
-    return dispatchSafely(handlers.myModel, normalized);
-  }
-  if (content === '清除模型') {
-    return dispatchSafely(handlers.clearModel, normalized);
-  }
-  // 疑似命令容错：以命令词开头却不是合法指令 → 回用法提示，绝不静默掉进搜索。
-  const usage = suspectedCommandUsage(content);
-  if (usage !== null) {
+  const decision = decideTextRoute(normalized.content);
+  if (decision.kind === 'usage') {
+    // 疑似命令容错：以命令词开头却不是合法指令 → 回用法提示，绝不静默掉进搜索。
     note('route', 'suspected-command');
     return dispatchSafely(
-      (m) => sendWeComText(m.fromUserName, usage),
+      (m) => sendWeComText(m.fromUserName, USAGE_REPLIES[decision.usage]),
       normalized,
     );
   }
-  return dispatchSafely(handlers.search, normalized);
+  return dispatchSafely(handlers[decision.handler], normalized);
 }
 
 // Task 9：帮助/搜索 handler、Task 11：绑定 handler、Task 12：收藏/取消收藏/我的收藏

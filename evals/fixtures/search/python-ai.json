@@ -1,0 +1,35 @@
+[
+  {
+    "fullName": "astral-sh/ruff",
+    "description": "An extremely fast Python linter and code formatter, written in Rust.",
+    "language": "Python",
+    "stars": 41200,
+    "starsDelta": 820,
+    "isNew": false,
+    "date": "2026-10-27",
+    "htmlUrl": "https://github.com/astral-sh/ruff",
+    "rank": 1
+  },
+  {
+    "fullName": "pytorch/pytorch",
+    "description": "Tensors and dynamic neural networks in Python with strong GPU acceleration.",
+    "language": "Python",
+    "stars": 89000,
+    "starsDelta": 410,
+    "isNew": false,
+    "date": "2026-10-27",
+    "htmlUrl": "https://github.com/pytorch/pytorch",
+    "rank": 2
+  },
+  {
+    "fullName": "langchain-ai/langgraph",
+    "description": "Build resilient language agents as graphs.",
+    "language": "Python",
+    "stars": 18700,
+    "starsDelta": 260,
+    "isNew": true,
+    "date": "2026-10-27",
+    "htmlUrl": "https://github.com/langchain-ai/langgraph",
+    "rank": 3
+  }
+]

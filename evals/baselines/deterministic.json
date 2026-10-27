@@ -1,0 +1,19 @@
+{
+  "metrics": {
+    "route_accuracy": 1,
+    "route_macro_f1": 1,
+    "rule_coverage": 0.14705882352941177,
+    "rule_false_positive_rate": 0,
+    "parse_exact_match": 1,
+    "fallback_parse_coverage": 0.8529411764705882,
+    "groundedness": 1,
+    "runtime_errors": 0,
+    "parse_field_intent": 1,
+    "parse_field_languages": 1,
+    "parse_field_keywords": 1,
+    "parse_field_period": 1,
+    "parse_field_minStars": 1,
+    "parse_field_sortBy": 1,
+    "parse_field_topN": 1
+  }
+}

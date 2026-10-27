@@ -1,0 +1,34 @@
+{"id":"parse-python-ai-week","text":"本周 python 的 ai 项目","expected":{"parse":{"intent":"search","languages":["python"],"keywords":["ai"],"period":"week","minStars":null,"sortBy":"stars_delta","topN":10}}}
+{"id":"parse-rust-growth","text":"帮我看下最近 star 增长快的 rust 项目","notes":"填充词整串丢弃，不落进关键词","expected":{"parse":{"intent":"search","languages":["rust"],"keywords":[],"period":"week","sortBy":"stars_delta"}}}
+{"id":"parse-month-ts-new-top5","text":"本月 typescript star 超过 10k 的前 5 个新项目","notes":"keywords 省略：fallbackParse 会把 10k 当词","expected":{"parse":{"intent":"search","languages":["typescript"],"period":"month","minStars":10000,"sortBy":"new","topN":5}}}
+{"id":"parse-today-hot","text":"今天有什么热门项目","notes":"keywords 省略：分词会切出「今天有」这类残渣","expected":{"parse":{"period":"today"}}}
+{"id":"parse-min-stars-num","text":"5000 star 以上的 rust 项目","expected":{"parse":{"languages":["rust"],"keywords":[],"minStars":5000}}}
+{"id":"parse-top-n-new","text":"前 5 个新项目","expected":{"parse":{"keywords":[],"topN":5,"sortBy":"new"}}}
+{"id":"parse-go-growth","text":"star 增长最快的 go 项目","notes":"keywords 省略（「增长最」是已知分词残渣）","expected":{"parse":{"languages":["go"],"sortBy":"stars_delta"}}}
+{"id":"parse-all-time-stars","text":"所有时间里 star 最多的 java 项目","expected":{"parse":{"period":"all","languages":["java"],"sortBy":"stars"}}}
+{"id":"parse-week-vue","text":"最近一周的 vue 组件","expected":{"parse":{"period":"week","languages":["vue"],"keywords":["组件"]}}}
+{"id":"parse-today-cpp","text":"今天上新的 c++ 项目","notes":"c++ 必须先于 c 匹配，不能被吞","expected":{"parse":{"period":"today","languages":["c++"]}}}
+{"id":"parse-ai-keyword","text":"帮我找一下最近的 AI 项目","expected":{"parse":{"keywords":["ai"]}}}
+{"id":"parse-java-hot","text":"本周比较火的 Java 项目","notes":"「比较火」是排序词，不能进关键词","expected":{"parse":{"languages":["java"],"keywords":[]}}}
+{"id":"parse-golang-alias","text":"golang 写的微服务","expected":{"parse":{"languages":["go"]}}}
+{"id":"parse-about-self","text":"你都会些啥","notes":"规则层高置信 about","expected":{"parse":{"intent":"about"}}}
+{"id":"parse-about-who","text":"你是谁","expected":{"parse":{"intent":"about"}}}
+{"id":"parse-about-intro","text":"介绍一下你自己","expected":{"parse":{"intent":"about"}}}
+{"id":"parse-about-trap","text":"介绍下你用过的 python 库","notes":"末尾锚定：这是检索，不是自我介绍","expected":{"parse":{"intent":"search","languages":["python"]}}}
+{"id":"parse-off-topic-weather","text":"明天下雨吗","expected":{"parse":{"intent":"off_topic"}}}
+{"id":"parse-off-topic-time","text":"今天几点了","expected":{"parse":{"intent":"off_topic"}}}
+{"id":"parse-domain-hint-protects","text":"今天 github 上有啥","notes":"出现领域词 → 不判 off_topic","expected":{"parse":{"intent":"search","period":"today"}}}
+{"id":"parse-long-sentence-llm","text":"帮我翻译一下这段 github 项目的 readme 并总结成中文","notes":"超过 30 字规则不拦，交给解析层","expected":{"parse":{"intent":"search"}}}
+{"id":"parse-noise","text":"啊","notes":"无信号输入不能编造语言/关键词","expected":{"parse":{"keywords":[]}}}
+{"id":"parse-ts-alias","text":"ts 项目","expected":{"parse":{"languages":["typescript"]}}}
+{"id":"parse-py-alias","text":"py 脚本怎么写","expected":{"parse":{"intent":"search","languages":["python"]}}}
+{"id":"parse-stars-wan","text":"star 超过 1万 的 python 项目","expected":{"parse":{"languages":["python"],"minStars":10000}}}
+{"id":"parse-stars-10k","text":"10k star 以上的项目","expected":{"parse":{"minStars":10000}}}
+{"id":"parse-top-english","text":"top 3 的 rust 项目","expected":{"parse":{"topN":3}}}
+{"id":"parse-count-golang","text":"3 个 golang 项目","expected":{"parse":{"languages":["go"],"topN":3}}}
+{"id":"parse-newest","text":"最新的 python 库","expected":{"parse":{"languages":["python"],"sortBy":"new"}}}
+{"id":"parse-stars-total","text":"star 总数最多的项目","expected":{"parse":{"sortBy":"stars"}}}
+{"id":"parse-csharp","text":"本月的 c# 项目","expected":{"parse":{"period":"month","languages":["c#"]}}}
+{"id":"parse-history-growth","text":"历史上 star 增长最快的项目","expected":{"parse":{"period":"all","sortBy":"stars_delta"}}}
+{"id":"parse-month-go-top20","text":"这个月的 go 项目 前 20","expected":{"parse":{"period":"month","languages":["go"],"topN":20}}}
+{"id":"parse-ai-fullword","text":"帮我看看人工智能","expected":{"parse":{"keywords":["人工智能"]}}}

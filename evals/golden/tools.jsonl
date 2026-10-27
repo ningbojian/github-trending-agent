@@ -1,0 +1,5 @@
+{"id":"tools-deep-dive","text":"深挖 astral-sh/ruff","notes":"Phase 2 起生效：明确仓库 → deep_dive_repo","expected":{"tools":{"route":"tools","tool":"deep_dive_repo"}}}
+{"id":"tools-health","text":"这个项目靠不靠谱","notes":"Phase 2 起生效：健康度类问题 → repo_health","expected":{"tools":{"route":"tools","tool":"repo_health"}}}
+{"id":"tools-manage-subscription","text":"帮我取消订阅 rpa","notes":"Phase 2 起生效：改订阅意图 → manage_subscription","expected":{"tools":{"route":"tools","tool":"manage_subscription"}}}
+{"id":"tools-negative-search","text":"本周 python 的 ai 项目","notes":"普通检索不得走工具循环","expected":{"tools":{"route":"search"}}}
+{"id":"tools-negative-topn","text":"前 5 个新项目","notes":"结构清晰的检索也不需要模型","expected":{"tools":{"route":"search"}}}

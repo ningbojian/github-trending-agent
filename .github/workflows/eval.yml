@@ -1,0 +1,34 @@
+# 评测门禁：只跑确定性指标（无模型、无网络、无数据库、无 secrets）。
+# 任何一条规则改坏 → 命中率/阈值/基线回退 → 这里红。
+# 基线文件入库；更新基线只能在本地手动跑 `npm run eval:baseline` 并提交 diff。
+name: 评测门禁
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    name: 金标集回归
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Run deterministic eval
+        run: npm run eval:ci

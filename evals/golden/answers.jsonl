@@ -1,0 +1,1 @@
+{"id":"answer-search-reply","text":"本周 python 的 ai 项目","notes":"回复里的每个仓库都必须来自结果集，且点名项都要出现","expected":{"route":{"kind":"handler","name":"search"},"answer":{"fixture":"evals/fixtures/search/python-ai.json","mustMention":["astral-sh/ruff","pytorch/pytorch"]}}}

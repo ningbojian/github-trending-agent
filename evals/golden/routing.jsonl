@@ -1,0 +1,52 @@
+{"id":"route-help-exact","text":"帮助","expected":{"route":{"kind":"handler","name":"help"}}}
+{"id":"route-help-trailing-punct","text":"帮助。","notes":"尾标点在分发前剥除","expected":{"route":{"kind":"handler","name":"help"}}}
+{"id":"route-help-long-sentence","text":"帮助我找 python 项目","notes":"「帮助」只精确匹配，长句是合法搜索","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-favorite-spaced","text":"收藏 3","expected":{"route":{"kind":"handler","name":"favorite"}}}
+{"id":"route-favorite-tight","text":"收藏3","notes":"无空格也要命中","expected":{"route":{"kind":"handler","name":"favorite"}}}
+{"id":"route-favorite-chinese-number","text":"收藏三","expected":{"route":{"kind":"handler","name":"favorite"}}}
+{"id":"route-favorite-zero","text":"收藏 0","notes":"正则只校验字符集，越界由 handler 回用法提示","expected":{"route":{"kind":"handler","name":"favorite"}}}
+{"id":"route-favorite-trailing-punct","text":"收藏 3！","expected":{"route":{"kind":"handler","name":"favorite"}}}
+{"id":"route-favorite-typo","text":"收藏一下","notes":"疑似命令 → 用法提示，绝不当作搜索词","expected":{"route":{"kind":"usage","name":"favorite"}}}
+{"id":"route-unfavorite","text":"取消收藏 3","notes":"须先于「收藏」判定","expected":{"route":{"kind":"handler","name":"unfavorite"}}}
+{"id":"route-unfavorite-chinese","text":"取消收藏十二。","expected":{"route":{"kind":"handler","name":"unfavorite"}}}
+{"id":"route-unfavorite-typo","text":"取消收藏一下","notes":"错字不落搜索，回用法提示","expected":{"route":{"kind":"usage","name":"unfavorite"}}}
+{"id":"route-list","text":"我的收藏","expected":{"route":{"kind":"handler","name":"list"}}}
+{"id":"route-list-trailing-punct","text":"我的收藏。","expected":{"route":{"kind":"handler","name":"list"}}}
+{"id":"route-list-typo","text":"我的收藏列表","expected":{"route":{"kind":"usage","name":"list"}}}
+{"id":"route-my-subscription","text":"我的订阅","expected":{"route":{"kind":"handler","name":"mySubscription"}}}
+{"id":"route-my-subscription-typo","text":"我的订阅怎么看","expected":{"route":{"kind":"usage","name":"mySubscription"}}}
+{"id":"route-not-interested-bare","text":"不感兴趣","notes":"裸词命中，由 handler 作用于整批","expected":{"route":{"kind":"handler","name":"notInterested"}}}
+{"id":"route-not-interested-index","text":"不感兴趣 3","expected":{"route":{"kind":"handler","name":"notInterested"}}}
+{"id":"route-not-interested-repo","text":"不感兴趣 owner/repo","expected":{"route":{"kind":"handler","name":"notInterested"}}}
+{"id":"route-not-interested-concat","text":"不感兴趣查一下","notes":"动词后无空白 → 不是口味指令，落搜索","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-interested","text":"感兴趣 2","expected":{"route":{"kind":"handler","name":"interested"}}}
+{"id":"route-interested-sentence","text":"感兴趣的项目有哪些","notes":"「感兴趣的项目」是搜索，不是指令","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-bind","text":"绑定","expected":{"route":{"kind":"handler","name":"bind"}}}
+{"id":"route-bind-typo","text":"绑定账号","expected":{"route":{"kind":"usage","name":"bind"}}}
+{"id":"route-subscribe","text":"订阅 python ai","expected":{"route":{"kind":"handler","name":"subscribe"}}}
+{"id":"route-subscribe-bare","text":"订阅","notes":"缺关键词由 handler 回用法提示，不进搜索","expected":{"route":{"kind":"handler","name":"subscribe"}}}
+{"id":"route-cancel-subscription-bare","text":"取消订阅","expected":{"route":{"kind":"handler","name":"cancelSubscription"}}}
+{"id":"route-cancel-subscription-term","text":"取消订阅 rpa","expected":{"route":{"kind":"handler","name":"cancelSubscription"}}}
+{"id":"route-cancel-subscription-tight","text":"取消订阅rpa","notes":"无空白 → 用法提示，不静默吞词","expected":{"route":{"kind":"usage","name":"cancelSubscription"}}}
+{"id":"route-unsubscribe","text":"退订","expected":{"route":{"kind":"handler","name":"unsubscribe"}}}
+{"id":"route-unsubscribe-typo","text":"退订一下","expected":{"route":{"kind":"usage","name":"unsubscribe"}}}
+{"id":"route-digest-count","text":"条数 5","expected":{"route":{"kind":"handler","name":"digestCount"}}}
+{"id":"route-digest-count-bare","text":"条数","expected":{"route":{"kind":"handler","name":"digestCount"}}}
+{"id":"route-digest-count-invalid","text":"条数五个","notes":"前缀命中后由 handler 校验范围","expected":{"route":{"kind":"handler","name":"digestCount"}}}
+{"id":"route-push-time","text":"每天 9 点","expected":{"route":{"kind":"handler","name":"pushTime"}}}
+{"id":"route-push-time-colon","text":"推送时间 08:30","expected":{"route":{"kind":"handler","name":"pushTime"}}}
+{"id":"route-push-time-bare","text":"推送时间","expected":{"route":{"kind":"handler","name":"pushTime"}}}
+{"id":"route-push-time-trailing-punct","text":"每天 9 点。","expected":{"route":{"kind":"handler","name":"pushTime"}}}
+{"id":"route-push-time-search-trap","text":"每天 star 最多的项目","notes":"锚定整句：带后缀的句子必须落搜索","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-push-interval","text":"每 2 天","expected":{"route":{"kind":"handler","name":"pushInterval"}}}
+{"id":"route-push-interval-chinese","text":"每两天推送","expected":{"route":{"kind":"handler","name":"pushInterval"}}}
+{"id":"route-push-interval-search-trap","text":"每两天更新的项目有哪些","notes":"带后缀不命中，照常搜索","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-set-model","text":"设置模型","expected":{"route":{"kind":"handler","name":"setModel"}}}
+{"id":"route-set-model-args","text":"设置模型 openai","notes":"这些命令不接受参数，回用法提示","expected":{"route":{"kind":"usage","name":"setModel"}}}
+{"id":"route-my-model","text":"我的模型","expected":{"route":{"kind":"handler","name":"myModel"}}}
+{"id":"route-my-model-typo","text":"我的模型列表","notes":"带后缀不是合法指令，回用法提示","expected":{"route":{"kind":"usage","name":"myModel"}}}
+{"id":"route-clear-model","text":"清除模型","expected":{"route":{"kind":"handler","name":"clearModel"}}}
+{"id":"route-clear-model-typo","text":"清除模型吧","expected":{"route":{"kind":"usage","name":"clearModel"}}}
+{"id":"route-search-natural","text":"本周 python 的 ai 项目","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-search-push-like","text":"每天给我推 python","notes":"「每天」开头但带内容 → 搜索","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-search-about","text":"你都会些啥","notes":"意图是 about，但路由层只关心走哪个 handler","expected":{"route":{"kind":"handler","name":"search"}}}

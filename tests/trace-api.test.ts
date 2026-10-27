@@ -4,64 +4,99 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * /api/trace 只读页：鉴权 + 取数 + 服务端渲染。
- * db 用链式桩（select → from → where → orderBy → limit），不触库。
+ *
+ * 主数据源是 agent_runs；kv_cache 里的 trace 是迁移前/写入失败时的降级记录，
+ * 两边合并展示，7 天后 kv 自然过期。
  */
 const ENV = vi.hoisted(() => ({ CRON_SECRET: 'unit-test-cron-secret' }));
 
 vi.mock('../src/config', () => ({ env: ENV }));
 
 const dbState = vi.hoisted(() => ({
-  rows: [] as Array<{ key: string; value: unknown }>,
-  whereCalls: [] as unknown[],
+  runs: [] as Record<string, unknown>[],
+  kv: [] as Array<{ key: string; value: unknown }>,
+  failRuns: false,
+  failKv: false,
+  whereCalls: [] as Array<{ table: string; condition: unknown }>,
   limitCalls: [] as number[],
   selectCalls: 0,
 }));
 
-vi.mock('../src/db/client', () => ({
-  db: () => ({
-    select: () => {
-      dbState.selectCalls += 1;
-      return {
-        from: () => ({
-          where: (condition: unknown) => {
-            dbState.whereCalls.push(condition);
+vi.mock('../src/db/client', async () => {
+  const { getTableName } = await import('drizzle-orm');
+  return {
+    db: () => ({
+      select: () => {
+        dbState.selectCalls += 1;
+        return {
+          from: (table: unknown) => {
+            const name = getTableName(table as never);
             return {
-              orderBy: () => ({
-                limit: (count: number) => {
-                  dbState.limitCalls.push(count);
-                  return Promise.resolve([...dbState.rows]);
-                },
-              }),
+              where: (condition: unknown) => {
+                dbState.whereCalls.push({ table: name, condition });
+                return {
+                  orderBy: () => ({
+                    limit: (count: number) => {
+                      dbState.limitCalls.push(count);
+                      if (name === 'agent_runs') {
+                        if (dbState.failRuns) {
+                          throw new Error('relation "agent_runs" does not exist');
+                        }
+                        return Promise.resolve([...dbState.runs]);
+                      }
+                      if (dbState.failKv) {
+                        throw new Error('kv down');
+                      }
+                      return Promise.resolve([...dbState.kv]);
+                    },
+                  }),
+                };
+              },
             };
           },
-        }),
-      };
-    },
-  }),
-}));
+        };
+      },
+    }),
+  };
+});
 
 import handler, { type TraceRequest, type TraceResponse } from '../api/trace';
 
-/** 一条正常 trace 的 value 形状（与 src/obs/trace.ts 的 flushTrace 一致）。 */
-function traceValue(overrides: Record<string, unknown> = {}): unknown {
+const STEPS = [
+  { ms: 0, name: 'handler', detail: 'handleSearch' },
+  { ms: 900, name: 'parse-source', detail: 'llm' },
+  { ms: 300, name: 'send', detail: 'ok 412 字节' },
+];
+
+/** 一条正常 agent_runs 行（与 src/obs/trace.ts 的 flushTrace 一致）。 */
+function runRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    id: 'run-1',
     kind: 'text',
     userid: 'alice',
     text: '今天股市怎么样',
     totalMs: 1234,
     ok: true,
-    steps: [
-      { ms: 0, name: 'handler', detail: 'handleSearch' },
-      { ms: 900, name: 'parse-source', detail: 'llm' },
-      { ms: 300, name: 'send', detail: 'ok 412 字节' },
-    ],
+    steps: STEPS,
+    createdAt: new Date('2026-10-26T01:02:03.456Z'),
     ...overrides,
   };
 }
 
-/** key 以 ISO 时间开头（与 trace.ts 一致）。 */
-function traceKey(iso: string, suffix = 'abcdef12'): string {
-  return `trace:${iso}-${suffix}`;
+/** 一条降级 kv 记录（key 以 ISO 时间开头，与 trace.ts 一致）。 */
+function kvRow(iso: string, overrides: Record<string, unknown> = {}) {
+  return {
+    key: `trace:${iso}-abcdef12`,
+    value: {
+      kind: 'text',
+      userid: 'bob',
+      text: 'kv 里的旧记录',
+      totalMs: 777,
+      ok: true,
+      steps: [{ ms: 0, name: 'handler', detail: 'handleHelp' }],
+      ...overrides,
+    },
+  };
 }
 
 function mockRes(): TraceResponse & {
@@ -98,14 +133,18 @@ function makeReq(
 
 /** 把 drizzle SQL 条件编译为文本 + 参数（不触库）。 */
 function compileWhere(index = 0): { sql: string; params: unknown[] } {
-  return new PgDialect().sqlToQuery(dbState.whereCalls[index] as SQL);
+  return new PgDialect().sqlToQuery(dbState.whereCalls[index]?.condition as SQL);
 }
 
 beforeEach(() => {
-  dbState.rows.length = 0;
+  dbState.runs.length = 0;
+  dbState.kv.length = 0;
+  dbState.failRuns = false;
+  dbState.failKv = false;
   dbState.whereCalls.length = 0;
   dbState.limitCalls.length = 0;
   dbState.selectCalls = 0;
+  vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 describe('api/trace 鉴权', () => {
@@ -128,7 +167,7 @@ describe('api/trace 鉴权', () => {
   });
 
   it('Authorization: Bearer 也可通过', async () => {
-    dbState.rows.push({ key: traceKey('2026-10-26T01:00:00.000Z'), value: traceValue() });
+    dbState.runs.push(runRow());
     const res = mockRes();
 
     await handler(
@@ -137,16 +176,14 @@ describe('api/trace 鉴权', () => {
     );
 
     expect(res.statusCode).toBe(200);
-    expect(dbState.selectCalls).toBe(1);
+    // 两个数据源各查一次：agent_runs + kv 降级记录。
+    expect(dbState.selectCalls).toBe(2);
   });
 
   it('非 GET → 405，且不查库', async () => {
     const res = mockRes();
 
-    await handler(
-      makeReq({ secret: ENV.CRON_SECRET }, { method: 'POST' }),
-      res,
-    );
+    await handler(makeReq({ secret: ENV.CRON_SECRET }, { method: 'POST' }), res);
 
     expect(res.statusCode).toBe(405);
     expect(dbState.selectCalls).toBe(0);
@@ -154,11 +191,8 @@ describe('api/trace 鉴权', () => {
 });
 
 describe('api/trace 渲染', () => {
-  it('正常：HTML 里能看到用户、原话、总耗时与每一步', async () => {
-    dbState.rows.push({
-      key: traceKey('2026-10-26T01:02:03.456Z'),
-      value: traceValue(),
-    });
+  it('agent_runs：能看到用户、原话、总耗时、每一步与北京时间', async () => {
+    dbState.runs.push(runRow());
     const res = mockRes();
 
     await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
@@ -171,15 +205,12 @@ describe('api/trace 渲染', () => {
     expect(body).toContain('1234');
     expect(body).toContain('handleSearch');
     expect(body).toContain('parse-source');
-    // 北京时间显示（01:02:03Z → 09:02:03）
+    // createdAt = 01:02:03Z → 北京时间 09:02:03
     expect(body).toContain('09:02:03');
   });
 
   it('失败的一步：ok=false 时摘要行给出 ✗ 标记', async () => {
-    dbState.rows.push({
-      key: traceKey('2026-10-26T01:00:00.000Z'),
-      value: traceValue({ ok: false }),
-    });
+    dbState.runs.push(runRow({ ok: false }));
     const res = mockRes();
 
     await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
@@ -188,10 +219,7 @@ describe('api/trace 渲染', () => {
   });
 
   it('原话里的 HTML 被转义（不注入页面）', async () => {
-    dbState.rows.push({
-      key: traceKey('2026-10-26T01:00:00.000Z'),
-      value: traceValue({ text: '<script>alert(1)</script>' }),
-    });
+    dbState.runs.push(runRow({ text: '<script>alert(1)</script>' }));
     const res = mockRes();
 
     await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
@@ -201,20 +229,53 @@ describe('api/trace 渲染', () => {
     expect(body).toContain('&lt;script&gt;');
   });
 
-  it('value 畸形（缺字段/非对象）不崩，页面给出占位', async () => {
-    dbState.rows.push(
-      { key: traceKey('2026-10-26T01:00:00.000Z'), value: null },
-      { key: traceKey('2026-10-26T00:59:00.000Z'), value: { steps: 'oops' } },
-    );
+  it('steps 畸形（非数组/非对象）不崩，页面给出占位', async () => {
+    dbState.runs.push(runRow({ steps: 'oops', userid: null }));
     const res = mockRes();
 
     await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
 
     expect(res.statusCode).toBe(200);
     expect(res.body ?? '').toContain('运行日志');
+    expect(res.body ?? '').toContain('形状不对');
   });
 
-  it('没有任何 trace → 空态文案', async () => {
+  it('迁移前的 kv 记录仍然显示（与 agent_runs 合并）', async () => {
+    dbState.runs.push(runRow());
+    dbState.kv.push(kvRow('2026-10-26T01:00:00.000Z'));
+    const res = mockRes();
+
+    await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
+
+    const body = res.body ?? '';
+    expect(body).toContain('alice');
+    expect(body).toContain('bob');
+    expect(body).toContain('kv 里的旧记录');
+  });
+
+  it('agent_runs 不存在（迁移未执行）→ 回落 kv，页面照常 200', async () => {
+    dbState.failRuns = true;
+    dbState.kv.push(kvRow('2026-10-26T01:00:00.000Z'));
+    const res = mockRes();
+
+    await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body ?? '').toContain('kv 里的旧记录');
+  });
+
+  it('两个数据源都失败 → 500（不假装「没有记录」）', async () => {
+    dbState.failRuns = true;
+    dbState.failKv = true;
+    const res = mockRes();
+
+    await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
+
+    expect(res.statusCode).toBe(500);
+    expect(res.body ?? '').toContain('读取失败');
+  });
+
+  it('没有任何记录 → 空态文案', async () => {
     const res = mockRes();
 
     await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
@@ -225,16 +286,16 @@ describe('api/trace 渲染', () => {
 });
 
 describe('api/trace 参数', () => {
-  it('n 默认 50', async () => {
+  it('n 默认 50（两个数据源各取 50）', async () => {
     const res = mockRes();
     await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
-    expect(dbState.limitCalls).toEqual([50]);
+    expect(dbState.limitCalls).toEqual([50, 50]);
   });
 
   it('n 超上限被夹到 200', async () => {
     const res = mockRes();
     await handler(makeReq({ secret: ENV.CRON_SECRET, n: '9999' }), res);
-    expect(dbState.limitCalls).toEqual([200]);
+    expect(dbState.limitCalls).toEqual([200, 200]);
   });
 
   it('n 非法（非数字/0/负数）回落到默认 50', async () => {
@@ -242,27 +303,45 @@ describe('api/trace 参数', () => {
     await handler(makeReq({ secret: ENV.CRON_SECRET, n: 'abc' }), res);
     await handler(makeReq({ secret: ENV.CRON_SECRET, n: '0' }), res);
     await handler(makeReq({ secret: ENV.CRON_SECRET, n: '-3' }), res);
-    expect(dbState.limitCalls).toEqual([50, 50, 50]);
+    expect(dbState.limitCalls).toEqual([50, 50, 50, 50, 50, 50]);
   });
 
-  it('u 过滤：SQL 里按 value->>userid 过滤并带上参数', async () => {
+  it('u 过滤：agent_runs 按 userid 列过滤', async () => {
     const res = mockRes();
 
     await handler(makeReq({ secret: ENV.CRON_SECRET, u: 'alice' }), res);
 
-    const compiled = compileWhere();
-    expect(compiled.sql).toContain(`->>`);
+    const runWhere = dbState.whereCalls.find((call) => call.table === 'agent_runs');
+    expect(runWhere).toBeDefined();
+    const compiled = new PgDialect().sqlToQuery(runWhere?.condition as SQL);
     expect(compiled.sql).toContain('userid');
     expect(compiled.params).toContain('alice');
   });
 
-  it('不带 u 时 WHERE 只按前缀过滤（不含 userid 条件）', async () => {
+  it('u 过滤：kv 仍按 value->>userid 过滤', async () => {
+    const res = mockRes();
+
+    await handler(makeReq({ secret: ENV.CRON_SECRET, u: 'alice' }), res);
+
+    const kvWhere = dbState.whereCalls.find((call) => call.table === 'kv_cache');
+    expect(kvWhere).toBeDefined();
+    const compiled = new PgDialect().sqlToQuery(kvWhere?.condition as SQL);
+    expect(compiled.sql).toContain('->>');
+    expect(compiled.sql).toContain('userid');
+    expect(compiled.params).toContain('alice');
+  });
+
+  it('不带 u：agent_runs 条件为 true，kv 只按前缀过滤', async () => {
     const res = mockRes();
 
     await handler(makeReq({ secret: ENV.CRON_SECRET }), res);
 
-    const compiled = compileWhere();
-    expect(compiled.sql).not.toContain('userid');
-    expect(compiled.params).toContain('trace:%');
+    const runWhere = dbState.whereCalls.find((call) => call.table === 'agent_runs');
+    const kvWhere = dbState.whereCalls.find((call) => call.table === 'kv_cache');
+    const runSql = new PgDialect().sqlToQuery(runWhere?.condition as SQL);
+    const kvSql = new PgDialect().sqlToQuery(kvWhere?.condition as SQL);
+    expect(runSql.sql.trim()).toBe('true');
+    expect(kvSql.params).toContain('trace:%');
+    expect(kvSql.sql).not.toContain('userid');
   });
 });

@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { kvCache } from '../db/schema.js';
+import { agentRuns, kvCache } from '../db/schema.js';
 
 /**
  * 请求级 trace：一条入站消息（或一个订阅者的一次推送）一行记录。
@@ -44,6 +44,8 @@ export const TRACE_MAX_STEPS = 40;
 export const TRACE_TEXT_MAX_CHARS = 80;
 
 interface TraceContext {
+  /** 一次调用一个 id；tool_calls.run_id 与它对应。 */
+  runId: string;
   meta: TraceMeta;
   startAt: number;
   lastAt: number;
@@ -54,6 +56,11 @@ interface TraceContext {
 }
 
 const storage = new AsyncLocalStorage<TraceContext>();
+
+/** 当前请求的 run id；不在 trace 内（或测试直调）返回 null。 */
+export function currentTraceId(): string | null {
+  return storage.getStore()?.runId ?? null;
+}
 
 function now(): number {
   return Date.now();
@@ -125,10 +132,25 @@ async function flushTrace(ctx: TraceContext): Promise<void> {
     ok: ctx.ok,
     steps: ctx.steps,
   };
+  // 正式表是主路径：可按时间/用户/类型查询与聚合。
+  try {
+    console.log('[trace]', JSON.stringify({ id: ctx.runId, ...value }));
+    await db().insert(agentRuns).values({
+      id: ctx.runId,
+      ...value,
+      createdAt: new Date(ctx.startAt),
+    });
+    return;
+  } catch (err) {
+    console.error(
+      '[trace] agent_runs write failed, falling back to kv_cache:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+  // 降级路径：迁移未执行/临时故障时仍然留痕。7 天 TTL 顺带当清理。
   try {
     // key 以 ISO 时间开头：字典序倒排 = 时间倒排，页面按 key desc 取最新。
-    const key = `trace:${new Date().toISOString()}-${randomUUID().slice(0, 8)}`;
-    console.log('[trace]', JSON.stringify({ key, ...value }));
+    const key = `trace:${new Date(ctx.startAt).toISOString()}-${ctx.runId.slice(0, 8)}`;
     await db()
       .insert(kvCache)
       .values({
@@ -142,7 +164,7 @@ async function flushTrace(ctx: TraceContext): Promise<void> {
       });
   } catch (err) {
     console.error(
-      '[trace] flush failed:',
+      '[trace] kv fallback failed:',
       err instanceof Error ? err.message : err,
     );
   }
@@ -158,6 +180,7 @@ export async function withTrace<T>(
 ): Promise<T> {
   const startedAt = now();
   const ctx: TraceContext = {
+    runId: randomUUID(),
     meta,
     startAt: startedAt,
     lastAt: startedAt,

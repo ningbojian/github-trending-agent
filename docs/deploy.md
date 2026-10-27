@@ -20,14 +20,15 @@
 2. 本地 `cp .env.example .env`，把连接串填进 `NEON_DATABASE_URL`。
 3. 安装依赖：`npm ci`。
 4. 执行迁移：`npm run db:migrate`。
-   - 实际命令是 `drizzle-kit migrate`（见 `package.json` scripts），迁移 SQL 为 `drizzle/0000_silly_shatterstar.sql`、`0001_living_the_leader.sql`（新增 `subscribers.last_digest_at`，供简报推送时间/间隔门控使用）、`0003_dashing_vin_gonzales.sql`（新增 `subscribers.llm_base_url / llm_model / llm_key_enc`，自备 AI Key）。
+   - 实际命令是 `drizzle-kit migrate`（见 `package.json` scripts），迁移 SQL 为 `drizzle/0000_silly_shatterstar.sql`、`0001_living_the_leader.sql`（新增 `subscribers.last_digest_at`，供简报推送时间/间隔门控使用）、`0003_dashing_vin_gonzales.sql`（新增 `subscribers.llm_base_url / llm_model / llm_key_enc`，自备 AI Key）、`0004_agent_runs_tool_calls.sql`（新增 `agent_runs` 与 `tool_calls`，运行日志与工具流水从 `kv_cache` 迁到正式表）。
    - `drizzle.config.ts` 直接读 `process.env.NEON_DATABASE_URL`；若当前 shell 没有该变量，先 `set -a; source .env; set +a` 再跑，或内联：
      `NEON_DATABASE_URL='postgresql://…' npm run db:migrate`。
-   - **⚠ 迁移账本的时间戳陷阱**：`drizzle-kit migrate` 只应用 journal 里 `when` **大于** `drizzle.__drizzle_migrations` 中最大 `created_at` 的迁移，且无论跳过多少条都会打印 "migrations applied successfully"。本仓库 `0002` 的 `when` 曾被人为设到未来（`1793200000000` ≈ 2026-10-28），导致之后生成的迁移被静默跳过。**新增迁移后必须确认它真的执行了**：
+   - **⚠ 迁移账本的时间戳陷阱**：`drizzle-kit migrate` 只应用 journal 里 `when` **大于** `drizzle.__drizzle_migrations` 中最大 `created_at` 的迁移，且无论跳过多少条都会打印 "migrations applied successfully"。本仓库 `0002` 的 `when` 曾被人为设到未来（`1793200000000` ≈ 2026-10-28），导致之后生成的迁移被静默跳过；现已把 `0002` / `0003` 的 `when` 归一化到过去（`1792900000000` / `1793000000000`）。生产账本当前最大 `created_at` 是 `1793200000001`，所以 `0004` 的 `when` 暂设为 `1793200000002`——**它比真实生成时间晚，这是为了让已经存在未来账本行的生产库仍然应用它；后续迁移必须继续取大于上一条的值**。**新增迁移后必须确认它真的执行了**：
      ```sql
      select id, created_at from drizzle.__drizzle_migrations order by id;
      ```
      条数应等于 `drizzle/meta/_journal.json` 的 `entries` 数；若少了，把新迁移的 `when` 改成大于上一条的值再跑一次（不要手工改生产账本）。
+   - **未跑 0004 时系统仍可用**：`src/obs/trace.ts` 写 `agent_runs` 失败会退回 `kv_cache`（7 天 TTL），`api/trace.ts` 也合并两个数据源；但 `/api/metrics` 这类按表聚合的查询会失败，所以上线度量前必须先迁移。
 
 **验证**
 
@@ -38,7 +39,7 @@ select table_name from information_schema.tables
  where table_schema = 'public' order by 1;
 ```
 
-应出现 7 张业务表：`repos`、`trending_entries`、`subscribers`、`favorites`、`search_caches`、`kv_cache`、`email_subscribers`（另有 drizzle 迁移记录表）。
+应出现 9 张业务表：`repos`、`trending_entries`、`subscribers`、`favorites`、`search_caches`、`kv_cache`、`email_subscribers`、`agent_runs`、`tool_calls`（另有 drizzle 迁移记录表）。
 `npm run db:migrate` 重复执行安全（已应用的迁移不会重放）。
 
 ---

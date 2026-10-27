@@ -1,5 +1,6 @@
 import { generateText, stepCountIs, type LanguageModel } from 'ai';
 import { note, traceError } from '../obs/trace.js';
+import { recordToolCall, type ToolCallInput } from '../obs/tool-calls.js';
 import { redactKey } from './llm.js';
 
 /**
@@ -57,6 +58,69 @@ export interface ToolLoopOptions {
   timeoutMs?: number;
   noteFn?: (name: string, detail?: string) => void;
   traceErrorFn?: (err: unknown) => void;
+  /** 默认写 `tool_calls`；测试注入。 */
+  recordToolCall?: ToolCallRecorder;
+}
+
+/** 工具调用流水注入点；默认落库，测试可换成一个数组。 */
+export type ToolCallRecorder = (input: ToolCallInput) => Promise<unknown>;
+
+/**
+ * 给每个工具的 `execute` 计时并记一条流水。
+ *
+ * - **不改变返回值**：成功原样返回，失败原样抛——记录是旁路，不是包装语义。
+ * - **没有 `execute` 的定义原样保留**（schema-only 工具不该被复制成新对象）。
+ * - **记录器抛错也吞掉**：观测失败绝不能连累工具本身。
+ */
+export function instrumentTools(
+  tools: Record<string, unknown>,
+  record: ToolCallRecorder = recordToolCall,
+): Record<string, unknown> {
+  const wrapped: Record<string, unknown> = {};
+  const safeRecord = async (input: ToolCallInput): Promise<void> => {
+    try {
+      await record(input);
+    } catch (err) {
+      console.error(
+        '[tool-loop] tool call record failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  };
+
+  for (const [name, definition] of Object.entries(tools)) {
+    const execute = (definition as { execute?: unknown } | null)?.execute;
+    if (typeof execute !== 'function') {
+      wrapped[name] = definition;
+      continue;
+    }
+    const run = execute as (...args: unknown[]) => Promise<unknown>;
+    wrapped[name] = {
+      ...(definition as Record<string, unknown>),
+      execute: async (args: unknown, ...rest: unknown[]) => {
+        const startedAt = Date.now();
+        try {
+          const result = await run(args, ...rest);
+          await safeRecord({
+            tool: name,
+            args,
+            status: 'ok',
+            latencyMs: Date.now() - startedAt,
+          });
+          return result;
+        } catch (err) {
+          await safeRecord({
+            tool: name,
+            args,
+            status: 'error',
+            latencyMs: Date.now() - startedAt,
+          });
+          throw err;
+        }
+      },
+    };
+  }
+  return wrapped;
 }
 
 export interface ToolLoopOutcome {
@@ -95,7 +159,7 @@ export async function runToolLoopSafe(
       model: options.model,
       system: input.system,
       prompt: input.prompt,
-      tools: options.tools,
+      tools: instrumentTools(options.tools, options.recordToolCall),
       stopWhen: stepCountIs(maxSteps),
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(timeoutMs),

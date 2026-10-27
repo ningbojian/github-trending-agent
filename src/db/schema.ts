@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   date,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -173,3 +174,55 @@ export const kvCache = pgTable('kv_cache', {
   value: jsonb('value').notNull(),
   expiresAt: timestamp('expires_at').notNull(),
 });
+
+/**
+ * 请求级运行记录（正式表，取代 kv_cache 里的 trace）。
+ *
+ * 为什么现在建表：kv_cache 适合「有 TTL、按 key 取一条」的短命数据；trace
+ * 要按时间倒排、按 kind 聚合、算 p50/p95，还要和 tool_calls 关联，这些正是
+ * SQL 的活。kv 版本作为降级路径保留：写正式表失败时仍然落一行 kv。
+ */
+export const agentRuns = pgTable(
+  'agent_runs',
+  {
+    /** 与 tool_calls.run_id 对应；一次入站消息 / 一次推送一个。 */
+    id: text('id').primaryKey(),
+    kind: text('kind', { enum: ['text', 'event', 'push', 'other'] }).notNull(),
+    userid: text('userid').notNull(),
+    /** 用户原话（已截断），仅排障用。 */
+    text: text('text').notNull().default(''),
+    ok: boolean('ok').notNull(),
+    totalMs: integer('total_ms').notNull(),
+    steps: jsonb('steps')
+      .$type<Array<{ ms: number; name: string; detail?: string }>>()
+      .notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('agent_runs_created_at_idx').on(t.createdAt),
+    index('agent_runs_kind_created_at_idx').on(t.kind, t.createdAt),
+    index('agent_runs_user_created_at_idx').on(t.userid, t.createdAt),
+  ],
+);
+
+/**
+ * 工具调用流水：只存参数哈希，不存原文（参数里可能带用户输入）。
+ * 不设外键：工具调用发生在 agent_runs 落库之前，外键会把正常流程卡死；
+ * 极少数孤儿行由 30 天清理兜底。
+ */
+export const toolCalls = pgTable(
+  'tool_calls',
+  {
+    id: serial('id').primaryKey(),
+    runId: text('run_id').notNull(),
+    tool: text('tool').notNull(),
+    argsHash: text('args_hash').notNull(),
+    status: text('status', { enum: ['ok', 'error'] }).notNull(),
+    latencyMs: integer('latency_ms').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('tool_calls_run_id_idx').on(t.runId),
+    index('tool_calls_created_at_idx').on(t.createdAt),
+  ],
+);

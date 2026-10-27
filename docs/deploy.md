@@ -20,15 +20,15 @@
 2. 本地 `cp .env.example .env`，把连接串填进 `NEON_DATABASE_URL`。
 3. 安装依赖：`npm ci`。
 4. 执行迁移：`npm run db:migrate`。
-   - 实际命令是 `drizzle-kit migrate`（见 `package.json` scripts），迁移 SQL 为 `drizzle/0000_silly_shatterstar.sql`、`0001_living_the_leader.sql`（新增 `subscribers.last_digest_at`，供简报推送时间/间隔门控使用）、`0003_dashing_vin_gonzales.sql`（新增 `subscribers.llm_base_url / llm_model / llm_key_enc`，自备 AI Key）、`0004_agent_runs_tool_calls.sql`（新增 `agent_runs` 与 `tool_calls`，运行日志与工具流水从 `kv_cache` 迁到正式表）。
+   - 实际命令是 `drizzle-kit migrate`（见 `package.json` scripts），迁移 SQL 为 `drizzle/0000_silly_shatterstar.sql`、`0001_living_the_leader.sql`（新增 `subscribers.last_digest_at`，供简报推送时间/间隔门控使用）、`0002_email_subscribers.sql`（邮箱订阅双确认）、`0003_dashing_vin_gonzales.sql`（新增 `subscribers.llm_base_url / llm_model / llm_key_enc`，自备 AI Key）、`0004_agent_runs_tool_calls.sql`（新增 `agent_runs` 与 `tool_calls`，运行日志与工具流水从 `kv_cache` 迁到正式表）。
    - `drizzle.config.ts` 直接读 `process.env.NEON_DATABASE_URL`；若当前 shell 没有该变量，先 `set -a; source .env; set +a` 再跑，或内联：
      `NEON_DATABASE_URL='postgresql://…' npm run db:migrate`。
-   - **⚠ 迁移账本的时间戳陷阱**：`drizzle-kit migrate` 只应用 journal 里 `when` **大于** `drizzle.__drizzle_migrations` 中最大 `created_at` 的迁移，且无论跳过多少条都会打印 "migrations applied successfully"。本仓库 `0002` 的 `when` 曾被人为设到未来（`1793200000000` ≈ 2026-10-28），导致之后生成的迁移被静默跳过；现已把 `0002` / `0003` 的 `when` 归一化到过去（`1792900000000` / `1793000000000`）。生产账本当前最大 `created_at` 是 `1793200000001`，所以 `0004` 的 `when` 暂设为 `1793200000002`——**它比真实生成时间晚，这是为了让已经存在未来账本行的生产库仍然应用它；后续迁移必须继续取大于上一条的值**。**新增迁移后必须确认它真的执行了**：
+   - **⚠ 迁移账本的时间戳陷阱**：`drizzle-kit migrate` 只应用 journal 里 `when` **大于** `drizzle.__drizzle_migrations` 中最大 `created_at` 的迁移，且无论跳过多少条都会打印 "migrations applied successfully"。本仓库 `0002` 的 `when` 曾被人为设到未来（`1793200000000` ≈ 2026-10-28），导致之后生成的迁移被静默跳过；现已把 `0002` / `0003` 的 `when` 归一化到过去（`1792900000000` / `1793000000000`）。生产账本在 **2026-10-27 应用 0004 后最大 `created_at` 为 `1793200000002`**（应用前是 `1793200000001`）。`0004` 的 `when` 设为 `1793200000002` 而不是真实生成时间，就是为了让已经存在未来账本行的生产库仍然应用它；**后续迁移必须继续取大于上一条的值**。**新增迁移后必须确认它真的执行了**：
      ```sql
      select id, created_at from drizzle.__drizzle_migrations order by id;
      ```
      条数应等于 `drizzle/meta/_journal.json` 的 `entries` 数；若少了，把新迁移的 `when` 改成大于上一条的值再跑一次（不要手工改生产账本）。
-   - **未跑 0004 时系统仍可用**：`src/obs/trace.ts` 写 `agent_runs` 失败会退回 `kv_cache`（7 天 TTL），`api/trace.ts` 也合并两个数据源；但 `/api/metrics` 这类按表聚合的查询会失败，所以上线度量前必须先迁移。
+   - **0004 已应用到生产（2026-10-27）。** 在尚未迁移的新环境里系统仍然可用：`src/obs/trace.ts` 写 `agent_runs` 失败会退回 `kv_cache`（7 天 TTL），`api/trace.ts` 也合并两个数据源；但 `/api/metrics` 这类按表聚合的查询会失败，所以上线度量前必须先迁移。
 
 **验证**
 
@@ -59,13 +59,15 @@ select table_name from information_schema.tables
 | `LLM_API_KEY` | 必填 | LLM：提供商 API Key（`ollama` 本地部署可填任意非空串） |
 | `LLM_MODEL` | 必填 | LLM：模型 ID（如 `claude-sonnet-4-5`、`glm-4.6`、`kimi-k2-0905-preview`、`doubao-seed-1-6`） |
 | `LLM_BASE_URL` | **可选** | LLM：覆盖或自定义 OpenAI 兼容 endpoint（如 `https://your-proxy.example.com/v1`）。`LLM_PROVIDER=custom` 时**必填**；其他提供商填了就覆盖内置 endpoint |
-| `REPO_SUMMARY_MODE` | **可选** | 仓库中文简介：缺省/`llm` = 批量调 LLM 生成并全局缓存（`kv_cache` key `repo-zh:<fullName>`，180 天）；设 `off` = 完全不调 LLM，一律用英文 description 截断 40 字符（零 token 开销） |
+| `REPO_SUMMARY_MODE` | **可选** | 仓库中文简介：缺省/`llm` = 批量调 LLM 生成并全局缓存（`kv_cache` key `repo-zh:<fullName>`，180 天）；设 `off` = 不生成简介，一律用英文 description 截断 40 字符。注意每日快照里的 Abstract 仍会调用一次模型，所以是「每天一次」而不是零 token |
 | `WECOM_CORP_ID` | 必填 | 企业微信：企业 ID（第 3 步记录） |
 | `WECOM_AGENT_ID` | 必填 | 企业微信：自建应用 AgentId，**纯数字字符串** |
 | `WECOM_SECRET` | 必填 | 企业微信：自建应用 Secret |
 | `WECOM_CALLBACK_TOKEN` | 必填 | 企微回调：Token（第 3 步后台自定义） |
 | `WECOM_CALLBACK_AES_KEY` | 必填 | 企微回调：EncodingAESKey（43 位；代码按 `Base64Decode(key + "=")` 得 32 字节） |
 | `WECOM_ADMIN_USERID` | **可选** | 企微：管理员 userid，仅用于管线失败告警；不配则告警步骤跳过（仅 warning） |
+| `WECOM_RELAY_URL` | **可选** | 出站中转地址：配置后 `message/send` 改走固定 IP 中转，规避「企业可信 IP 白名单」（`gettoken` 仍直连） |
+| `WECOM_RELAY_SECRET` | **可选** | 中转共享密钥，与中转服务约定；未配 `WECOM_RELAY_URL` 时忽略 |
 | `GITHUB_CLIENT_ID` | 必填 | GitHub OAuth App（第 4 步） |
 | `GITHUB_CLIENT_SECRET` | 必填 | GitHub OAuth App |
 | `GITHUB_OAUTH_REDIRECT_URI` | 必填 | 必须是 `https://<domain>/api/oauth-github`（与回调路由、OAuth App 登记值三者完全一致） |
@@ -119,7 +121,7 @@ curl -i https://<domain>/api/wecom-callback
 curl -i https://<domain>/api/oauth-github
 ```
 
-> `VERCEL_URL` 作为 Actions secret 时**只填域名**（`myapp.vercel.app`），不带 `https://` 前缀、不带尾斜杠——`digest-hourly.yml` 会拼成 `https://${VERCEL_URL}/api/cron-push-digest`（`daily.yml` 只负责抓取/补全，不再触发简报）。
+> `VERCEL_URL` 作为 Actions secret 时**只填域名**（`myapp.vercel.app`），不带 `https://` 前缀、不带尾斜杠——`digest-hourly.yml` 会拼成 `https://${VERCEL_URL}/api/cron-push-digest`（`daily.yml` 抓取/补全之后还会**兜底触发一次**简报推送；`pushDigests` 的三重门控保证与小时触发不重复）。
 
 ---
 
@@ -210,7 +212,7 @@ curl -i https://<domain>/api/oauth-github
 
 简报触发与抓取已拆成两个工作流（避免双触发）：
 
-- Actions →「每日热榜管线」→ Run workflow（`workflow_dispatch`）：抓取 / 补全两步全绿（该工作流不再触发简报）。
+- Actions →「每日热榜管线」→ Run workflow（`workflow_dispatch`）：抓取 / 补全两步全绿，随后「兜底触发一次简报推送」返回 200（三重门控保证与小时触发不重复）。
 - Actions →「简报小时触发」→ Run workflow：触发步骤 curl 返回 200 + `{"sent":…,"skipped":…,"failed":…}`，且 `failed` 为 0（`skipped` 可以是未到推送时间/当日已发的正常跳过）。
 - 若人为把某步弄挂，且配置了 `WECOM_ADMIN_USERID`，管理员应收到企微告警文本（含 Run URL），且对应工作流日志里告警步骤 `errcode == 0` 断言通过。
 
@@ -243,7 +245,7 @@ curl -i https://<domain>/api/oauth-github
 
 - **操作**：微信里发「**本周 rust 的 ai 项目**」。
 - **预期观察**：
-  1. 收到**纯文本**回复：每行形如 `1. owner/repo ★1234 (+567)（新上榜） — 中文简介 https://github.com/owner/repo`，末行固定提示 `💡 直接回复「收藏 N」收藏任意一条；发「帮助」查看全部指令`；链接是裸 URL，微信里可点进 GitHub。
+  1. 收到**纯文本**回复：每行形如 `1. owner/repo ★1234 (+567)（新上榜） — 中文简介 https://github.com/owner/repo`，末行固定提示 `💡 「收藏 3」收藏第 3 条；「不感兴趣 3」只针对它；发「帮助」看全部指令`；链接是裸 URL，微信里可点进 GitHub。
   2. Neon：`search_caches` 该用户行的 `results` 数组被覆盖写（`select results from search_caches where wecom_userid = '<测试用户>';`），序号与回复列表一一对应——这是下一步「收藏 1」的前提。
   3. 换一句「**找一下本周比较火的Java项目**」：同样有结果（中文描述 → 语言 java + 周榜，不因关键词误判返回空）；「**本周 swift 项目**」也能命中（语言过滤走 `repos.language`，不再只看语言榜）。
 
@@ -295,7 +297,7 @@ curl -i https://<domain>/api/oauth-github
 - **预期观察**：
   1. 三条回执分别为 `✅ 每日简报条数已设为 3（1–20）`、`✅ 简报推送时间已设为 20:30（北京时间）`、`✅ 简报推送间隔已设为每 2 天（1–30，未到间隔不重复推送）`。
   2. Neon：`select preferences from subscribers where wecom_userid = '<测试用户>';` 三个字段同时存在（后续「订阅 …」不会把它们刷掉）。
-  3. 次日 20:30 后收到 3 条简报；间隔 2 天时次日不推、第三天推（整点 tick 由 `.github/workflows/digest-hourly.yml` 每小时触发，门控在 `pushDigests` 内）。
+  3. 次日 20:30 后收到 3 条简报；间隔 2 天时次日不推、第三天推（tick 由 `.github/workflows/digest-hourly.yml` 每小时**第 17 分**触发，不是整点；门控在 `pushDigests` 内）。
   4. 越界输入（「条数 0」「推送时间 25:99」「每 99 天」）→ 回用法提示，不写库。
 
 ### ⑧ 加入即自动收到简报（第二账号）
@@ -305,7 +307,7 @@ curl -i https://<domain>/api/oauth-github
   1. 先收到 3 行欢迎语，紧接一条今日简报（仓库可点、每行一句中文简介）。
   2. Neon：该用户 `subscribers` 有新行（`active = true`，`preferences` 为空偏好），`last_digest_at` = **北京当日 00:00**（回填零点而非当前时刻，保证次日仍按 09:00 正常推送，不会把推送时间永久后移）。
   3. `search_caches` 有该用户的简报条目 → 紧接着发「收藏 1」可用（需先「绑定」）。
-  4. 再次进入应用 / 再发消息**不重复**送礼包；当天 09:00 的整点 tick 也不会再推一份（`last_digest_at` 已记当日）。
+  4. 再次进入应用 / 再发消息**不重复**送礼包；当天 09:17 那次 tick 也不会再推一份（`last_digest_at` 已记当日）。
 
 ---
 
@@ -338,7 +340,7 @@ curl -i https://<domain>/api/oauth-github
    - `RESEND_API_KEY`（Resend → API Keys）
    - `EMAIL_FROM=GitHub 热榜 <digest@mail.example.com>`
    - `PUBLIC_BASE_URL=https://<生产域名>`（邮件里的确认/设置/退订链接用；不配会回退请求 Host）
-5. 免费额度 3,000 封/月、100 封/天，本项目远低于上限（单轮 ≤50 封 + 每人每天确认信 ≤50 封）。
+5. 免费额度 3,000 封/月、100 封/天，本项目远低于上限（单轮 ≤50 封 + **全局**每天确认信上限 50 封，同一地址 10 分钟冷却，不是「每人每天 50 封」）。
 
 ### 9.2 落地页与成员名额
 
@@ -360,7 +362,7 @@ curl -i https://<domain>/api/oauth-github
 
 1. 打开 `/api/join`：企微在前、带「推荐」、邮箱按钮可见、兜底文案存在；设 `WECOM_ACCEPTING=false` 后邮箱升为推荐、企微显示「名额已满」。
 2. 落地页提交邮箱 → 收到确认邮件 → 点链接：确认成功页 + **立即收到今日简报**（品牌头、概览、条目卡片、中文简介、页脚设置/退订链接）。
-3. 邮件条数设 20 → 20 条全部展示、无「已截断」；同日企微仍按 3800 字节截断。
+3. 邮件条数设 20 → 20 条全部展示、无「已截断」；同日企微仍按 1900 字节截断。
 4. 设置 17:00 + 每 2 天 → 当日 17:00 收到、次日不收到、第三日收到；18:00 后不再发信。
 5. 关注方向（如 Python + AI）→ 邮件只出相关项目；概览仍正常。
 6. 点邮件页脚「退订」→ 成功页；再次点同链接仍 200（幂等）；Gmail「一键退订」走 RFC 8058 POST 同样生效。
@@ -420,7 +422,7 @@ curl -i https://<domain>/api/oauth-github
 
 ### 10.4 运行日志：每次调用走了哪条路 + 规则层怎么长大
 
-**一次调用 = 一条 trace**（`src/obs/trace.ts`，写 `kv_cache`，保留 7 天，不建表）。一条入站消息的「路由 → 规则意图 → 模型选择 → 解析来源 → 检索条数 → 简介命中 → 发送字节」按顺序记在 `steps` 里，每步带距上一步的 `ms`，一眼看出慢在哪一段。每日推送同理（`kind=push`，每个真正发送的订阅者一条）。
+**一次调用 = 一条 trace**（`src/obs/trace.ts`，写 `agent_runs` 正式表；写表失败或迁移未执行时降级到 `kv_cache`，7 天 TTL。主表目前没有自动清理）。一条入站消息的「路由 → 规则意图 → 模型选择 → 解析来源 → 检索条数 → 简介命中 → 发送字节」按顺序记在 `steps` 里，每步带距上一步的 `ms`，一眼看出慢在哪一段。每日推送同理（`kind=push`，每个真正发送的订阅者一条）。
 
 打开（手机浏览器也能看，服务端渲染，无需登录）：
 
@@ -485,7 +487,7 @@ where r.language is not null group by 1, 2 order by 3 desc limit 20;
 
 **调阈值的依据，不是给用户加开关**：看 `/api/trace` 里 `kind=push` 的 `digest-empty` 占比。高于约 20% 说明门槛太严（用户会觉得简报「时有时无」），把 `src/agent/digest-filter.ts` 的 `GROWTH_MIN_DELTA` 从 100 往下调；显著低于 5% 说明门槛太松，可以往上调。一次只动这一个常量。
 
-trace 上对应的步骤：`signals`（收藏/屏蔽数量）、`dedup`（过滤前 → 剩下）、`digest-empty` 与 `quiet`（为什么没发）。
+trace 上对应的步骤：`signals`（收藏/屏蔽数量）、`dedup-before` / `dedup-after`（过滤前后各剩多少）、`digest-empty` 与 `quiet`（为什么没发）。
 
 **两条已知限制，不是 bug**（详见第 5 步 ⑤）：
 

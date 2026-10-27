@@ -4,7 +4,7 @@ import type { DigestSnapshotItem } from '../agent/digest-snapshot.js';
 
 /**
  * 品牌化每日简报邮件：内联样式 + table 布局 + 无外链图片/追踪像素。
- * 邮件展示订阅者条数设置内的全部条目（不套用企微的 3800 字节截断）。
+ * 邮件展示订阅者条数设置内的全部条目（不套用企微的 1900 字节截断）。
  */
 
 export interface DigestEmailInput {

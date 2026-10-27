@@ -6,9 +6,11 @@ import { loadRepoSummaries } from '../agent/repo-summary.js';
 import { searchTrending, type SearchResultItem } from '../agent/search.js';
 import { loadUserLlm } from '../agent/user-llm.js';
 import { note, traceError } from '../obs/trace.js';
+import { tryAgentReply } from './agent-route.js';
 import { sendWeComText } from './api.js';
 import { ABOUT_REPLY, OFF_TOPIC_REPLY } from './onboarding.js';
-import { formatEntryLine } from './text.js';
+import { routeToTools } from './tool-route.js';
+import { formatEntryLine, MAX_TEXT_BYTES } from './text.js';
 import type { InboundMessage } from './router.js';
 
 /**
@@ -22,7 +24,7 @@ import type { InboundMessage } from './router.js';
  */
 
 /** 企微文本消息内容上限 2048 字节；1900 字节为安全阈值，超出即截断列表。 */
-export const MAX_TEXT_BYTES = 1900;
+export { MAX_TEXT_BYTES };
 
 /** 搜索结果页脚：用具体例子教「序号精确反馈」+ 帮助入口。 */
 export const GUIDANCE_FOOTER =
@@ -159,6 +161,22 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
       ? { kind: 'user', config: userLlm }
       : { kind: 'none' };
     note('llm-choice', userLlm ? `user:${userLlm.model}` : 'none');
+
+    // 规则前置：只有「点名仓库 / 深挖 / 靠不靠谱 / 改订阅」这类消息才进工具链路。
+    // 普通搜索必须留在这条零模型、读共享缓存的路径上——进了工具就要烧 token，
+    // 而「今天有什么」的回答质量并不会因为模型多跑一轮而变好。
+    const toolRoute = routeToTools(msg.content);
+    if (toolRoute.kind === 'tools') {
+      const handled = await tryAgentReply(msg, {
+        choice,
+        formatItems: formatSearchReply,
+      });
+      if (handled) {
+        note('reply', `tool:${toolRoute.tool}`);
+        return;
+      }
+      note('agent-route', '放弃 → 回退检索');
+    }
 
     const query = await parseSearchQuery(msg.content, choice);
     note(

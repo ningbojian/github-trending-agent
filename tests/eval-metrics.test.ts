@@ -10,12 +10,14 @@ import {
   routeAccuracy,
   ruleCoverage,
   ruleFalsePositiveRate,
+  toolArgAccuracy,
+  toolRouteAccuracy,
 } from '../evals/metrics';
 import type { AnswerObservation } from '../evals/adapters/answer';
 import type { ParseObservation } from '../evals/adapters/parse';
 import { compareBaseline, compareMetric, checkThresholds } from '../evals/report';
 import type { ParseExpectation } from '../evals/schema';
-import type { ParseSample } from '../evals/metrics';
+import type { ParseSample, ToolSample } from '../evals/metrics';
 
 function parseSample(
   expected: ParseExpectation,
@@ -87,6 +89,58 @@ describe('eval metrics — 路由', () => {
       { id: 'c', expected: 'handler:search', actual: 'handler:help' },
     ]);
     expect(score).toBeLessThan(0.5);
+  });
+});
+
+describe('eval metrics — 工具路由', () => {
+  const tool = (
+    expected: { route: 'tools' | 'search'; tool?: string; repo?: string },
+    actual: { route: 'tools' | 'search'; tool?: string; repo?: string },
+  ): ToolSample => ({
+    id: 'sample',
+    expected: {
+      route: expected.route,
+      ...(expected.tool === undefined ? {} : { tool: expected.tool }),
+      ...(expected.repo === undefined ? {} : { args: { repo: expected.repo } }),
+    },
+    observation: { skipped: false, route: actual.route, tool: actual.tool, args: { repo: actual.repo ?? null } },
+  });
+
+  it('路由全对 → 1；工具名不对 → 不算对', () => {
+    expect(
+      toolRouteAccuracy([
+        tool({ route: 'tools', tool: 'deep_dive_repo' }, { route: 'tools', tool: 'deep_dive_repo' }),
+        tool({ route: 'tools', tool: 'repo_health' }, { route: 'tools', tool: 'deep_dive_repo' }),
+      ]),
+    ).toBe(0.5);
+  });
+
+  it('只写了 route 的用例只比 route', () => {
+    expect(
+      toolRouteAccuracy([tool({ route: 'search' }, { route: 'search', tool: 'deep_dive_repo' })]),
+    ).toBe(1);
+  });
+
+  it('参数准确率只算写了 repo 的用例', () => {
+    expect(
+      toolArgAccuracy([
+        tool({ route: 'tools', tool: 'deep_dive_repo', repo: 'astral-sh/ruff' }, {
+          route: 'tools',
+          tool: 'deep_dive_repo',
+          repo: 'astral-sh/ruff',
+        }),
+        tool({ route: 'tools', tool: 'repo_health' }, { route: 'tools', tool: 'repo_health' }),
+        tool({ route: 'tools', tool: 'repo_health', repo: 'facebook/react' }, {
+          route: 'tools',
+          tool: 'repo_health',
+        }),
+      ]),
+    ).toBe(0.5);
+  });
+
+  it('没有工具样本时两项都按 1（没跑不算失败）', () => {
+    expect(toolRouteAccuracy([])).toBe(1);
+    expect(toolArgAccuracy([])).toBe(1);
   });
 });
 

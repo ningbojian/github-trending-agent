@@ -11,6 +11,8 @@ export const THRESHOLDS: Record<string, number> = {
   route_accuracy: 1,
   rule_false_positive_rate: 0,
   parse_exact_match: 0.95,
+  tool_route_exact: 1,
+  tool_arg_accuracy: 1,
   groundedness: 1,
   runtime_errors: 0,
 };

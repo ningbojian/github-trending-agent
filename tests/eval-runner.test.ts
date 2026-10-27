@@ -82,18 +82,37 @@ describe('eval runner — 结果与确定性', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('tools 用例计入 skipped 而不是失败', async () => {
+  it('tools 用例按真实路由判定（不再跳过）', async () => {
     const result = await runEval({
       goldenDir: goldenDir([
         {
           id: 'tools-deep-dive',
           text: '深挖 astral-sh/ruff',
+          expected: {
+            tools: { route: 'tools', tool: 'deep_dive_repo', args: { repo: 'astral-sh/ruff' } },
+          },
+        },
+      ]),
+    });
+    expect(result.skippedTools).toBe(0);
+    expect(result.metrics.tool_route_exact).toBe(1);
+    expect(result.metrics.tool_arg_accuracy).toBe(1);
+    expect(result.ok).toBe(true);
+  });
+
+  it('工具路由判错 → 门禁变红', async () => {
+    const result = await runEval({
+      goldenDir: goldenDir([
+        {
+          id: 'tools-misrouted',
+          text: '本周 python 的 ai 项目',
           expected: { tools: { route: 'tools', tool: 'deep_dive_repo' } },
         },
       ]),
     });
-    expect(result.skippedTools).toBe(1);
-    expect(result.ok).toBe(true);
+    expect(result.metrics.tool_route_exact).toBe(0);
+    expect(result.toolFailures[0]?.id).toBe('tools-misrouted');
+    expect(result.ok).toBe(false);
   });
 });
 

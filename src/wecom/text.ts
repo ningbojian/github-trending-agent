@@ -14,6 +14,9 @@
 /** 换行与制表符：连续折叠为单个空格，保证展示文本恒为单行（不会破坏列表版式）。 */
 const WHITESPACE_RUN = /[\r\n\t]+/g;
 
+/** 企微文本消息内容上限 2048 字节；1900 字节为安全阈值，超出即截断。 */
+export const MAX_TEXT_BYTES = 1900;
+
 /**
  * 把任意展示文本压成单行：折叠 CR/LF/制表符并去掉首尾空白。
  * description（fallbackZh 截断）与 LLM 生成的简介都可能带换行，

@@ -1,6 +1,7 @@
 import type { ParseObservation } from './adapters/parse.js';
 import type { AnswerObservation } from './adapters/answer.js';
-import type { ParseExpectation } from './schema.js';
+import type { ToolsObservation } from './adapters/tools.js';
+import type { ParseExpectation, ToolsExpectation } from './schema.js';
 
 /**
  * 评测指标（全部纯函数，无 I/O）。
@@ -24,6 +25,12 @@ export interface ParseSample {
 export interface AnswerSample {
   id: string;
   observation: AnswerObservation;
+}
+
+export interface ToolSample {
+  id: string;
+  expected: ToolsExpectation;
+  observation: ToolsObservation;
 }
 
 export function ratio(numerator: number, denominator: number): number {
@@ -173,6 +180,32 @@ export function groundedness(samples: AnswerSample[]): number {
   );
 }
 
+/**
+ * 工具路由命中率：route 必须对；写了 tool 的用例，工具名也必须对。
+ * 参数（args）单独算，因为「走对了路、带了错仓库」是另一种错误。
+ */
+export function toolRouteAccuracy(samples: ToolSample[]): number {
+  return ratio(
+    samples.filter((sample) => {
+      if (sample.observation.route !== sample.expected.route) return false;
+      if (sample.expected.tool === undefined) return true;
+      return sample.observation.tool === sample.expected.tool;
+    }).length,
+    samples.length,
+  );
+}
+
+/** 参数准确率：分母只算金标写了 args.repo 的用例。 */
+export function toolArgAccuracy(samples: ToolSample[]): number {
+  const judged = samples.filter((sample) => sample.expected.args?.repo !== undefined);
+  return ratio(
+    judged.filter(
+      (sample) => (sample.observation.args?.repo ?? null) === sample.expected.args?.repo,
+    ).length,
+    judged.length,
+  );
+}
+
 export interface EvalMetrics {
   [name: string]: number;
 }
@@ -181,10 +214,13 @@ export interface MetricInputs {
   routes: RouteSample[];
   parses: ParseSample[];
   answers: AnswerSample[];
+  /** 工具用例可选：只有 tools.jsonl 有内容时才计分。 */
+  tools?: ToolSample[];
   runtimeErrors: number;
 }
 
 export function computeMetrics(inputs: MetricInputs): EvalMetrics {
+  const tools = inputs.tools ?? [];
   return {
     route_accuracy: routeAccuracy(inputs.routes),
     route_macro_f1: macroF1(inputs.routes),
@@ -192,6 +228,8 @@ export function computeMetrics(inputs: MetricInputs): EvalMetrics {
     rule_false_positive_rate: ruleFalsePositiveRate(inputs.parses),
     parse_exact_match: parseExactMatch(inputs.parses),
     fallback_parse_coverage: fallbackParseCoverage(inputs.parses),
+    tool_route_exact: toolRouteAccuracy(tools),
+    tool_arg_accuracy: toolArgAccuracy(tools),
     groundedness: groundedness(inputs.answers),
     runtime_errors: inputs.runtimeErrors,
     ...Object.fromEntries(

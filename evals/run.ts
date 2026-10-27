@@ -11,6 +11,7 @@ import {
   type EvalMetrics,
   type ParseSample,
   type RouteSample,
+  type ToolSample,
 } from './metrics.js';
 import { checkThresholds, compareBaseline, isPassing } from './report.js';
 import type { EvalResult, FailureRecord } from './types.js';
@@ -92,9 +93,11 @@ export async function runEval(options: RunEvalOptions = {}): Promise<EvalResult>
   const routes: RouteSample[] = [];
   const parses: ParseSample[] = [];
   const answers: AnswerSample[] = [];
+  const tools: ToolSample[] = [];
   const routeFailures: FailureRecord[] = [];
   const parseFailures: FailureRecord[] = [];
   const answerFailures: FailureRecord[] = [];
+  const toolFailures: FailureRecord[] = [];
   let skippedTools = 0;
 
   for (const item of cases) {
@@ -170,19 +173,50 @@ export async function runEval(options: RunEvalOptions = {}): Promise<EvalResult>
       }
     }
 
-    // ---- 工具路由（Phase 2 前 adapter 返回 skipped，不抛） ----
+    // ---- 工具路由（规则前置；不需要模型/网络） ----
     if (item.expected.tools !== undefined) {
-      const observation = observeToolRoute(item.text);
-      if (observation.skipped) skippedTools += 1;
-      // Phase 2 起在 else 分支比较 route/tool；当前不产生失败。
+      const expected = item.expected.tools;
+      try {
+        const observation = observeToolRoute(item.text);
+        tools.push({ id: item.id, expected, observation });
+        if (observation.skipped) skippedTools += 1;
+
+        const routeOk = observation.route === expected.route;
+        const toolOk = expected.tool === undefined || observation.tool === expected.tool;
+        const argsOk =
+          expected.args?.repo === undefined ||
+          (observation.args?.repo ?? null) === expected.args.repo;
+        if (!routeOk || !toolOk || !argsOk) {
+          toolFailures.push({
+            id: item.id,
+            text: item.text,
+            expected:
+              `${expected.route}${expected.tool === undefined ? '' : `/${expected.tool}`}` +
+              `${expected.args?.repo === undefined ? '' : ` repo=${expected.args.repo}`}`,
+            actual:
+              `${observation.route ?? 'skipped'}${observation.tool === undefined ? '' : `/${observation.tool}`}` +
+              `${observation.args?.repo == null ? '' : ` repo=${observation.args.repo}`}`,
+            notes: item.notes,
+          });
+        }
+      } catch (err) {
+        toolFailures.push({
+          id: item.id,
+          text: item.text,
+          expected: `${expected.route}${expected.tool === undefined ? '' : `/${expected.tool}`}`,
+          actual: `运行时错误：${err instanceof Error ? err.message : String(err)}`,
+          notes: item.notes,
+        });
+      }
     }
   }
 
-  const runtimeErrors = routeFailures.filter((f) => f.actual.includes('运行时错误')).length +
-    parseFailures.filter((f) => f.actual.includes('运行时错误')).length +
-    answerFailures.filter((f) => f.actual.includes('运行时错误')).length;
+  const runtimeErrors =
+    [...routeFailures, ...parseFailures, ...answerFailures, ...toolFailures].filter((f) =>
+      f.actual.includes('运行时错误'),
+    ).length;
 
-  const metrics = computeMetrics({ routes, parses, answers, runtimeErrors });
+  const metrics = computeMetrics({ routes, parses, answers, tools, runtimeErrors });
   const thresholdFailures = checkThresholds(metrics);
 
   const baseline = options.compare === true
@@ -199,6 +233,7 @@ export async function runEval(options: RunEvalOptions = {}): Promise<EvalResult>
     routeFailures,
     parseFailures,
     answerFailures,
+    toolFailures,
     skippedTools,
     regressions,
     fixes,

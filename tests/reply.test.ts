@@ -24,6 +24,10 @@ const userLlmMock = vi.hoisted(() => ({
   loadUserLlm: vi.fn(),
 }));
 
+const agentRouteMock = vi.hoisted(() => ({
+  tryAgentReply: vi.fn(),
+}));
+
 const dbMock = vi.hoisted(() => ({
   failExecute: false,
   insertValues: [] as Record<string, unknown>[],
@@ -47,6 +51,12 @@ vi.mock('../src/agent/repo-summary', () => ({
 
 vi.mock('../src/agent/user-llm', () => ({
   loadUserLlm: userLlmMock.loadUserLlm,
+}));
+
+// 工具链路整体替换：本文件只验证「什么时候进、进了之后不再走检索」，
+// 工具内部行为由 tests/agent-route.test.ts 覆盖。
+vi.mock('../src/wecom/agent-route', () => ({
+  tryAgentReply: agentRouteMock.tryAgentReply,
 }));
 
 // db 兜底 mock：router 的 stars/onboarding 模块图需要 db 导出存在（本文件不经其路径）。
@@ -148,6 +158,8 @@ beforeEach(() => {
   // 默认「用户已配好自己的 Key」：既有用例都是「LLM 路径」的断言。
   userLlmMock.loadUserLlm.mockReset();
   userLlmMock.loadUserLlm.mockResolvedValue(USER_LLM);
+  agentRouteMock.tryAgentReply.mockReset();
+  agentRouteMock.tryAgentReply.mockResolvedValue(false);
   dbMock.failExecute = false;
   dbMock.insertValues = [];
 });
@@ -667,6 +679,35 @@ describe('handleSearch Token 归属', () => {
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 工具前置：规则命中才交给 tryAgentReply；它放弃时原链路必须照常工作。
+// ---------------------------------------------------------------------------
+describe('handleSearch 工具前置', () => {
+  it('规则命中 → 交给 tryAgentReply，不再检索、不重复发送', async () => {
+    agentRouteMock.tryAgentReply.mockResolvedValue(true);
+    await handleSearch(makeMsg({ content: '深挖 astral-sh/ruff' }));
+    expect(agentRouteMock.tryAgentReply).toHaveBeenCalledTimes(1);
+    expect(agentRouteMock.tryAgentReply.mock.calls[0]?.[1]).toMatchObject({
+      choice: { kind: 'user' },
+    });
+    expect(searchMock.searchTrending).not.toHaveBeenCalled();
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+  });
+
+  it('tryAgentReply 放弃（false）→ 继续原检索链路', async () => {
+    agentRouteMock.tryAgentReply.mockResolvedValue(false);
+    await handleSearch(makeMsg({ content: '深挖 astral-sh/ruff' }));
+    expect(agentRouteMock.tryAgentReply).toHaveBeenCalledTimes(1);
+    expect(searchMock.searchTrending).toHaveBeenCalled();
+  });
+
+  it('普通搜索消息 → 根本不进工具链路', async () => {
+    await handleSearch(makeMsg({ content: '本周 python 的 ai 项目' }));
+    expect(agentRouteMock.tryAgentReply).not.toHaveBeenCalled();
+    expect(searchMock.searchTrending).toHaveBeenCalled();
+  });
+});
+
 // 注册进 router：普通文本消息经 routeMessage 落到 handleSearch。
 // ---------------------------------------------------------------------------
 describe('router 注册', () => {

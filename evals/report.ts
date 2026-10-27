@@ -69,6 +69,8 @@ export function formatReport(result: EvalResult): string {
   lines.push(`· 规则覆盖率：${format(metrics.rule_coverage ?? 0)}`);
   lines.push(`· 规则误判率：${format(metrics.rule_false_positive_rate ?? 0)}`);
   lines.push(`· groundedness：${format(metrics.groundedness ?? 1)}`);
+  lines.push(`· 工具路由：${format(metrics.tool_route_exact ?? 1)}`);
+  lines.push(`· 工具参数：${format(metrics.tool_arg_accuracy ?? 1)}`);
   lines.push(`· 运行时错误：${metrics.runtime_errors ?? 0}`);
   if (result.skippedTools > 0) {
     lines.push(`· 工具路由：跳过 ${result.skippedTools} 条（Phase 2 前无工具层）`);
@@ -95,6 +97,7 @@ export function formatReport(result: EvalResult): string {
     ...formatFailures('路由失败', result.routeFailures),
     ...formatFailures('解析失败', result.parseFailures),
     ...formatFailures('答案失败', result.answerFailures),
+    ...formatFailures('工具路由失败', result.toolFailures),
   ];
   if (details.length > 0) {
     lines.push('');

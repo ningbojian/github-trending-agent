@@ -1,16 +1,29 @@
 /**
- * 工具路由观察器。
+ * 工具路由观察器：直接调生产用的规则前置 `routeToTools`。
  *
- * Phase 2 之前没有工具层，这里明确返回 skipped——**不抛**，
- * 让 Phase 1 的 run 能在 tools.jsonl 已存在的情况下照常跑完。
- * Phase 2 落地后把实现换成真实的 `routeToTools`，评测用例无需改动。
+ * 评测关心两件事：这句话该不该进工具循环（route），以及进的话带的是哪个工具、
+ * 哪个仓库（tool / args）。模型内部怎么走不在这里测——那是端到端真机的事，
+ * CI 里没有网络也没有模型。
  */
+
+import { routeToTools } from '../../src/wecom/tool-route';
+
 export interface ToolsObservation {
   skipped: boolean;
   route?: 'tools' | 'search' | 'parse';
   tool?: string;
+  args?: { repo: string | null };
 }
 
-export function observeToolRoute(_text: string): ToolsObservation {
-  return { skipped: true };
+export function observeToolRoute(text: string): ToolsObservation {
+  const route = routeToTools(text);
+  if (route.kind === 'tools') {
+    return {
+      skipped: false,
+      route: 'tools',
+      tool: route.tool,
+      args: { repo: route.repo },
+    };
+  }
+  return { skipped: false, route: 'search' };
 }

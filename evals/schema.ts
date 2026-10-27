@@ -39,6 +39,12 @@ export const AnswerExpectationSchema = z.object({
 export const ToolsExpectationSchema = z.object({
   route: z.enum(['tools', 'search', 'parse']),
   tool: z.string().optional(),
+  /** 只写「应该带对的参数」；没写就不计分（同 parse 的槽位纪律）。 */
+  args: z
+    .object({
+      repo: z.string().optional(),
+    })
+    .optional(),
 });
 
 export const GoldenExpectedSchema = z

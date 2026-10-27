@@ -1,5 +1,7 @@
-{"id":"tools-deep-dive","text":"深挖 astral-sh/ruff","notes":"Phase 2 起生效：明确仓库 → deep_dive_repo","expected":{"tools":{"route":"tools","tool":"deep_dive_repo"}}}
-{"id":"tools-health","text":"这个项目靠不靠谱","notes":"Phase 2 起生效：健康度类问题 → repo_health","expected":{"tools":{"route":"tools","tool":"repo_health"}}}
-{"id":"tools-manage-subscription","text":"帮我取消订阅 rpa","notes":"Phase 2 起生效：改订阅意图 → manage_subscription","expected":{"tools":{"route":"tools","tool":"manage_subscription"}}}
+{"id":"tools-deep-dive","text":"深挖 astral-sh/ruff","notes":"明确仓库 → deep_dive_repo；参数必须带对仓库名","expected":{"tools":{"route":"tools","tool":"deep_dive_repo","args":{"repo":"astral-sh/ruff"}}}}
+{"id":"tools-health","text":"这个项目靠不靠谱","notes":"健康度类问题 → repo_health；没点名仓库时 repo 参数为空，由模型先检索补上下文","expected":{"tools":{"route":"tools","tool":"repo_health"}}}
+{"id":"tools-health-with-repo","text":"astral-sh/ruff 还在维护吗","notes":"对抗样例：仓库名 + 维护类措辞必须走 repo_health，而不是普通检索","expected":{"tools":{"route":"tools","tool":"repo_health","args":{"repo":"astral-sh/ruff"}}}}
+{"id":"tools-manage-subscription","text":"帮我取消订阅 rpa","notes":"改订阅意图 → manage_subscription（注意这与命令式的「取消订阅 rpa」不是同一条路）","expected":{"tools":{"route":"tools","tool":"manage_subscription"}}}
 {"id":"tools-negative-search","text":"本周 python 的 ai 项目","notes":"普通检索不得走工具循环","expected":{"tools":{"route":"search"}}}
 {"id":"tools-negative-topn","text":"前 5 个新项目","notes":"结构清晰的检索也不需要模型","expected":{"tools":{"route":"search"}}}
+{"id":"tools-negative-similar","text":"找一下 astral-sh/ruff 类似的项目","notes":"对抗样例：句子里有 owner/repo 但意图是检索，绝不能因一个斜杠就进工具循环","expected":{"tools":{"route":"search"}}}

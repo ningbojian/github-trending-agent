@@ -72,8 +72,20 @@ describe('eval adapters — 答案 groundedness', () => {
   });
 });
 
-describe('eval adapters — 工具路由占位', () => {
-  it('Phase 2 前返回 skipped 且不抛', () => {
-    expect(observeToolRoute('深挖 astral-sh/ruff')).toEqual({ skipped: true });
+describe('eval adapters — 工具路由', () => {
+  it('点名仓库 → tools/deep_dive_repo，并带出参数', () => {
+    expect(observeToolRoute('深挖 astral-sh/ruff')).toEqual({
+      skipped: false,
+      route: 'tools',
+      tool: 'deep_dive_repo',
+      args: { repo: 'astral-sh/ruff' },
+    });
+  });
+
+  it('普通检索落 search', () => {
+    expect(observeToolRoute('本周 python 的 ai 项目')).toEqual({
+      skipped: false,
+      route: 'search',
+    });
   });
 });

@@ -16,7 +16,8 @@ export interface EvalResult {
   routeFailures: FailureRecord[];
   parseFailures: FailureRecord[];
   answerFailures: FailureRecord[];
-  /** tools.jsonl 里被跳过的条数（Phase 2 前恒为全部）。 */
+  toolFailures: FailureRecord[];
+  /** adapter 声明跳过的工具用例数（当前恒为 0，保留字段以兼容旧报告）。 */
   skippedTools: number;
   /** 相对基线的回退/修复（指标名 + 方向）。 */
   regressions: string[];

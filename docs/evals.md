@@ -53,6 +53,8 @@ npm run eval:seed       # 打印待人工标注的真实用户说法（只读日
 | `parse_exact_match` | 写出的槽位全部命中的比例 | ≥ 0.95 |
 | `parse_field_<field>` | 逐字段准确率（分母只算写了该字段的用例） | 报告用 |
 | `fallback_parse_coverage` | 规则拿不准、最终走 fallbackParse 的比例 | 报告用 |
+| `tool_route_exact` | 工具路由命中（route 对；写了 tool 的用例工具名也对） | = 1 |
+| `tool_arg_accuracy` | 工具参数命中（分母只算写了 `args.repo` 的用例） | = 1 |
 | `groundedness` | 回复里每个仓库都来自结果集、点名项都出现 | = 1 |
 | `runtime_errors` | 用例执行抛异常的次数 | = 0 |
 
@@ -97,5 +99,8 @@ npm run eval:seed       # 打印待人工标注的真实用户说法（只读日
 - 路由：每个 handler 至少一条，外加错字 / 尾标点 / 动词粘连等对抗样例。
 - 解析：意图（about / off_topic / 漏判）与六个槽位的主力问法。
 - 答案：fixture 排版 + groundedness。
-- 工具：`tools.jsonl` 已写好，adapter 在 Phase 2 前返回 `skipped`；落地工具层时把
-  `observeToolRoute` 换成真实 `routeToTools` 即可，用例不用改。
+- 工具：`tools.jsonl` 覆盖「深挖 / 健康度 / 改订阅」与反例（普通搜索、`前 5 个`、
+  「类似的项目」），适配器直接调生产 `routeToTools`。正例写 `expected.args.repo`
+  才能计入参数准确率；反例只写 `route: "search"`，确保「不该进工具的别进」。
+  「走对路、带错仓库」由 `tool_arg_accuracy` 单独暴露，不会混进路由分。
+- 下一步：扩大解析金标到 150–200 条；`--llm` 评分器落地后只本地跑。

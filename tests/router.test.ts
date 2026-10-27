@@ -75,6 +75,8 @@ const pushIntervalHandler = vi.fn();
 const setModelHandler = vi.fn();
 const myModelHandler = vi.fn();
 const clearModelHandler = vi.fn();
+const interestedHandler = vi.fn();
+const notInterestedHandler = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -102,6 +104,8 @@ beforeEach(() => {
     setModel: setModelHandler,
     myModel: myModelHandler,
     clearModel: clearModelHandler,
+    interested: interestedHandler,
+    notInterested: notInterestedHandler,
   });
 });
 
@@ -169,6 +173,35 @@ describe('routeMessage 分发', () => {
     await routeMessage(makeMsg({ content: 'go web 框架' }));
     expect(replacement).toHaveBeenCalledTimes(1);
     expect(searchHandler).not.toHaveBeenCalled();
+  });
+});
+
+describe('「感兴趣 / 不感兴趣」路由（整句等值，不落搜索）', () => {
+  it('「感兴趣」→ interestedHandler', async () => {
+    await routeMessage(makeMsg({ content: '感兴趣' }));
+    expect(interestedHandler).toHaveBeenCalledTimes(1);
+    expect(notInterestedHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「不感兴趣」→ notInterestedHandler，且不被「感兴趣」规则吞掉', async () => {
+    await routeMessage(makeMsg({ content: '不感兴趣' }));
+    expect(notInterestedHandler).toHaveBeenCalledTimes(1);
+    expect(interestedHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('尾标点被剥除：「感兴趣。」「不感兴趣！」同样命中', async () => {
+    await routeMessage(makeMsg({ content: '感兴趣。' }));
+    await routeMessage(makeMsg({ content: '不感兴趣！' }));
+    expect(interestedHandler).toHaveBeenCalledTimes(1);
+    expect(notInterestedHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('裸「兴趣」不是指令 → 搜索', async () => {
+    await routeMessage(makeMsg({ content: '兴趣' }));
+    expect(searchHandler).toHaveBeenCalledTimes(1);
+    expect(interestedHandler).not.toHaveBeenCalled();
   });
 });
 

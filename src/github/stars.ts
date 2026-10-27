@@ -1,6 +1,7 @@
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
+import { loadRecentResults } from '../agent/recent-results.js';
 import { db } from '../db/client.js';
-import { favorites, searchCaches, subscribers } from '../db/schema.js';
+import { favorites, subscribers } from '../db/schema.js';
 import { sendWeComText } from '../wecom/api.js';
 import { NUMBER_TOKEN_PATTERN, parseCnNumber } from '../wecom/cn-number.js';
 import type { InboundMessage } from '../wecom/router.js';
@@ -308,36 +309,6 @@ async function loadBindingAuth(wecomUserid: string): Promise<BindingAuth> {
   }
 }
 
-/**
- * 读调用方最近一次检索缓存（search_caches 每用户至多一行，仍按创建时间倒序兜底）。
- * 区分三态：无行（found=false，从未搜索/简报）/ 有行但结果为空 / 有行有结果——
- * 让「收藏 N」能给出精确文案，不再把"没有缓存"谎报成"没有第 N 条"。
- */
-async function loadLatestSearchResults(
-  wecomUserid: string,
-): Promise<{ found: boolean; items: SearchCacheItem[] }> {
-  const rows = await db()
-    .select()
-    .from(searchCaches)
-    .where(eq(searchCaches.wecomUserid, wecomUserid))
-    .orderBy(desc(searchCaches.createdAt))
-    .limit(1);
-  const row = rows[0];
-  if (row === undefined) {
-    return { found: false, items: [] };
-  }
-  const results = row.results;
-  return {
-    found: true,
-    items: Array.isArray(results) ? (results as SearchCacheItem[]) : [],
-  };
-}
-
-/** 缓存条目只需 full_name；其余字段由 Task 8/9 写入，这里不消费。 */
-interface SearchCacheItem {
-  fullName: string;
-}
-
 /** 读调用方的"我的收藏"列表（按创建时间升序，序号稳定）。 */
 async function loadFavorites(
   wecomUserid: string,
@@ -410,7 +381,7 @@ export async function handleFavorite(msg: InboundMessage): Promise<void> {
       return;
     }
 
-    const cache = await loadLatestSearchResults(msg.fromUserName);
+    const cache = await loadRecentResults(msg.fromUserName);
     if (!cache.found) {
       await sendWeComText(msg.fromUserName, NO_SEARCH_CACHE_REPLY);
       return;

@@ -924,6 +924,22 @@ describe('handlePushInterval（每 N 天 → 简报推送间隔）', () => {
 // ---------------------------------------------------------------------------
 // HELP_MESSAGE —— Task 5 新增两条指令（北京时间 / 1–30 天）
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// HELP_MESSAGE —— 口味反馈（感兴趣 / 不感兴趣）
+// ---------------------------------------------------------------------------
+describe('HELP_MESSAGE —— 口味反馈', () => {
+  it('含「感兴趣」「不感兴趣」两种说法，且说明连提两次才生效', () => {
+    const line = HELP_MESSAGE.split('\n').find((l) => l.includes('感兴趣'));
+    expect(line).toBeDefined();
+    expect(line).toContain('不感兴趣');
+    expect(line).toContain('两次');
+  });
+
+  it('整条帮助仍低于 1900 字节（企微 text 上限 2048，项目自留余量）', () => {
+    expect(Buffer.byteLength(HELP_MESSAGE, 'utf8')).toBeLessThan(1900);
+  });
+});
+
 describe('HELP_MESSAGE —— 推送时间与推送间隔', () => {
   it('含「推送时间」行（注明北京时间与示例）', () => {
     const line = HELP_MESSAGE.split('\n').find((l) => l.includes('推送时间'));

@@ -45,7 +45,7 @@ const TRUNCATION_NOTE = '（内容过长，已截断）';
 const EMPTY_NOTICE = '今日暂无符合条件的热榜项目。';
 /** 简报页脚：收藏指引 + 帮助指引（与搜索结果页脚措辞略异，保持各自语境）。 */
 export const DIGEST_FOOTER =
-  '💡 回复「收藏 N」收藏任意一条；发「帮助」查看全部指令';
+  '💡 回复「收藏 N」收藏任意一条；「感兴趣 / 不感兴趣」调整口味；发「帮助」查看全部指令';
 
 /** 简报单条：join 后的仓库 + 热榜快照字段。 */
 interface DigestEntry {

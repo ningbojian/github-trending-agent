@@ -451,13 +451,13 @@ describe('buildDigestForSubscriber — 简报内容', () => {
     expect(digest).not.toContain(DIGEST_FOOTER);
   });
 
-  it('页脚固定为「💡 回复「收藏 N」…」且位于消息末尾', async () => {
+  it('页脚固定为「💡 回复「收藏 N」…」，带两个动作且位于消息末尾', async () => {
     dbMock.executeRows.push(makeEntry('a/one'));
 
     const digest = await buildDigestForSubscriber(makeSub());
 
     expect(DIGEST_FOOTER).toBe(
-      '💡 回复「收藏 N」收藏任意一条；发「帮助」查看全部指令',
+      '💡 回复「收藏 N」收藏任意一条；「感兴趣 / 不感兴趣」调整口味；发「帮助」查看全部指令',
     );
     expect(digest.endsWith(DIGEST_FOOTER)).toBe(true);
     expect(digest).toContain('收藏');

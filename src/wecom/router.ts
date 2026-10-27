@@ -13,6 +13,7 @@ import {
 } from '../github/stars.js';
 import { bindHandler } from '../github/oauth.js';
 import { NUMBER_TOKEN_PATTERN } from './cn-number.js';
+import { handleInterested, handleNotInterested } from './feedback.js';
 import {
   CLEAR_MODEL_USAGE_REPLY,
   MY_MODEL_USAGE_REPLY,
@@ -53,6 +54,10 @@ export interface Handlers {
   unfavorite: MessageHandler;
   favorite: MessageHandler;
   list: MessageHandler;
+  /** 「感兴趣」——看完简报回一个词，作用于刚收到的那一批。 */
+  interested: MessageHandler;
+  /** 「不感兴趣」。 */
+  notInterested: MessageHandler;
   search: MessageHandler;
   bind: MessageHandler;
   subscribe: MessageHandler;
@@ -73,6 +78,8 @@ let handlers: Handlers = {
   unfavorite: stub,
   favorite: stub,
   list: stub,
+  interested: stub,
+  notInterested: stub,
   search: stub,
   bind: stub,
   subscribe: stub,
@@ -100,6 +107,8 @@ export function resetHandlers(): void {
     unfavorite: stub,
     favorite: stub,
     list: stub,
+    interested: stub,
+    notInterested: stub,
     search: stub,
     bind: stub,
     subscribe: stub,
@@ -319,6 +328,13 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
   if (content === '我的收藏') {
     return dispatchSafely(handlers.list, normalized);
   }
+  // 口味反馈：整句等值比较，「不感兴趣」里虽含「感兴趣」子串也不会被前缀吞并。
+  if (content === '不感兴趣') {
+    return dispatchSafely(handlers.notInterested, normalized);
+  }
+  if (content === '感兴趣') {
+    return dispatchSafely(handlers.interested, normalized);
+  }
   // Task 11：精确匹配「绑定」（trim 后），避免吞掉「绑定 XXX」类消息。
   if (content === '绑定') {
     return dispatchSafely(handlers.bind, normalized);
@@ -370,6 +386,8 @@ registerHandlers({
   favorite: handleFavorite,
   unfavorite: handleUnfavorite,
   list: handleList,
+  interested: handleInterested,
+  notInterested: handleNotInterested,
   subscribe: handleSubscribe,
   unsubscribe: handleUnsubscribe,
   digestCount: handleDigestCount,

@@ -228,11 +228,11 @@ describe('formatSearchReply（纯文本单行 + 裸链接 + 摘要注入）', ()
     expect(out).toContain('3. c/c');
   });
 
-  it('页脚固定在末尾，含「收藏」「帮助」两个指引关键词', () => {
+  it('页脚固定在末尾，教会「序号精确反馈」', () => {
     const out = formatSearchReply([makeItem()], new Map());
     expect(out.endsWith(GUIDANCE_FOOTER)).toBe(true);
     expect(GUIDANCE_FOOTER).toBe(
-      '💡 直接回复「收藏 N」收藏任意一条；发「帮助」查看全部指令',
+      '💡 「收藏 3」收藏第 3 条；「不感兴趣 3」只针对它；发「帮助」看全部指令',
     );
   });
 

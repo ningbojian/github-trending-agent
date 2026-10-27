@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { MAX_INTERVAL_DAYS } from '../agent/digest.js';
+import { mergePreferences } from '../agent/subscription-store.js';
 import { db } from '../db/client.js';
 import { subscribers } from '../db/schema.js';
 import { sendWeComText } from './api.js';
@@ -107,13 +108,15 @@ export const OFF_TOPIC_REPLY = [
 export const HELP_MESSAGE = [
   '完整用法（回复对应指令即可）：',
   '· 每日简报：加入即自动开通（默认每天 09:00 推送），只推有增长的新项目，没有就不打扰；发「退订」可停止。',
-  '· 口味：看完简报回「感兴趣」或「不感兴趣」，以后会多推/少推这个方向（连提两次才真正生效）。',
+  '· 口味：看完简报回「感兴趣」或「不感兴趣」作用于整批；加序号或仓库名可精确到一条，如「不感兴趣 3」「不感兴趣 owner/repo」（连提两次才真正屏蔽）。',
   '· 自然语言搜索：直接发送描述即可，如「本周 python 的 ai 项目」；条数用「前 5 个」控制。',
   '· 收藏：搜索结果或简报后回复「收藏 N」，收藏第 N 条并同步 star（需先发「绑定」授权 GitHub）。',
   '· 取消收藏：回复「取消收藏 N」，取消第 N 条收藏并同步取消 star。',
   '· 我的收藏：回复「我的收藏」，查看全部已收藏项目。',
+  '· 我的订阅：回复「我的订阅」，查看简报条数、推送安排与偏好关键词。',
   '· 绑定：回复「绑定」，跳转 GitHub 授权页完成授权。',
   '· 订阅：回复「订阅 <偏好>」设置每日简报偏好，如「订阅 python,ai」。',
+  '· 取消订阅：回复「取消订阅 <关键词>」只去掉一个偏好词（不退订简报），如「取消订阅 rpa」。',
   '· 退订：回复「退订」，停止每日简报（可随时重新订阅）。',
   '· 条数：回复「条数 N」自定义每日简报条数（1–20，仅影响简报），如「条数 5」。',
   '· 推送时间：回复「每天 H 点」或「推送时间 HH:MM」设置每日推送时间（北京时间），如「每天 9 点」。',
@@ -196,9 +199,9 @@ function subscribedReply(keywords: string[]): string {
  * 「订阅 <偏好>」handler：
  * - 前缀不匹配 → 静默返回（router 层已拦；直接调用同此守卫）
  * - 无可解析关键词（裸「订阅」）→ 用法提示，不写库
- * - 读-合并-写：languages/keywords 整体替换（languages 重置为空数组），
- *   但保留原 preferences.digestCount / pushTime / intervalDays
- *   （「条数 N」「每天 H 点」「每 N 天」的设置不被订阅指令清掉）
+ * - languages/keywords 整体替换（languages 重置为空数组），其余偏好
+ *   （digestCount / pushTime / intervalDays 以及未来的未知键）由共享的
+ *   mergePreferences 原样保留
  * - 同时写 active: true：退订（active=false）后再次订阅即恢复每日简报，
  *   与 UNSUBSCRIBE_REPLY / HELP / README 承诺的「可随时重新订阅」一致
  */
@@ -213,34 +216,11 @@ export async function handleSubscribe(msg: InboundMessage): Promise<void> {
       await sendWeComText(msg.fromUserName, SUBSCRIBE_USAGE_REPLY);
       return;
     }
-    const rows = await db()
-      .select()
-      .from(subscribers)
-      .where(eq(subscribers.wecomUserid, msg.fromUserName));
-    const previous = rows[0]?.preferences;
-    const preferences: {
-      languages: string[];
-      keywords: string[];
-      digestCount?: number;
-      pushTime?: string;
-      intervalDays?: number;
-    } = {
-      languages: [],
-      keywords: tokens,
-    };
-    if (typeof previous?.digestCount === 'number') {
-      preferences.digestCount = previous.digestCount;
-    }
-    if (typeof previous?.pushTime === 'string') {
-      preferences.pushTime = previous.pushTime;
-    }
-    if (typeof previous?.intervalDays === 'number') {
-      preferences.intervalDays = previous.intervalDays;
-    }
-    await db()
-      .update(subscribers)
-      .set({ preferences, active: true })
-      .where(eq(subscribers.wecomUserid, msg.fromUserName));
+    await mergePreferences(
+      msg.fromUserName,
+      { languages: [], keywords: tokens },
+      { active: true },
+    );
     await sendWeComText(msg.fromUserName, subscribedReply(tokens));
   } catch (err) {
     console.error('handleSubscribe failed:', err);
@@ -302,19 +282,7 @@ export async function handleDigestCount(msg: InboundMessage): Promise<void> {
       await sendWeComText(msg.fromUserName, DIGEST_COUNT_USAGE_REPLY);
       return;
     }
-    const rows = await db()
-      .select()
-      .from(subscribers)
-      .where(eq(subscribers.wecomUserid, msg.fromUserName));
-    const previous = rows[0]?.preferences;
-    const preferences = {
-      ...previous,
-      digestCount: n,
-    };
-    await db()
-      .update(subscribers)
-      .set({ preferences })
-      .where(eq(subscribers.wecomUserid, msg.fromUserName));
+    await mergePreferences(msg.fromUserName, { digestCount: n });
     await sendWeComText(
       msg.fromUserName,
       `${DIGEST_COUNT_REPLY_PREFIX}${n}${DIGEST_COUNT_REPLY_SUFFIX}`,
@@ -362,26 +330,6 @@ function parseClockToken(token: string, max: number): number | null {
     return value <= max ? value : null;
   }
   return parseCnNumber(token, { max });
-}
-
-/** 读-合并-写：只更新指定偏好字段，保留其余（languages/keywords/digestCount/另一时间字段）。 */
-async function mergePreferences(
-  wecomUserid: string,
-  patch: { pushTime?: string; intervalDays?: number },
-): Promise<void> {
-  const rows = await db()
-    .select()
-    .from(subscribers)
-    .where(eq(subscribers.wecomUserid, wecomUserid));
-  const previous = rows[0]?.preferences;
-  const preferences = {
-    ...(previous ?? { languages: [], keywords: [] }),
-    ...patch,
-  };
-  await db()
-    .update(subscribers)
-    .set({ preferences })
-    .where(eq(subscribers.wecomUserid, wecomUserid));
 }
 
 /**

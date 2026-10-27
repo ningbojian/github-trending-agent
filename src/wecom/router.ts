@@ -33,6 +33,12 @@ import {
 } from './onboarding.js';
 import { sendWeComText } from './api.js';
 import { handleSearch } from './reply.js';
+import {
+  CANCEL_SUBSCRIPTION_USAGE_REPLY,
+  MY_SUBSCRIPTION_USAGE_REPLY,
+  handleCancelSubscriptionTerm,
+  handleMySubscription,
+} from './subscription.js';
 import { sendWelcomeFlow } from './welcome.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
 
@@ -62,6 +68,10 @@ export interface Handlers {
   bind: MessageHandler;
   subscribe: MessageHandler;
   unsubscribe: MessageHandler;
+  /** 「我的订阅」——只读展示当前设置。 */
+  mySubscription: MessageHandler;
+  /** 「取消订阅 <关键词>」——只删一个订阅词，不动 active。 */
+  cancelSubscription: MessageHandler;
   digestCount: MessageHandler;
   pushTime: MessageHandler;
   pushInterval: MessageHandler;
@@ -84,6 +94,8 @@ let handlers: Handlers = {
   bind: stub,
   subscribe: stub,
   unsubscribe: stub,
+  mySubscription: stub,
+  cancelSubscription: stub,
   digestCount: stub,
   pushTime: stub,
   pushInterval: stub,
@@ -113,6 +125,8 @@ export function resetHandlers(): void {
     bind: stub,
     subscribe: stub,
     unsubscribe: stub,
+    mySubscription: stub,
+    cancelSubscription: stub,
     digestCount: stub,
     pushTime: stub,
     pushInterval: stub,
@@ -130,6 +144,21 @@ const FAVORITE_PATTERN = new RegExp(`^收藏\\s*${NUMBER_TOKEN_PATTERN}$`);
 
 /** 「订阅 …」——前缀匹配（「退订」首字为「退」，不会被吞掉）。 */
 const SUBSCRIBE_PATTERN = /^订阅/;
+
+/**
+ * 「取消订阅 <关键词>」——动词后必须是空白或句子结束（裸「取消订阅」命中，
+ * 由 handler 回用法提示；「取消订阅rpa」无空白 → 疑似命令提示）。
+ */
+const CANCEL_SUBSCRIPTION_PATTERN = /^取消订阅(?:\s|$)/;
+
+/**
+ * 「不感兴趣 …」/「感兴趣 …」——动词后必须是空白或句子结束。
+ * 具体作用在哪些条目（整批 / 序号 / 仓库名）由 handler 解析；
+ * 这里只负责「别把口味指令当搜索词发出去」。
+ * 「不感兴趣」必须先判：它是「感兴趣」的超集前缀吗？不是，但顺序保持与旧实现一致。
+ */
+const NOT_INTERESTED_PATTERN = /^不感兴趣(?:\s|$)/;
+const INTERESTED_PATTERN = /^感兴趣(?:\s|$)/;
 
 /** 「条数 …」——前缀匹配（裸「条数」/非法输入由 handler 回用法提示）。 */
 const DIGEST_COUNT_PATTERN = /^条数/;
@@ -181,6 +210,12 @@ function suspectedCommandUsage(content: string): string | null {
   }
   if (content.startsWith('我的收藏')) {
     return LIST_USAGE_REPLY;
+  }
+  if (content.startsWith('我的订阅')) {
+    return MY_SUBSCRIPTION_USAGE_REPLY;
+  }
+  if (content.startsWith('取消订阅')) {
+    return CANCEL_SUBSCRIPTION_USAGE_REPLY;
   }
   if (content.startsWith('绑定')) {
     return BIND_USAGE_REPLY;
@@ -256,8 +291,9 @@ async function handleEnterAgent(msg: InboundMessage): Promise<void> {
  * - 非 text 非 event：静默忽略
  * - text 先 ensureSubscriber（首条消息自动开通订阅者行；新用户先送礼包
  *   （欢迎语 + 首日简报），再继续处理原消息 —— 简报写缓存必须先于原消息回复写缓存）
- * - 分发顺序：「帮助」→「取消收藏 N」→「收藏 N」→「我的收藏」（精确）→
- *   「绑定」（精确）→「订阅 …」（前缀）→「退订」（精确）→「条数 …」（前缀）→
+ * - 分发顺序：「帮助」→「取消收藏 N」→「收藏 N」→「我的收藏」「我的订阅」（精确）→
+ *   「不感兴趣 …」→「感兴趣 …」（动词后须空白）→
+ *   「绑定」（精确）→「订阅 …」（前缀）→「取消订阅 …」（动词后须空白）→「退订」（精确）→「条数 …」（前缀）→
  *   「每天 H 点/推送时间 …」「每 N 天」（锚定）→
  *   「设置模型」「我的模型」「清除模型」（精确）→
  *   疑似命令（以命令词开头却非合法指令 → 用法提示）→ 其余 text → search。
@@ -328,11 +364,16 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
   if (content === '我的收藏') {
     return dispatchSafely(handlers.list, normalized);
   }
-  // 口味反馈：整句等值比较，「不感兴趣」里虽含「感兴趣」子串也不会被前缀吞并。
-  if (content === '不感兴趣') {
+  // 「我的订阅」只读展示当前设置（精确匹配；「我的订阅列表」由疑似命令兜住）。
+  if (content === '我的订阅') {
+    return dispatchSafely(handlers.mySubscription, normalized);
+  }
+  // 口味反馈：「不感兴趣」先判，避免被「感兴趣」前缀规则吞并。
+  // 动词后的目标（序号/仓库名）交给 handler 解析；「感兴趣xxx」无空白仍走搜索。
+  if (NOT_INTERESTED_PATTERN.test(content)) {
     return dispatchSafely(handlers.notInterested, normalized);
   }
-  if (content === '感兴趣') {
+  if (INTERESTED_PATTERN.test(content)) {
     return dispatchSafely(handlers.interested, normalized);
   }
   // Task 11：精确匹配「绑定」（trim 后），避免吞掉「绑定 XXX」类消息。
@@ -341,6 +382,10 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
   }
   if (SUBSCRIBE_PATTERN.test(content)) {
     return dispatchSafely(handlers.subscribe, normalized);
+  }
+  // 冲突提示给的命令：只删一个订阅词，必须判在「退订」之前（两者都以「订」结尾）。
+  if (CANCEL_SUBSCRIPTION_PATTERN.test(content)) {
+    return dispatchSafely(handlers.cancelSubscription, normalized);
   }
   if (content === '退订') {
     return dispatchSafely(handlers.unsubscribe, normalized);
@@ -390,6 +435,8 @@ registerHandlers({
   notInterested: handleNotInterested,
   subscribe: handleSubscribe,
   unsubscribe: handleUnsubscribe,
+  mySubscription: handleMySubscription,
+  cancelSubscription: handleCancelSubscriptionTerm,
   digestCount: handleDigestCount,
   pushTime: handlePushTime,
   pushInterval: handlePushInterval,

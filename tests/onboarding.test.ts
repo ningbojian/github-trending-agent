@@ -612,10 +612,15 @@ describe('handleHelp（帮助 → 完整用法说明）', () => {
     expect(content).toContain('收藏 N');
     expect(content).toContain('取消收藏 N');
     expect(content).toContain('我的收藏');
+    expect(content).toContain('我的订阅');
     expect(content).toContain('绑定');
     expect(content).toContain('订阅 <偏好>');
+    expect(content).toContain('取消订阅 <关键词>');
     expect(content).toContain('退订');
     expect(content).toContain('条数 N');
+    // 口味反馈的两种粒度都要在帮助里出现：整批 + 精确到一条。
+    expect(content).toContain('不感兴趣 3');
+    expect(content).toContain('owner/repo');
     // 帮助菜单不带搜索结果页脚（避免噪音——它本身就是指令目录）。
     expect(content).not.toContain('💡');
 

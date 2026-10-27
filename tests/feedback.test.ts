@@ -61,15 +61,19 @@ vi.mock('../src/agent/recent-results', () => ({
   },
 }));
 
+vi.mock('../src/agent/conflict', () => ({ maybePromptConflict: vi.fn() }));
+
 vi.mock('../src/wecom/api', () => ({ sendWeComText: vi.fn() }));
 
 import { composeSignals, readFeedback } from '../src/agent/taste';
+import { maybePromptConflict } from '../src/agent/conflict';
 import { sendWeComText } from '../src/wecom/api';
 import {
   handleInterested,
   handleNotInterested,
   FEEDBACK_FAILED_REPLY,
 } from '../src/wecom/feedback';
+import { FEEDBACK_USAGE_REPLY } from '../src/wecom/feedback-target';
 import { EMPTY_SEARCH_CACHE_REPLY, NO_SEARCH_CACHE_REPLY } from '../src/github/stars';
 import type { InboundMessage } from '../src/wecom/router';
 
@@ -108,6 +112,7 @@ beforeEach(() => {
   state.recent = { found: true, items: recentItems() };
   state.recentError = false;
   vi.mocked(sendWeComText).mockClear();
+  vi.mocked(maybePromptConflict).mockClear();
 });
 
 describe('handleInterested', () => {
@@ -118,6 +123,8 @@ describe('handleInterested', () => {
     const events = await readFeedback('u1');
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ kind: 'like', languages: ['go', 'rust'] });
+    // 「感兴趣」不检查订阅冲突：冲突只由「不感兴趣」触发。
+    expect(maybePromptConflict).not.toHaveBeenCalled();
   });
 
   it('只写 kv_cache，绝不动 search_caches（「收藏 N」不能被口味打乱）', async () => {
@@ -166,6 +173,72 @@ describe('handleNotInterested', () => {
   it('回执写明「连提两次才会真正屏蔽」，不让规则变成隐藏行为', async () => {
     await handleNotInterested(message('不感兴趣'));
     expect(sent()).toBe('✅ 记下了：以后少推 Go、Rust 方向（连提两次才会真正屏蔽）。');
+    // 回执之后再检查一次订阅冲突（提示是独立第二条消息，失败不影响回执）。
+    expect(maybePromptConflict).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('精确到某几条（序号 / 仓库名）', () => {
+  it('序号只影响那一条：回执点名，信号只含它的语言', async () => {
+    await handleNotInterested(message('不感兴趣 3'));
+
+    expect(sent()).toBe('✅ 记下了：a/rust1（Rust）以后少推。');
+    const events = await readFeedback('u1');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: 'dislike', languages: ['rust'] });
+  });
+
+  it('多个序号一起点名', async () => {
+    await handleInterested(message('感兴趣 1,2'));
+
+    expect(sent()).toBe('✅ 记下了：a/go1（Go）、a/go2（Go）以后多推。');
+    const events = await readFeedback('u1');
+    expect(events[0]).toMatchObject({ kind: 'like', languages: ['go'] });
+  });
+
+  it('仓库名大小写不敏感（用户手打的大小写与列表不一致也算同一个）', async () => {
+    await handleNotInterested(message('不感兴趣 A/GO1'));
+
+    expect(sent()).toBe('✅ 记下了：A/GO1（Go）以后少推。');
+    const events = await readFeedback('u1');
+    expect(events[0]).toMatchObject({ kind: 'dislike', languages: ['go'] });
+  });
+
+  it('查不到语言时回执只写仓库名', async () => {
+    state.recent = { found: true, items: [{ fullName: 'x/1' }] };
+    state.repoRows = [];
+
+    await handleNotInterested(message('不感兴趣 x/1'));
+    expect(sent()).toBe('✅ 记下了：x/1 以后少推。');
+  });
+
+  it('序号越界 → 整条不写，也不谎称记下了', async () => {
+    await handleNotInterested(message('不感兴趣 5'));
+
+    expect(sent()).toBe('最近一次结果只有 3 条，没有第 5 条');
+    expect(state.insertedTables).toEqual([]);
+  });
+
+  it('仓库名不在最近一次结果里 → 整条不写', async () => {
+    await handleNotInterested(message('不感兴趣 x/nope'));
+
+    expect(sent()).toBe('最近一次结果里没有 x/nope');
+    expect(state.insertedTables).toEqual([]);
+  });
+
+  it('序号与仓库名混用 → 用法提示，不猜', async () => {
+    await handleInterested(message('感兴趣 3 a/go1'));
+
+    expect(sent()).toBe(FEEDBACK_USAGE_REPLY);
+    expect(state.insertedTables).toEqual([]);
+  });
+
+  it(`超过 10 个目标 → 用法提示`, async () => {
+    const many = Array.from({ length: 11 }, (_, i) => `a/b${i}`).join(' ');
+    await handleNotInterested(message(`不感兴趣 ${many}`));
+
+    expect(sent()).toBe(FEEDBACK_USAGE_REPLY);
+    expect(state.insertedTables).toEqual([]);
   });
 });
 

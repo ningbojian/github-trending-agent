@@ -1,6 +1,7 @@
 import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
+import { loadStarredNames } from '../github/starred-names.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
 import { sendWeComText } from '../wecom/api.js';
 import { formatEntryLine } from '../wecom/text.js';
@@ -17,9 +18,25 @@ import {
   readPushHistory,
   recordPush,
 } from './push-history.js';
+import { normalizePreferences } from './preferences.js';
 import { loadRepoSummaries } from './repo-summary.js';
-import { loadUserSignals, rankByTaste } from './taste.js';
+import { normalizeRepoName } from './repo-name.js';
+import { loadUserSignalsStrict, rankByTaste, type UserSignals } from './taste.js';
 import { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
+
+/**
+ * 偏好常量与规范化函数已迁到 preferences.ts（读取侧与「我的订阅」展示侧共用）。
+ * 仍从本模块转出：老调用方（onboarding / 测试）不需要改导入路径。
+ */
+export {
+  DEFAULT_DIGEST_COUNT,
+  DEFAULT_PUSH_TIME,
+  MAX_DIGEST_COUNT,
+  MAX_INTERVAL_DAYS,
+  MIN_DIGEST_COUNT,
+  MIN_INTERVAL_DAYS,
+  normalizePreferences,
+} from './preferences.js';
 
 export { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
 
@@ -39,21 +56,15 @@ export { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
 const PERIOD_DAYS = 7;
 /** 候选池大小：关键词轻量排序后取前 N 条。 */
 const POOL_SIZE = 20;
-/** 简报默认条数（用户未设置 digestCount 时）。 */
-export const DEFAULT_DIGEST_COUNT = 10;
-/** 简报条数下限（「条数 N」指令在 handler 层拦截 0/负数；此处 clamp 兜底脏数据）。 */
-export const MIN_DIGEST_COUNT = 1;
-/** 简报条数上限（成本护栏）。 */
-export const MAX_DIGEST_COUNT = 20;
 /** 企微文本消息 2048 字节上限的安全阈值（与搜索回复一致）。 */
 const MAX_DIGEST_BYTES = 1900;
 /** 截断标注。 */
 const TRUNCATION_NOTE = '（内容过长，已截断）';
 /** 榜单为空时的占位文案。 */
 const EMPTY_NOTICE = '今日暂无符合条件的热榜项目。';
-/** 简报页脚：收藏指引 + 帮助指引（与搜索结果页脚措辞略异，保持各自语境）。 */
+/** 简报页脚：用具体例子教「序号精确反馈」（用户不会自己想到可以带序号）。 */
 export const DIGEST_FOOTER =
-  '💡 回复「收藏 N」收藏任意一条；「感兴趣 / 不感兴趣」调整口味；发「帮助」查看全部指令';
+  '💡 「收藏 3」收藏第 3 条；「不感兴趣 3」只针对它；「我的订阅」看设置；「帮助」看全部';
 
 /** 连续这么多天没有值得推的项目时，补一句「还在，只是没新东西」。 */
 export const QUIET_NOTE_AFTER_DAYS = 3;
@@ -89,16 +100,6 @@ interface DigestEntry {
 function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8');
 }
-
-/** 简报默认推送时间（北京时间 HH:MM；preferences 缺省/非法时使用）。 */
-export const DEFAULT_PUSH_TIME = '09:00';
-/** 推送间隔下限（天）。 */
-export const MIN_INTERVAL_DAYS = 1;
-/** 推送间隔上限（天，成本护栏）。 */
-export const MAX_INTERVAL_DAYS = 30;
-
-/** pushTime 合法形态：24 小时制「HH:MM」（00:00–23:59）。 */
-const PUSH_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function headerLine(date: string): string {
   return `📊 今日 GitHub 热榜简报（${date}）`;
@@ -260,67 +261,6 @@ function assemble(
   }
   // 理论不可达：截断标注 + 页脚本身远小于 1900 字节。
   return { text: build([], true), keptCount: 0 };
-}
-
-/** 关键词标点清洗：与 parse-query 同一字符集（修复存量 preferences 里的 "AI。"）。 */
-const KEYWORD_PUNCT_RE = /[。！？!?；;，,、()（）]/g;
-
-/**
- * preferences 运行时防御：字段缺失/非数组一律按空处理（languages 空 → 全量）；
- * keywords 去中英文标点后 trim/lowercase（读取侧清洗存量脏数据，逻辑与 parse-query 一致）；
- * languages 只 trim/lowercase（语言过滤逻辑不变）；
- * digestCount 非有限数字（含字符串/NaN/缺失）→ 默认 10，有限数字 → clamp 1–20；
- * pushTime 不匹配 `^([01]\d|2[0-3]):[0-5]\d$` → 默认 09:00；
- * intervalDays 非 1–30 整数 → 默认 1（Handler写入侧已拦截越界，此处兜底脏数据）。
- */
-function normalizePreferences(preferences: {
-  languages?: unknown;
-  keywords?: unknown;
-  digestCount?: unknown;
-  pushTime?: unknown;
-  intervalDays?: unknown;
-}): {
-  languages: string[];
-  keywords: string[];
-  digestCount: number;
-  pushTime: string;
-  intervalDays: number;
-} {
-  const list = (value: unknown): string[] =>
-    Array.isArray(value)
-      ? value.map((item) => String(item).trim().toLowerCase()).filter(Boolean)
-      : [];
-  const keywordList = (value: unknown): string[] =>
-    Array.isArray(value)
-      ? value
-          .map((item) => String(item).replace(KEYWORD_PUNCT_RE, '').trim().toLowerCase())
-          .filter(Boolean)
-      : [];
-  const rawCount = preferences.digestCount;
-  const digestCount =
-    typeof rawCount === 'number' && Number.isFinite(rawCount)
-      ? Math.min(MAX_DIGEST_COUNT, Math.max(MIN_DIGEST_COUNT, Math.floor(rawCount)))
-      : DEFAULT_DIGEST_COUNT;
-  const rawPushTime = preferences.pushTime;
-  const pushTime =
-    typeof rawPushTime === 'string' && PUSH_TIME_RE.test(rawPushTime)
-      ? rawPushTime
-      : DEFAULT_PUSH_TIME;
-  const rawInterval = preferences.intervalDays;
-  const intervalDays =
-    typeof rawInterval === 'number' &&
-    Number.isInteger(rawInterval) &&
-    rawInterval >= MIN_INTERVAL_DAYS &&
-    rawInterval <= MAX_INTERVAL_DAYS
-      ? rawInterval
-      : 1;
-  return {
-    languages: list(preferences.languages),
-    keywords: keywordList(preferences.keywords),
-    digestCount,
-    pushTime,
-    intervalDays,
-  };
 }
 
 /**
@@ -620,7 +560,30 @@ export async function pushDigests(
       // 每个整点都会跑一遍，全记下来只会把真正有用的记录淹掉。
       await withTrace({ kind: 'push', userid: sub.wecomUserid }, async () => {
       note('digest-source', snapshot ? 'snapshot' : 'rebuild');
-      const signals = await loadUserSignals(sub.wecomUserid);
+      // 严格版：画像读不到就抛，外层 catch 记 failed + 回滚 claim，下个整点重试。
+      // 绝不发一份「不知道自己收藏了什么」的简报——那正是用户投诉的那个 bug。
+      let signals: UserSignals;
+      try {
+        signals = await loadUserSignalsStrict(sub.wecomUserid, now);
+      } catch (err) {
+        note('signals-failed', err instanceof Error ? err.message : String(err));
+        throw err;
+      }
+      // 网页端 star：本地 favorites 没有行，但用户确实收藏过。
+      // 只并入「不推」集合，不参与语言加权（否则同一批收藏会被算两遍）。
+      const webStars = await loadStarredNames(
+        sub.wecomUserid,
+        sub.githubTokenEnc ?? null,
+        sub.githubLogin ?? null,
+        now,
+      );
+      if (webStars !== null) {
+        for (const name of webStars.names) signals.starred.add(name);
+        note(
+          'github-stars',
+          `${webStars.cached ? '缓存' : '拉取'} ${webStars.names.length}`,
+        );
+      }
       const history = await readPushHistory(sub.wecomUserid, now);
       note(
         'signals',
@@ -640,7 +603,7 @@ export async function pushDigests(
         const language = (item.language ?? '').trim().toLowerCase();
         return (
           passesGrowth(item) &&
-          !signals.starred.has(item.fullName) &&
+          !signals.starred.has(normalizeRepoName(item.fullName)) &&
           (language === '' || !signals.suppressed.has(language)) &&
           !pushedRecently(history, item.fullName, now)
         );

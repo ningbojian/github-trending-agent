@@ -77,6 +77,8 @@ const myModelHandler = vi.fn();
 const clearModelHandler = vi.fn();
 const interestedHandler = vi.fn();
 const notInterestedHandler = vi.fn();
+const mySubscriptionHandler = vi.fn();
+const cancelSubscriptionHandler = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -106,6 +108,8 @@ beforeEach(() => {
     clearModel: clearModelHandler,
     interested: interestedHandler,
     notInterested: notInterestedHandler,
+    mySubscription: mySubscriptionHandler,
+    cancelSubscription: cancelSubscriptionHandler,
   });
 });
 
@@ -176,7 +180,7 @@ describe('routeMessage 分发', () => {
   });
 });
 
-describe('「感兴趣 / 不感兴趣」路由（整句等值，不落搜索）', () => {
+describe('「感兴趣 / 不感兴趣」路由（可带目标，不落搜索）', () => {
   it('「感兴趣」→ interestedHandler', async () => {
     await routeMessage(makeMsg({ content: '感兴趣' }));
     expect(interestedHandler).toHaveBeenCalledTimes(1);
@@ -202,6 +206,25 @@ describe('「感兴趣 / 不感兴趣」路由（整句等值，不落搜索）'
     await routeMessage(makeMsg({ content: '兴趣' }));
     expect(searchHandler).toHaveBeenCalledTimes(1);
     expect(interestedHandler).not.toHaveBeenCalled();
+  });
+
+  it('带序号/仓库名的精确反馈也进 handler（由 handler 校验目标）', async () => {
+    await routeMessage(makeMsg({ content: '不感兴趣 3' }));
+    await routeMessage(makeMsg({ content: '感兴趣 3,5' }));
+    await routeMessage(makeMsg({ content: '不感兴趣 owner/repo' }));
+
+    expect(notInterestedHandler).toHaveBeenCalledTimes(2);
+    expect(interestedHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('动词后没有空白 → 不是指令，仍走搜索（「感兴趣owner/repo」）', async () => {
+    await routeMessage(makeMsg({ content: '感兴趣owner/repo' }));
+    await routeMessage(makeMsg({ content: '不感兴趣3' }));
+
+    expect(searchHandler).toHaveBeenCalledTimes(2);
+    expect(interestedHandler).not.toHaveBeenCalled();
+    expect(notInterestedHandler).not.toHaveBeenCalled();
   });
 });
 
@@ -381,6 +404,56 @@ describe('中文数字收藏路由（parseCnNumber 与正则同步）', () => {
     await routeMessage(makeMsg({ content: '收藏 1。' }));
     expect(favoriteHandler).toHaveBeenCalledTimes(1);
     expect(searchHandler).not.toHaveBeenCalled();
+  });
+});
+
+describe('「我的订阅」路由（精确匹配，只读展示）', () => {
+  it('「我的订阅」→ mySubscription handler，不落搜索/订阅', async () => {
+    await routeMessage(makeMsg({ content: '我的订阅' }));
+
+    expect(mySubscriptionHandler).toHaveBeenCalledTimes(1);
+    expect(subscribeHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「我的订阅。」同样命中（尾部标点在分发前剥除）', async () => {
+    await routeMessage(makeMsg({ content: '我的订阅。' }));
+
+    expect(mySubscriptionHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「我的订阅列表」→ 用法提示，不落搜索也不进 handler', async () => {
+    await routeMessage(makeMsg({ content: '我的订阅列表' }));
+
+    expect(mySubscriptionHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(vi.mocked(sendWeComText).mock.calls[0]?.[1]).toContain('无需参数');
+  });
+});
+
+describe('「取消订阅 <关键词>」路由（冲突提示给的精确命令）', () => {
+  it('「取消订阅 rpa」→ cancelSubscription handler，不退订、不落搜索', async () => {
+    await routeMessage(makeMsg({ content: '取消订阅 rpa' }));
+
+    expect(cancelSubscriptionHandler).toHaveBeenCalledTimes(1);
+    expect(unsubscribeHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('裸「取消订阅」也进 handler（用法提示由它给）', async () => {
+    await routeMessage(makeMsg({ content: '取消订阅' }));
+
+    expect(cancelSubscriptionHandler).toHaveBeenCalledTimes(1);
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('「取消订阅rpa」无空白 → 疑似命令用法提示，不落搜索', async () => {
+    await routeMessage(makeMsg({ content: '取消订阅rpa' }));
+
+    expect(cancelSubscriptionHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(vi.mocked(sendWeComText).mock.calls[0]?.[1]).toContain('取消订阅 <关键词>');
   });
 });
 

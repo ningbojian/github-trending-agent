@@ -1,6 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { favorites, kvCache, repos } from '../db/schema.js';
+import { normalizeRepoName } from './repo-name.js';
 
 /**
  * 口味信号：用户「想看什么」的唯一两个来源。
@@ -165,7 +166,8 @@ export function composeSignals(rows: StarRow[], events: FeedbackEvent[]): UserSi
   const starTopics = new Map<string, number>();
 
   for (const row of rows) {
-    signals.starred.add(row.fullName);
+    // 一律归一成小写：比较端（digest / digest-filter / push-history）也用同一个函数。
+    signals.starred.add(normalizeRepoName(row.fullName));
     const language = normalize(row.language);
     if (language) bump(starLanguages, language);
     for (const topic of topicList(row.topics)) {
@@ -285,25 +287,56 @@ export async function recordFeedback(
   return affected;
 }
 
-/** 收藏画像 + 反馈窗口。收藏查不到就只用反馈，仍不抛。 */
+/**
+ * 读收藏行并 join repos。**不吞异常**：推送路径靠它区分「空画像」与「读不到」。
+ * join 用 lower() 两边归一——repo 名大小写不敏感，而 favorites 里存的是
+ * 当时用户看到的那份写法。
+ */
+async function readStarRows(userid: string): Promise<StarRow[]> {
+  return db()
+    .select({
+      fullName: favorites.fullName,
+      language: repos.language,
+      topics: repos.topics,
+    })
+    .from(favorites)
+    .leftJoin(
+      repos,
+      sql`lower(${repos.fullName}) = lower(${favorites.fullName})`,
+    )
+    .where(eq(favorites.wecomUserid, userid));
+}
+
+/**
+ * 收藏画像 + 反馈窗口。收藏查不到就只用反馈，仍不抛。
+ * 适合「读不到也要继续」的场景（我的订阅、排序）。
+ */
 export async function loadUserSignals(
   userid: string,
   now: Date = new Date(),
 ): Promise<UserSignals> {
   let rows: StarRow[] = [];
   try {
-    rows = await db()
-      .select({
-        fullName: favorites.fullName,
-        language: repos.language,
-        topics: repos.topics,
-      })
-      .from(favorites)
-      .leftJoin(repos, eq(repos.fullName, favorites.fullName))
-      .where(eq(favorites.wecomUserid, userid));
+    rows = await readStarRows(userid);
   } catch (err) {
     console.error('[taste] profile failed:', err instanceof Error ? err.message : err);
   }
+  const events = await readFeedback(userid, now);
+  return composeSignals(rows, events);
+}
+
+/**
+ * 严格版：画像读不到就抛。
+ *
+ * 推送路径专用——读不到收藏就不可能知道哪些不该推，此时宁可不发、
+ * 下一个整点重试，也不要发一份没过滤的简报。反馈窗口仍按 fail-open 处理，
+ * 因为它只影响排序，不影响「别再推」。
+ */
+export async function loadUserSignalsStrict(
+  userid: string,
+  now: Date = new Date(),
+): Promise<UserSignals> {
+  const rows = await readStarRows(userid);
   const events = await readFeedback(userid, now);
   return composeSignals(rows, events);
 }

@@ -1,4 +1,5 @@
 import { pushedRecently, type PushHistory } from './push-history.js';
+import { normalizeRepoName } from './repo-name.js';
 import type { DigestCandidate, UserSignals } from './taste.js';
 
 /**
@@ -28,7 +29,7 @@ export function applyHardFilters<T extends DigestCandidate & Growable>(
 ): T[] {
   const { signals, history, now } = opts;
   return items.filter((item) => {
-    if (signals.starred.has(item.fullName)) return false;
+    if (signals.starred.has(normalizeRepoName(item.fullName))) return false;
     if (pushedRecently(history, item.fullName, now)) return false;
     const language = (item.language ?? '').trim().toLowerCase();
     if (language !== '' && signals.suppressed.has(language)) return false;

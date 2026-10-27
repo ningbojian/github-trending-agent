@@ -29,7 +29,7 @@ import type { InboundMessage } from './router.js';
 export const WELCOME_MESSAGE = [
   '你好！我是 GitHub 热榜助手，已为你自动开通每日简报（默认每天 09:00 北京时间推送）。',
   '直接发自然语言就能搜项目，例如：本周 python 的 ai 项目',
-  '回复「帮助」查看全部指令（收藏、绑定 GitHub、改推送时间/频率等）。',
+  '回复「帮助」查看全部指令（收藏、口味、我的订阅、改推送时间等）。',
 ].join('\n');
 
 /**

@@ -1,6 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
+import { normalizeRepoName } from './repo-name.js';
 
 /**
  * 推送历史：让「昨天推过的」不再出现在今天，以及判断「静默了几天」。
@@ -117,8 +118,10 @@ export function pushedRecently(
 ): boolean {
   if (history === null) return false;
   const cutoff = now.getTime() - DEDUP_DAYS * DAY_MS;
+  // 名字归一后再比：GitHub 返回的大小写不保证与当初抓取时一致。
+  const target = normalizeRepoName(fullName);
   return history.items.some((item) => {
-    if (item.fullName !== fullName) return false;
+    if (normalizeRepoName(item.fullName) !== target) return false;
     const at = Date.parse(item.at);
     return Number.isFinite(at) && at >= cutoff;
   });

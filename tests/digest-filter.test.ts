@@ -60,6 +60,16 @@ describe('applyHardFilters', () => {
     expect(kept.map((i) => i.fullName)).toEqual(['a/2']);
   });
 
+  it('收藏名与候选名大小写不同也算同一个仓库（GitHub 大小写不敏感）', () => {
+    const signals = composeSignals([{ fullName: 'owner/repo', language: 'Go', topics: [] }], []);
+    const kept = applyHardFilters([item('Owner/Repo'), item('owner/other')], {
+      signals,
+      history: null,
+      now: NOW,
+    });
+    expect(kept.map((i) => i.fullName)).toEqual(['owner/other']);
+  });
+
   it('7 天内推过的丢，第 8 天放行', () => {
     const history = pushed([['a/1', 6], ['a/2', 8]]);
     const kept = applyHardFilters([item('a/1'), item('a/2')], {

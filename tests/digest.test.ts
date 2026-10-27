@@ -178,14 +178,28 @@ vi.mock('../src/wecom/capacity', () => ({
  * 口味画像与推送历史：默认「空画像 / 无历史」，既有用例行为不变。
  * 只替换 I/O 两个函数，纯函数（rankByTaste / pushedRecently / emptySignals）保持真实实现。
  */
-const tasteMock = vi.hoisted(() => ({ loadUserSignals: vi.fn() }));
+const tasteMock = vi.hoisted(() => ({
+  loadUserSignals: vi.fn(),
+  loadUserSignalsStrict: vi.fn(),
+}));
 
 vi.mock('../src/agent/taste', async () => {
   const actual = await vi.importActual<typeof import('../src/agent/taste')>(
     '../src/agent/taste',
   );
-  return { ...actual, loadUserSignals: tasteMock.loadUserSignals };
+  return {
+    ...actual,
+    loadUserSignals: tasteMock.loadUserSignals,
+    loadUserSignalsStrict: tasteMock.loadUserSignalsStrict,
+  };
 });
+
+/** 网页端 star 名单：默认「未绑定 → null」，需要时逐用例给值。 */
+const starMock = vi.hoisted(() => ({ loadStarredNames: vi.fn() }));
+
+vi.mock('../src/github/starred-names', () => ({
+  loadStarredNames: starMock.loadStarredNames,
+}));
 
 const historyMock = vi.hoisted(() => ({
   readPushHistory: vi.fn(),
@@ -293,6 +307,8 @@ beforeEach(() => {
   apiMock.sendWeComText.mockResolvedValue(undefined);
   // 默认空画像 + 无历史：既有用例只看「不过滤」的行为。
   tasteMock.loadUserSignals.mockResolvedValue(emptySignals());
+  tasteMock.loadUserSignalsStrict.mockResolvedValue(emptySignals());
+  starMock.loadStarredNames.mockResolvedValue(null);
   historyMock.readPushHistory.mockResolvedValue(null);
   historyMock.recordPush.mockResolvedValue(undefined);
 });
@@ -491,16 +507,15 @@ describe('buildDigestForSubscriber — 简报内容', () => {
     expect(digest).not.toContain(DIGEST_FOOTER);
   });
 
-  it('页脚固定为「💡 回复「收藏 N」…」，带两个动作且位于消息末尾', async () => {
+  it('页脚教会用户「用序号精确反馈」，而不只是整批赞踩', async () => {
     dbMock.executeRows.push(makeEntry('a/one'));
 
     const digest = await buildDigestForSubscriber(makeSub());
 
     expect(DIGEST_FOOTER).toBe(
-      '💡 回复「收藏 N」收藏任意一条；「感兴趣 / 不感兴趣」调整口味；发「帮助」查看全部指令',
+      '💡 「收藏 3」收藏第 3 条；「不感兴趣 3」只针对它；「我的订阅」看设置；「帮助」看全部',
     );
     expect(digest.endsWith(DIGEST_FOOTER)).toBe(true);
-    expect(digest).toContain('收藏');
   });
 
   it('每条恰好一行（链接 + ★ + 增量 +（新上榜），不再有「为什么上榜」两行块）', async () => {
@@ -1512,7 +1527,7 @@ describe('pushDigests — 只推新的', () => {
   it('已收藏的仓库不再出现在简报里（用户已经知道了）', async () => {
     dbMock.selectRows.push(makeSub());
     dbMock.executeRows.push(makeEntry('a/one'), makeEntry('b/two'));
-    tasteMock.loadUserSignals.mockResolvedValue(
+    tasteMock.loadUserSignalsStrict.mockResolvedValue(
       composeSignals([{ fullName: 'a/one', language: 'Go', topics: [] }], []),
     );
 
@@ -1557,7 +1572,7 @@ describe('pushDigests — 只推新的', () => {
   it('全部被过滤 + 3 天内发过 → 零发送、不回滚 claim、不写 search_caches', async () => {
     dbMock.selectRows.push(makeSub());
     dbMock.executeRows.push(makeEntry('a/one'));
-    tasteMock.loadUserSignals.mockResolvedValue(
+    tasteMock.loadUserSignalsStrict.mockResolvedValue(
       composeSignals([{ fullName: 'a/one', language: 'Go', topics: [] }], []),
     );
     sendHistory(1);
@@ -1574,7 +1589,7 @@ describe('pushDigests — 只推新的', () => {
   it(`距上次 ≥${QUIET_NOTE_AFTER_DAYS} 天 → 只发一句补助，不写 search_caches`, async () => {
     dbMock.selectRows.push(makeSub());
     dbMock.executeRows.push(makeEntry('a/one'));
-    tasteMock.loadUserSignals.mockResolvedValue(
+    tasteMock.loadUserSignalsStrict.mockResolvedValue(
       composeSignals([{ fullName: 'a/one', language: 'Go', topics: [] }], []),
     );
     sendHistory(QUIET_NOTE_AFTER_DAYS);
@@ -1596,7 +1611,7 @@ describe('pushDigests — 只推新的', () => {
       makeEntry('a/go-one', { language: 'go' }),
       makeEntry('b/go-two', { language: 'go' }),
     );
-    tasteMock.loadUserSignals.mockResolvedValue(
+    tasteMock.loadUserSignalsStrict.mockResolvedValue(
       composeSignals([], [
         { at: new Date().toISOString(), kind: 'dislike', languages: ['go'], topics: [] },
         { at: new Date().toISOString(), kind: 'dislike', languages: ['go'], topics: [] },
@@ -1631,5 +1646,64 @@ describe('pushDigests — 只推新的', () => {
       ['a/one', 'b/two'],
       expect.any(Date),
     );
+  });
+
+  it('收藏名大小写不同也不再出现（GitHub 名字大小写不敏感）', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('Owner/One'), makeEntry('b/two'));
+    tasteMock.loadUserSignalsStrict.mockResolvedValue(
+      composeSignals([{ fullName: 'owner/one', language: 'Go', topics: [] }], []),
+    );
+
+    const result = await pushDigests();
+
+    expect(result.sent).toBe(1);
+    const sent = apiMock.sendWeComText.mock.calls[0]?.[1] as string;
+    expect(sent).toContain('b/two');
+    expect(sent).not.toContain('Owner/One');
+  });
+
+  it('GitHub 网页上的 star 也参与过滤（本地没有收藏行）', async () => {
+    dbMock.selectRows.push(
+      makeSub({ githubLogin: 'alice-gh', githubTokenEnc: 'enc:token' }),
+    );
+    dbMock.executeRows.push(makeEntry('web/starred'), makeEntry('a/fresh'));
+    starMock.loadStarredNames.mockResolvedValue({
+      names: ['web/starred'],
+      cached: true,
+    });
+
+    const result = await pushDigests();
+
+    expect(result.sent).toBe(1);
+    const sent = apiMock.sendWeComText.mock.calls[0]?.[1] as string;
+    expect(sent).toContain('a/fresh');
+    expect(sent).not.toContain('web/starred');
+  });
+
+  it('未绑定 GitHub 的用户不调用 star 名单（零额外网络）', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'));
+
+    await pushDigests();
+
+    expect(starMock.loadStarredNames).toHaveBeenCalledWith('alice', null, null, expect.any(Date));
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+  });
+
+  it('画像读不到 → 宁可不发（failed，回滚 claim 等下个整点），绝不发未过滤的简报', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'));
+    tasteMock.loadUserSignalsStrict.mockRejectedValue(new Error('db down'));
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 0, skipped: 0, failed: 1 });
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    const rollback = dbMock.updateCalls.find((c) => c.kind === 'update');
+    expect(rollback?.values).toEqual({ lastDigestAt: null });
+    expect(dbMock.insertCalls).toHaveLength(0);
+    errorSpy.mockRestore();
   });
 });

@@ -173,4 +173,10 @@ describe('pushedRecently', () => {
     expect(pushedRecently(null, 'a/b', NOW)).toBe(false);
     expect(pushedRecently(history([['a/b', 1]]), 'x/y', NOW)).toBe(false);
   });
+
+  it('大小写不同也算推过（GitHub 名字大小写不保证一致）', () => {
+    const h = history([['Owner/Repo', 2]]);
+    expect(pushedRecently(h, 'owner/repo', NOW)).toBe(true);
+    expect(pushedRecently(h, 'owner/repo2', NOW)).toBe(false);
+  });
 });

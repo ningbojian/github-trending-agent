@@ -48,6 +48,7 @@ import {
   FEEDBACK_TTL_MS,
   feedbackWeights,
   loadUserSignals,
+  loadUserSignalsStrict,
   rankByTaste,
   readFeedback,
   recordFeedback,
@@ -179,6 +180,12 @@ describe('composeSignals', () => {
     const signals = composeSignals([star('gone/repo', null)], []);
     expect(signals.starred.has('gone/repo')).toBe(true);
     expect(signals.languageBoost.size).toBe(0);
+  });
+
+  it('收藏名一律归一成小写（Owner/Repo 与 owner/repo 是同一个仓库）', () => {
+    const signals = composeSignals([star('Owner/Repo', null)], []);
+    expect(signals.starred.has('owner/repo')).toBe(true);
+    expect(signals.starred.has('Owner/Repo')).toBe(false);
   });
 
   it('两次「不感兴趣」→ 该语言进 suppressed；两次「感兴趣」→ 退出来', () => {
@@ -352,5 +359,28 @@ describe('loadUserSignals', () => {
     const signals = await loadUserSignals('u1', NOW);
     expect(signals.starred.size).toBe(0);
     expect(signals.languageBoost.size).toBe(0);
+  });
+});
+
+describe('loadUserSignalsStrict', () => {
+  it('读库失败要抛（推送路径据此宁可不发，也不发未过滤的简报）', async () => {
+    dbMock.selectError = true;
+    await expect(loadUserSignalsStrict('u1', NOW)).rejects.toThrow('db down');
+  });
+
+  it('能读到时与 fail-open 版本结果一致', async () => {
+    dbMock.starRows = [star('a/1', 'go'), star('a/2', 'go')];
+
+    const strict = await loadUserSignalsStrict('u1', NOW);
+
+    expect(strict.starred.has('a/1')).toBe(true);
+    expect(strict.languageBoost.get('go')).toBe(2);
+  });
+
+  it('反馈窗口读不到仍按空处理（它只影响排序，不影响「别再推」）', async () => {
+    dbMock.starRows = [star('a/1', null)];
+    const strict = await loadUserSignalsStrict('u1', NOW);
+    expect(strict.starred.has('a/1')).toBe(true);
+    expect(strict.suppressed.size).toBe(0);
   });
 });

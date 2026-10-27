@@ -1,4 +1,4 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { loadRecentResults } from '../agent/recent-results.js';
 import { db } from '../db/client.js';
 import { favorites, subscribers } from '../db/schema.js';
@@ -34,6 +34,13 @@ export const AUTH_EXPIRED_REPLY = "授权已过期，请重新发'绑定'";
 
 /** GitHub star 失败（非 204/401）时的通用失败文案。 */
 export const STAR_FAILURE_REPLY = '收藏失败，请稍后再试';
+
+/**
+ * star 同步失败但本地已记下时的文案。
+ * 「收藏」的产品语义仍是 GitHub star，但「别再推它」这件事不该被一次网络抖动吃掉。
+ */
+export const STAR_SYNC_FAILED_REPLY =
+  '⚠️ 已记下，但同步 GitHub 失败（不影响以后不再推它）；稍后可再发「收藏 N」重试。';
 
 /** GitHub unstar 失败（非 204/401）时的通用失败文案。 */
 export const UNSTAR_FAILURE_REPLY = '取消收藏失败，请稍后再试';
@@ -286,13 +293,16 @@ async function loadTokenEnc(wecomUserid: string): Promise<string | null> {
 }
 
 /** 绑定态三分类：未绑定 / 密文损坏（引导重新绑定）/ 可用 token。 */
-type BindingAuth =
+export type BindingAuth =
   | { kind: 'unbound' }
   | { kind: 'expired' }
   | { kind: 'ok'; token: string; login: string | null };
 
-/** 读并解密 token；解密失败按"授权过期"处理（密钥轮换 / 密文被篡改）。 */
-async function loadBindingAuth(wecomUserid: string): Promise<BindingAuth> {
+/**
+ * 读并解密 token；解密失败按"授权过期"处理（密钥轮换 / 密文被篡改）。
+ * 导出给推送路径用：它需要在读画像时顺带拉一次网页端 star 名单。
+ */
+export async function loadBindingAuth(wecomUserid: string): Promise<BindingAuth> {
   const binding = await loadBinding(wecomUserid);
   if (binding.tokenEnc === null) {
     return { kind: 'unbound' };
@@ -324,14 +334,23 @@ async function loadFavorites(
   }));
 }
 
-/** upsert 收藏行：唯一约束 (wecom_userid, full_name) 冲突时仅刷新同步状态。 */
-async function upsertFavorite(wecomUserid: string, fullName: string): Promise<void> {
+/**
+ * upsert 收藏行：唯一约束 (wecom_userid, full_name) 冲突时只把同步状态「或」上去。
+ *
+ * 必须取或而不是覆盖：先记 false（保证「别再推它」立刻生效），star 成功后再改 true；
+ * 若某次 star 失败又把 true 写回去，之前同步成功的记录就被降级了。
+ */
+async function upsertFavorite(
+  wecomUserid: string,
+  fullName: string,
+  starredOnGithub: boolean,
+): Promise<void> {
   await db()
     .insert(favorites)
-    .values({ wecomUserid, fullName, starredOnGithub: true })
+    .values({ wecomUserid, fullName, starredOnGithub })
     .onConflictDoUpdate({
       target: [favorites.wecomUserid, favorites.fullName],
-      set: { starredOnGithub: true },
+      set: { starredOnGithub: sql`${favorites.starredOnGithub} or ${starredOnGithub}` },
     });
 }
 
@@ -360,8 +379,9 @@ const FAVORITE_PATTERN = new RegExp(`^收藏\\s*(${NUMBER_TOKEN_PATTERN})$`);
  * 2. 序号无法解析（如「收藏 0」）→ 用法提示
  * 3. 读最近一次 search_caches 三态：无行 → 引导搜索/简报；空行 → 重新搜索；
  *    越界 → 「最近一次结果只有 M 条，没有第 N 条」
- * 4. 解密 token → starRepo → 'ok' → upsert favorites → 中文成功回复
- *    'auth_failed' → 授权已过期引导（不写 favorites）；'failed' → 通用失败文案
+ * 4. 先落 favorites（starred_on_github=false），再 starRepo：
+ *    'ok' → 改 true + 中文成功回复；'auth_failed' → 授权过期引导；
+ *    'failed' → 「已记下，但同步失败」——本地行保留，这个仓库以后不再推
  */
 export async function handleFavorite(msg: InboundMessage): Promise<void> {
   try {
@@ -409,17 +429,20 @@ export async function handleFavorite(msg: InboundMessage): Promise<void> {
       return;
     }
 
+    // 先落库：网络/授权再出问题，「这个仓库以后别再推」这条信号也不会丢。
+    await upsertFavorite(msg.fromUserName, item.fullName, false);
+
     const result = await starRepo(token, item.fullName);
     if (result === 'auth_failed') {
       await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
       return;
     }
     if (result !== 'ok') {
-      await sendWeComText(msg.fromUserName, STAR_FAILURE_REPLY);
+      await sendWeComText(msg.fromUserName, STAR_SYNC_FAILED_REPLY);
       return;
     }
 
-    await upsertFavorite(msg.fromUserName, item.fullName);
+    await upsertFavorite(msg.fromUserName, item.fullName, true);
     await sendWeComText(
       msg.fromUserName,
       `✅ 已收藏 ${item.fullName}，已同步到你的 GitHub`,

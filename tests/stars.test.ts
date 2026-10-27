@@ -123,6 +123,7 @@ import {
   loadGithubStars,
   NO_SEARCH_CACHE_REPLY,
   STAR_FAILURE_REPLY,
+  STAR_SYNC_FAILED_REPLY,
   STARS_FALLBACK_NOTE,
   starRepo,
   UNBOUND_REPLY,
@@ -265,6 +266,9 @@ describe('交互文案常量（字面量固定）', () => {
     expect(UNBOUND_REPLY).toBe("先发'绑定'授权 GitHub");
     expect(AUTH_EXPIRED_REPLY).toBe("授权已过期，请重新发'绑定'");
     expect(STAR_FAILURE_REPLY).toBe('收藏失败，请稍后再试');
+    expect(STAR_SYNC_FAILED_REPLY).toBe(
+      '⚠️ 已记下，但同步 GitHub 失败（不影响以后不再推它）；稍后可再发「收藏 N」重试。',
+    );
     expect(UNSTAR_FAILURE_REPLY).toBe('取消收藏失败，请稍后再试');
   });
 
@@ -411,7 +415,7 @@ describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
     expect(dbMock.insertCalls).toHaveLength(0);
   });
 
-  it('成功：解密 token → star 204 → upsert favorites（starred_on_github=true）→ 中文成功回复', async () => {
+  it('成功：先落 starred_on_github=false → star 204 → 改 true → 中文成功回复', async () => {
     const fetchMock = stubFetchStatus(204);
     dbMock.selectQueue.push([boundSubscriberRow()]);
     seedSearchCache([
@@ -428,23 +432,40 @@ describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
     const headers = init.headers as Record<string, string>;
     expect(headers.authorization).toMatch(/^Bearer /);
 
-    // favorites upsert：目标表 + 值 + onConflictDoUpdate（唯一约束幂等）。
-    expect(dbMock.insertCalls).toHaveLength(1);
-    const upsert = dbMock.insertCalls[0];
-    expect(upsert.table).toBe(favorites);
-    expect(upsert.values).toMatchObject({
+    // favorites upsert 两次：先 false（网络再怎么抖，这条也已经记下），成功后改 true。
+    expect(dbMock.insertCalls).toHaveLength(2);
+    expect(dbMock.events).toEqual(['select', 'select', 'upsert', 'upsert']);
+    const first = dbMock.insertCalls[0];
+    expect(first?.table).toBe(favorites);
+    expect(first?.values).toMatchObject({
       wecomUserid: 'alice',
       fullName: 'vercel/next.js',
-      starredOnGithub: true,
+      starredOnGithub: false,
     });
-    expect(upsert.onConflict).toBeTruthy();
+    const upsert = dbMock.insertCalls[1];
+    expect(upsert?.values).toMatchObject({ starredOnGithub: true });
+    expect(upsert?.onConflict).toBeTruthy();
 
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     expect(content).toBe('✅ 已收藏 vercel/next.js，已同步到你的 GitHub');
   });
 
-  it('auth_failed（GitHub 401）→ 回复授权已过期，不写 favorites', async () => {
+  it('冲突时 starred_on_github 取「或」：同步成功过就不会被后来的失败降级', async () => {
+    stubFetchStatus(500);
+    dbMock.selectQueue.push([boundSubscriberRow()]);
+    seedSearchCache([makeItem()]);
+
+    await handleFavorite(makeMsg({ content: '收藏 1' }));
+
+    const upsert = dbMock.insertCalls[0];
+    const set = (upsert?.onConflict as { set: { starredOnGithub: unknown } }).set;
+    const compiled = compileQuery(set.starredOnGithub);
+    expect(compiled.sql.toLowerCase()).toContain(' or ');
+    expect(compiled.params).toContain(false);
+  });
+
+  it('auth_failed（GitHub 401）→ 本地仍记下（以后不再推它），回复授权已过期', async () => {
     stubFetchStatus(401);
     dbMock.selectQueue.push([boundSubscriberRow('expired-token')]);
     seedSearchCache([makeItem()]);
@@ -454,10 +475,11 @@ describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     expect(content).toBe(AUTH_EXPIRED_REPLY);
-    expect(dbMock.insertCalls).toHaveLength(0);
+    expect(dbMock.insertCalls).toHaveLength(1);
+    expect(dbMock.insertCalls[0]?.values).toMatchObject({ starredOnGithub: false });
   });
 
-  it('GitHub 其他失败状态（500）→ 回复通用失败，不写 favorites，不抛错', async () => {
+  it('GitHub 其他失败状态（500）→ 记下本地收藏并说明同步失败，不抛错', async () => {
     stubFetchStatus(500);
     dbMock.selectQueue.push([boundSubscriberRow()]);
     seedSearchCache([makeItem()]);
@@ -465,8 +487,13 @@ describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
     await expect(handleFavorite(makeMsg({ content: '收藏 1' }))).resolves.toBeUndefined();
 
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
-    expect(content).toBe(STAR_FAILURE_REPLY);
-    expect(dbMock.insertCalls).toHaveLength(0);
+    expect(content).toBe(STAR_SYNC_FAILED_REPLY);
+    expect(dbMock.insertCalls).toHaveLength(1);
+    expect(dbMock.insertCalls[0]?.values).toMatchObject({
+      wecomUserid: 'alice',
+      fullName: 'vercel/next.js',
+      starredOnGithub: false,
+    });
   });
 
   it('N 越界（缓存只有 2 条，收藏 5）→ 回复「最近一次结果只有 2 条，没有第 5 条」，不打 GitHub、不写库', async () => {
@@ -578,7 +605,8 @@ describe('handleFavorite（收藏 N → star + 写 favorites）', () => {
     await handleFavorite(makeMsg({ content: '收藏 1' }));
     await handleFavorite(makeMsg({ content: '收藏1' }));
 
-    expect(dbMock.insertCalls).toHaveLength(2);
+    // 每次收藏两次 upsert（先 false 再 true），四次全部命中唯一约束。
+    expect(dbMock.insertCalls).toHaveLength(4);
     for (const call of dbMock.insertCalls) {
       expect(call.table).toBe(favorites);
       expect(call.onConflict).toBeTruthy(); // onConflictDoUpdate → 重复收藏不炸唯一约束

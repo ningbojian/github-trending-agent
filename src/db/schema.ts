@@ -193,6 +193,9 @@ export const agentRuns = pgTable(
     text: text('text').notNull().default(''),
     ok: boolean('ok').notNull(),
     totalMs: integer('total_ms').notNull(),
+    /** 本次请求累计的模型 token（可能多次调用），用于成本看板。 */
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
     steps: jsonb('steps')
       .$type<Array<{ ms: number; name: string; detail?: string }>>()
       .notNull(),

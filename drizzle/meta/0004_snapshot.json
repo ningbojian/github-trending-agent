@@ -1,5 +1,5 @@
 {
-  "id": "cc47d261-8934-4206-9c9c-a3ea482cde97",
+  "id": "c9174b42-31a1-46e6-b536-3f324deeb68d",
   "prevId": "4ff04f78-50e1-4b96-8442-630832a9f0fd",
   "version": "7",
   "dialect": "postgresql",
@@ -44,6 +44,20 @@
           "type": "integer",
           "primaryKey": false,
           "notNull": true
+        },
+        "input_tokens": {
+          "name": "input_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "output_tokens": {
+          "name": "output_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
         },
         "steps": {
           "name": "steps",

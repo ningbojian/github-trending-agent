@@ -1,5 +1,5 @@
 import { generateText, stepCountIs, type LanguageModel } from 'ai';
-import { note, traceError } from '../obs/trace.js';
+import { note, noteUsage, traceError } from '../obs/trace.js';
 import { recordToolCall, type ToolCallInput } from '../obs/tool-calls.js';
 import { redactKey } from './llm.js';
 
@@ -31,6 +31,12 @@ export interface GenerateTextStep {
 export interface GenerateTextOutput {
   text?: string;
   steps?: GenerateTextStep[];
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    promptTokens?: number;
+    completionTokens?: number;
+  };
 }
 
 /** `generateText` 的最小结构（测试注入用；真实实现由下方 cast 适配）。 */
@@ -58,6 +64,8 @@ export interface ToolLoopOptions {
   timeoutMs?: number;
   noteFn?: (name: string, detail?: string) => void;
   traceErrorFn?: (err: unknown) => void;
+  /** 默认累加到当前 trace；测试注入。 */
+  usageFn?: (inputTokens?: number, outputTokens?: number) => void;
   /** 默认写 `tool_calls`；测试注入。 */
   recordToolCall?: ToolCallRecorder;
 }
@@ -153,6 +161,7 @@ export async function runToolLoopSafe(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const noteFn = options.noteFn ?? note;
   const recordError = options.traceErrorFn ?? traceError;
+  const recordUsage = options.usageFn ?? noteUsage;
 
   try {
     const result = await generate({
@@ -168,6 +177,12 @@ export async function runToolLoopSafe(
     const steps = Array.isArray(result.steps) ? result.steps : [];
     const tools = collectToolNames(steps);
     noteFn('tool-steps', `steps=${steps.length} tools=${tools.join(',') || 'none'}`);
+    // 供应商字段名不统一：AI SDK 7 用 inputTokens/outputTokens，旧版是 prompt/completion。
+    const usage = result.usage;
+    recordUsage(
+      usage?.inputTokens ?? usage?.promptTokens,
+      usage?.outputTokens ?? usage?.completionTokens,
+    );
 
     const text = typeof result.text === 'string' ? result.text.trim() : '';
     if (text === '') {

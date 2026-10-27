@@ -20,6 +20,7 @@ function setup(
   const captured: Captured[] = [];
   const notes: Array<{ name: string; detail?: string }> = [];
   const errors: unknown[] = [];
+  const usages: Array<[number | undefined, number | undefined]> = [];
   const run = () =>
     runToolLoopSafe(
       { system: '你是助手', prompt: '深挖 astral-sh/ruff' },
@@ -34,9 +35,10 @@ function setup(
         },
         noteFn: (name, detail) => notes.push({ name, detail }),
         traceErrorFn: (err) => errors.push(err),
+        usageFn: (input, output) => usages.push([input, output]),
       },
     );
-  return { run, captured, notes, errors };
+  return { run, captured, notes, errors, usages };
 }
 
 describe('runToolLoopSafe — 参数', () => {
@@ -104,6 +106,24 @@ describe('runToolLoopSafe — 结果', () => {
   it('空文本 → null（宁可回退模板，也不发一句空话）', async () => {
     const { run } = setup(async () => ({ text: '   ', steps: [{ toolCalls: [] }] }));
     expect(await run()).toBeNull();
+  });
+
+  it('用量上报给 trace：兼容 inputTokens 与旧的 promptTokens 两套字段名', async () => {
+    const modern = setup(async () => ({
+      text: '好',
+      steps: [],
+      usage: { inputTokens: 120, outputTokens: 30 },
+    }));
+    await modern.run();
+    expect(modern.usages).toEqual([[120, 30]]);
+
+    const legacy = setup(async () => ({
+      text: '好',
+      steps: [],
+      usage: { promptTokens: 55, completionTokens: 7 },
+    }));
+    await legacy.run();
+    expect(legacy.usages).toEqual([[55, 7]]);
   });
 
   it('steps 字段缺失也能活（SDK 版本差异不该崩）', async () => {

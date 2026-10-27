@@ -15,8 +15,10 @@ import { agentRuns, kvCache } from '../db/schema.js';
  * 处理请求，模块变量会被隔壁请求写乱；ALS 按异步上下文隔离，且不用给
  * 15 个 handler 都加一个 trace 参数。
  *
- * 为什么不建表：迁移 0004 的 journal `when` 会早于 0003（1793200000001），
- * drizzle 会静默跳过（docs/deploy.md 第 1 节）。7 天 TTL 也省掉了清理任务。
+ * 为什么落正式表而不是只写 kv_cache：kv 适合「有 TTL、按 key 取一条」的短命
+ * 数据；trace 要按时间倒排、按 kind 聚合、算 p50/p95，还要和 tool_calls 关联，
+ * 这些是 SQL 的活（迁移 0004）。kv 版本保留为降级路径：表还没建/写失败时
+ * 仍然留痕，7 天 TTL 顺带当清理。
  *
  * 观测永远不能把业务弄挂：任何写库/序列化异常都在这里吞掉。
  */
@@ -53,6 +55,9 @@ interface TraceContext {
   ok: boolean;
   errorRecorded: boolean;
   truncated: boolean;
+  /** 同一请求可能调多次模型（解析 + 简介 + 工具循环），按次累加。 */
+  inputTokens: number;
+  outputTokens: number;
 }
 
 const storage = new AsyncLocalStorage<TraceContext>();
@@ -122,6 +127,27 @@ export function traceError(err: unknown): void {
   pushStep(ctx, 'error', describeError(err));
 }
 
+function tokenCount(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : 0;
+}
+
+/**
+ * 累加一次模型调用的 token 用量。
+ *
+ * 只存数字，不存 prompt/输出内容；`undefined`（供应商没回 usage）按 0 计，
+ * 这样列是 NOT NULL，成本看板不会因为某家模型缺字段就整行丢失。
+ */
+export function noteUsage(inputTokens?: number, outputTokens?: number): void {
+  const ctx = storage.getStore();
+  if (!ctx) {
+    return;
+  }
+  ctx.inputTokens += tokenCount(inputTokens);
+  ctx.outputTokens += tokenCount(outputTokens);
+}
+
 /** 落库 + 打一行 JSON（Vercel 日志里也能看）。任何异常都吞掉。 */
 async function flushTrace(ctx: TraceContext): Promise<void> {
   const value = {
@@ -130,6 +156,8 @@ async function flushTrace(ctx: TraceContext): Promise<void> {
     text: truncateText(ctx.meta.text ?? ''),
     totalMs: now() - ctx.startAt,
     ok: ctx.ok,
+    inputTokens: ctx.inputTokens,
+    outputTokens: ctx.outputTokens,
     steps: ctx.steps,
   };
   // 正式表是主路径：可按时间/用户/类型查询与聚合。
@@ -188,6 +216,8 @@ export async function withTrace<T>(
     ok: true,
     errorRecorded: false,
     truncated: false,
+    inputTokens: 0,
+    outputTokens: 0,
   };
   try {
     return await storage.run(ctx, fn);

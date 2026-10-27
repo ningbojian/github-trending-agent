@@ -6,6 +6,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateObject, type LanguageModel } from 'ai';
 import type { ZodSchema } from 'zod';
 import { env } from '../config.js';
+import { noteUsage } from '../obs/trace.js';
 import { recordLlmFailure } from './llm-failure.js';
 
 /** env.LLM_PROVIDER 的合法取值。 */
@@ -225,6 +226,7 @@ export async function generateObjectSafe<T>(
       | undefined;
     const inputTokens = usage?.inputTokens ?? usage?.promptTokens;
     const outputTokens = usage?.outputTokens ?? usage?.completionTokens;
+    noteUsage(inputTokens, outputTokens);
     console.log(
       `[llm] provider=${provider} model=${model} ` +
         `input_tokens=${inputTokens ?? '?'} output_tokens=${outputTokens ?? '?'}`,

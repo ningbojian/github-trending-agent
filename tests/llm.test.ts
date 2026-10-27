@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   createDeepSeek: vi.fn(),
   createAlibaba: vi.fn(),
   generateObject: vi.fn(),
+  noteUsage: vi.fn(),
   recordLlmFailure: vi.fn(async () => {}),
 }));
 
@@ -29,6 +30,7 @@ vi.mock('@ai-sdk/openai-compatible', () => ({
   createOpenAICompatible: mocks.createOpenAICompatible,
 }));
 vi.mock('../src/agent/llm-failure', () => ({ recordLlmFailure: mocks.recordLlmFailure }));
+vi.mock('../src/obs/trace', () => ({ noteUsage: mocks.noteUsage }));
 vi.mock('@ai-sdk/deepseek', () => ({ createDeepSeek: mocks.createDeepSeek }));
 vi.mock('@ai-sdk/alibaba', () => ({ createAlibaba: mocks.createAlibaba }));
 vi.mock('ai', () => ({ generateObject: mocks.generateObject }));
@@ -378,6 +380,30 @@ describe('generateObjectSafe', () => {
     mocks.generateObject.mockRejectedValue(new Error('network down'));
 
     await expect(generateObjectSafe(schema, 'x')).resolves.toBeNull();
+    // 失败没有用量可记：成本看板不应凭空多一笔。
+    expect(mocks.noteUsage).not.toHaveBeenCalled();
+  });
+
+  it('reports token usage to the current trace (cost dashboard)', async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: { title: 'x', stars: 1 },
+      usage: { inputTokens: 1200, outputTokens: 80 },
+    });
+
+    await generateObjectSafe(schema, 'p');
+
+    expect(mocks.noteUsage).toHaveBeenCalledWith(1200, 80);
+  });
+
+  it('accepts the legacy prompt/completion token field names', async () => {
+    mocks.generateObject.mockResolvedValue({
+      object: { title: 'x', stars: 1 },
+      usage: { promptTokens: 300, completionTokens: 40 },
+    });
+
+    await generateObjectSafe(schema, 'p');
+
+    expect(mocks.noteUsage).toHaveBeenCalledWith(300, 40);
   });
 
   it('logs the failure reason so a broken provider is visible in the logs', async () => {

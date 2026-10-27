@@ -982,6 +982,27 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
     expect(dbMock.insertCalls).toHaveLength(0);
   });
 
+  it('整轮超出时间预算 → 剩余订阅者不抢占也不发送，留给下一个整点', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    dbMock.selectRows.push(
+      makeSub(),
+      makeSub({ id: 2, wecomUserid: 'bob' }),
+    );
+    dbMock.executeRows.push(makeEntry('a/one'));
+
+    let ticks = 0;
+    const result = await pushDigests(new Date(), {
+      budgetMs: 100,
+      clock: () => (ticks += 1000),
+    });
+
+    // 第一次预检就已超预算：两个人都不该被处理，更不能被抢占。
+    expect(result).toEqual({ sent: 0, skipped: 2, failed: 0 });
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    warnSpy.mockRestore();
+  });
+
   it('部分成功：失败的订阅者不写、成功的订阅者照写', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     dbMock.selectRows.push(

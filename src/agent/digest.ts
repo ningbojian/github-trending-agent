@@ -417,6 +417,19 @@ export interface PushDigestsResult {
   failed: number;
 }
 
+export interface PushDigestsOptions {
+  /**
+   * 整轮推送的时间预算（毫秒）。默认 240 秒：函数上限是 300 秒，
+   * 留出快照构建、周复盘与收尾的余量。
+   */
+  budgetMs?: number;
+  /** 注入时钟（单测用）。 */
+  clock?: () => number;
+}
+
+/** 默认 240 秒：给 maxDuration=300 留 60 秒余量。 */
+export const PUSH_BUDGET_MS = 240_000;
+
 /** 「HH:MM」→ 当日分钟数（pushTime 已经过 PUSH_TIME_RE 校验）。 */
 function pushTimeMinutes(pushTime: string): number {
   const [hour, minute] = pushTime.split(':');
@@ -522,7 +535,11 @@ export async function markDigestSent(wecomUserid: string): Promise<void> {
  */
 export async function pushDigests(
   now: Date = new Date(),
+  options: PushDigestsOptions = {},
 ): Promise<PushDigestsResult> {
+  const budgetMs = options.budgetMs ?? PUSH_BUDGET_MS;
+  const clock = options.clock ?? Date.now;
+  const startedAt = clock();
   const rows = await db()
     .select()
     .from(subscribers)
@@ -537,7 +554,20 @@ export async function pushDigests(
   let sent = 0;
   let skipped = 0;
   let failed = 0;
+  let processed = 0;
   for (const sub of rows) {
+    // 时间预算：超时后既不再抢占也不再发送，剩下的留给下一个整点。
+    // 不做这一步的话，函数会在 maxDuration 处被直接杀掉——已抢占但未发送的
+    // 订阅者要等回滚，而排在后面的人整轮都没被看到。
+    if (clock() - startedAt > budgetMs) {
+      const remaining = rows.length - processed;
+      skipped += remaining;
+      console.warn(
+        `[digest] time budget exceeded (${budgetMs}ms), ${remaining} 位订阅者留到下一个整点`,
+      );
+      break;
+    }
+    processed += 1;
     // claimed 只在抢占确认成功后为 true：外层 catch 据此决定是否回滚
     // （抢占语句自身抛错 = 未生效，无需回滚）。
     let claimed = false;
@@ -615,7 +645,9 @@ export async function pushDigests(
           applyHardFilters(snapshot.items, { signals, history, now }),
           signals,
         );
-        note('dedup', `过滤前 ${snapshot.items.length} → 剩下 ${pool.length}`);
+        // 拆成两条：看板可以分别聚合「候选量」与「去重后剩余」，不用解析文案。
+        note('dedup-before', String(snapshot.items.length));
+        note('dedup-after', String(pool.length));
         built = await buildDigestFromSnapshot(sub, { ...snapshot, items: pool }, accept);
       } else {
         built = await buildDigestWithEntries(sub, now, accept);

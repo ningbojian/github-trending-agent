@@ -35,6 +35,7 @@ vi.mock('../src/db/client', async () => {
 import {
   currentTraceId,
   note,
+  noteUsage,
   TRACE_MAX_STEPS,
   TRACE_TTL_MS,
   traceError,
@@ -48,6 +49,8 @@ interface RunRow {
   text: string;
   ok: boolean;
   totalMs: number;
+  inputTokens: number;
+  outputTokens: number;
   steps: { ms: number; name: string; detail?: string }[];
   createdAt: Date;
 }
@@ -123,6 +126,42 @@ describe('withTrace — 记录一次调用走过的步骤', () => {
     expect(() => note('x', 'y')).not.toThrow();
     expect(dbMock.runs).toHaveLength(0);
     expect(dbMock.kv).toHaveLength(0);
+  });
+
+  it('noteUsage 累加同一次调用里的多次模型用量', async () => {
+    await withTrace({ kind: 'text', userid: 'u', text: 'x' }, async () => {
+      noteUsage(120, 30);
+      noteUsage(80, 20);
+    });
+
+    const row = lastRun();
+    expect(row.inputTokens).toBe(200);
+    expect(row.outputTokens).toBe(50);
+  });
+
+  it('没有用量时落 0，不落 undefined（列是 NOT NULL）', async () => {
+    await withTrace({ kind: 'text', userid: 'u', text: 'x' }, async () => {});
+
+    const row = lastRun();
+    expect(row.inputTokens).toBe(0);
+    expect(row.outputTokens).toBe(0);
+  });
+
+  it('非法用量（负数/非数字/undefined）忽略，不把脏数据写进库', async () => {
+    await withTrace({ kind: 'text', userid: 'u', text: 'x' }, async () => {
+      noteUsage(-5, Number.NaN);
+      noteUsage(undefined, undefined);
+      noteUsage(10, 4);
+    });
+
+    const row = lastRun();
+    expect(row.inputTokens).toBe(10);
+    expect(row.outputTokens).toBe(4);
+  });
+
+  it('没有 trace 时 noteUsage 也静默 no-op', () => {
+    expect(() => noteUsage(1, 1)).not.toThrow();
+    expect(dbMock.runs).toHaveLength(0);
   });
 
   it('fn 抛错时：记录 error 步骤、ok=false、异常照常抛给调用方、记录照样落库', async () => {

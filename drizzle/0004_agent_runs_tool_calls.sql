@@ -5,6 +5,8 @@ CREATE TABLE "agent_runs" (
 	"text" text DEFAULT '' NOT NULL,
 	"ok" boolean NOT NULL,
 	"total_ms" integer NOT NULL,
+	"input_tokens" integer DEFAULT 0 NOT NULL,
+	"output_tokens" integer DEFAULT 0 NOT NULL,
 	"steps" jsonb NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL
 );

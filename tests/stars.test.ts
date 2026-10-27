@@ -36,6 +36,21 @@ vi.mock('../src/wecom/welcome', () => ({
   WELCOME_MESSAGE: '欢迎',
 }));
 
+// 多轮待办在 router 里是一次额外查询；本文件只测分发与收藏链路，
+// 默认「没有待办」，不占用 select 队列（见 pending.test.ts / router.test.ts）。
+vi.mock('../src/agent/pending', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/agent/pending')>();
+  return {
+    ...actual,
+    readPending: async () => null,
+    clearPending: async () => undefined,
+  };
+});
+
+vi.mock('../src/wecom/pending', () => ({
+  handlePendingReply: async () => undefined,
+}));
+
 const dbMock = vi.hoisted(() => ({
   /** select 队列：每次 await select 链弹出一行数组作为结果集；Error 实例表示该次查询失败。 */
   selectQueue: [] as unknown[],

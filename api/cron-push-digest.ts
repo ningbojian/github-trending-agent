@@ -1,5 +1,6 @@
 import { pushDigests } from '../src/agent/digest.js';
 import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
+import { pushWeeklyReviews } from '../src/agent/weekly-review.js';
 import { pushEmailDigests } from '../src/email/push.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
 import { refreshWeComMemberCount } from '../src/wecom/capacity.js';
@@ -68,7 +69,10 @@ export default async function handler(
       snapshot,
       baseUrl: resolveBaseUrl(req.headers),
     });
-    sendJson(res, 200, { ...wecom, email });
+    // 每周复盘：自身按「周一 10 点后 + 本周未发」幂等，每小时的 tick 都能安全调用。
+    // 它永远不会抛（内部逐人隔离），所以不会把每日推送的成功响应变成 500。
+    const weekly = await pushWeeklyReviews();
+    sendJson(res, 200, { ...wecom, email, weekly });
   } catch (err) {
     console.error('cron-push-digest failed:', err);
     // detail 供 Bearer 鉴权后的调用方排障（端点不公开，不引入暴露面）

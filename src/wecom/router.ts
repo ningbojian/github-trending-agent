@@ -32,7 +32,10 @@ import {
 } from './onboarding.js';
 import { sendWeComText } from './api.js';
 import { handleSearch } from './reply.js';
+import { MEMORY_USAGE_REPLY, handleMemoryCommand } from './memory.js';
 import { decideTextRoute, normalizeCommandText, type UsageKey } from './route-decision.js';
+import { clearPending, interpretConfirmation, interpretKeyword, readPending } from '../agent/pending.js';
+import { askSubscribeKeyword, handleKeywordReply, handlePendingReply } from './pending.js';
 import {
   CANCEL_SUBSCRIPTION_USAGE_REPLY,
   MY_SUBSCRIPTION_USAGE_REPLY,
@@ -70,6 +73,8 @@ export interface Handlers {
   unsubscribe: MessageHandler;
   /** 「我的订阅」——只读展示当前设置。 */
   mySubscription: MessageHandler;
+  /** 「记住 / 忘掉 / 我的记忆」。 */
+  memory: MessageHandler;
   /** 「取消订阅 <关键词>」——只删一个订阅词，不动 active。 */
   cancelSubscription: MessageHandler;
   digestCount: MessageHandler;
@@ -95,6 +100,7 @@ let handlers: Handlers = {
   subscribe: stub,
   unsubscribe: stub,
   mySubscription: stub,
+  memory: stub,
   cancelSubscription: stub,
   digestCount: stub,
   pushTime: stub,
@@ -126,6 +132,7 @@ export function resetHandlers(): void {
     subscribe: stub,
     unsubscribe: stub,
     mySubscription: stub,
+    memory: stub,
     cancelSubscription: stub,
     digestCount: stub,
     pushTime: stub,
@@ -155,6 +162,7 @@ const USAGE_REPLIES: Record<UsageKey, string> = {
   favorite: FAVORITE_USAGE_REPLY,
   list: LIST_USAGE_REPLY,
   mySubscription: MY_SUBSCRIPTION_USAGE_REPLY,
+  memory: MEMORY_USAGE_REPLY,
   cancelSubscription: CANCEL_SUBSCRIPTION_USAGE_REPLY,
   bind: BIND_USAGE_REPLY,
   unsubscribe: UNSUBSCRIBE_USAGE_REPLY,
@@ -279,6 +287,38 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
     content: normalizeCommandText(msg.content),
   };
   const decision = decideTextRoute(normalized.content);
+
+  // 多轮状态只消费「整条消息就是待办要的那个答复」：系统刚问过「要我记住吗」
+  // 或「想订阅什么」。任何别的内容（尤其是命令）都把 pending 清掉后按新消息
+  // 处理——宁可漏掉一次确认，也不让上周的问题吞掉今天的搜索。
+  const pending = await readPending(msg.fromUserName);
+  if (pending !== null) {
+    if (pending.kind === 'profile-suggestion') {
+      const verdict = interpretConfirmation(normalized.content);
+      if (verdict !== null) {
+        note('pending-consumed', `${pending.kind}:${verdict}`);
+        return dispatchSafely(
+          (m) => handlePendingReply(m, pending, verdict),
+          normalized,
+        );
+      }
+    } else {
+      // 「对/不」对订阅追问没有意义：当作新消息，不把「对」订阅成关键词。
+      const term =
+        decision.kind === 'handler' &&
+        decision.handler === 'search' &&
+        interpretConfirmation(normalized.content) === null
+          ? interpretKeyword(normalized.content)
+          : null;
+      if (term !== null) {
+        note('pending-consumed', `${pending.kind}:keyword`);
+        return dispatchSafely((m) => handleKeywordReply(m, term), normalized);
+      }
+    }
+    await clearPending(msg.fromUserName);
+    note('pending-clear', 'superseded');
+  }
+
   if (decision.kind === 'usage') {
     // 疑似命令容错：以命令词开头却不是合法指令 → 回用法提示，绝不静默掉进搜索。
     note('route', 'suspected-command');
@@ -286,6 +326,15 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
       (m) => sendWeComText(m.fromUserName, USAGE_REPLIES[decision.usage]),
       normalized,
     );
+  }
+  // 裸「订阅」不甩一行用法，而是追问一个槽（单槽、5 分钟）：比让用户猜格式
+  // 更像对话，也真正用到多轮状态。完整命令仍走原 handler。
+  if (
+    decision.handler === 'subscribe' &&
+    normalized.content === '订阅'
+  ) {
+    note('pending-set', 'subscribe-keyword');
+    return dispatchSafely(askSubscribeKeyword, normalized);
   }
   return dispatchSafely(handlers[decision.handler], normalized);
 }
@@ -305,6 +354,7 @@ registerHandlers({
   subscribe: handleSubscribe,
   unsubscribe: handleUnsubscribe,
   mySubscription: handleMySubscription,
+  memory: handleMemoryCommand,
   cancelSubscription: handleCancelSubscriptionTerm,
   digestCount: handleDigestCount,
   pushTime: handlePushTime,

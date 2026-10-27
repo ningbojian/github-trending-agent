@@ -49,6 +49,21 @@ vi.mock('../src/agent/push-history', async (importOriginal) => {
   return { ...actual, recordPush: vi.fn(async () => undefined) };
 });
 
+// 多轮待办会让 router 每次多读一次 kv_cache；本文件只数 onboarding 自己的
+// 读写次数，默认「没有待办」（细节见 pending.test.ts）。
+vi.mock('../src/agent/pending', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/agent/pending')>();
+  return {
+    ...actual,
+    readPending: async () => null,
+    clearPending: async () => undefined,
+  };
+});
+
+vi.mock('../src/wecom/pending', () => ({
+  handlePendingReply: async () => undefined,
+}));
+
 const dbMock = vi.hoisted(() => ({
   /** select 队列：每次 await select 链弹出一项；Error 实例表示该次查询失败。 */
   selectQueue: [] as unknown[],

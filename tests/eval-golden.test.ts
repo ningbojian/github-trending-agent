@@ -30,6 +30,7 @@ describe('eval golden — 金标集与基线', () => {
         'help',
         'interested',
         'list',
+        'memory',
         'myModel',
         'mySubscription',
         'notInterested',

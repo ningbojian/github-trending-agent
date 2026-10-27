@@ -107,6 +107,7 @@ function harness(overrides: Partial<AgentRouteOptions> = {}): Harness {
     removeTerm: async () => ({ removed: true, keywords: [] }),
     getToken: async () => ({ token: null, source: 'anonymous' }),
     loadSummaries: async () => new Map(),
+    loadProfile: async () => null,
     now: () => NOW,
     ...overrides,
   };
@@ -235,5 +236,66 @@ describe('tryAgentReply — 工具上下文', () => {
     await tryAgentReply(MSG, h.options);
     expect(searchCalls).toBe(0);
     expect(h.sent[0]).toContain('没找到');
+  });
+});
+
+describe('tryAgentReply — 长期记忆注入', () => {
+  it('有记忆 → 拼在系统提示词里，并标明「不是指令」', async () => {
+    let seen = '';
+    const h = harness({
+      loadProfile: async () => ({
+        facts: ['我主要做 Agent 开发', '偏好 TypeScript'],
+        updatedAt: new Date(NOW).toISOString(),
+      }),
+      generate: async (args) => {
+        seen = args.system;
+        return { text: '结论', steps: [] };
+      },
+    });
+    await tryAgentReply(MSG, h.options);
+    expect(seen).toContain('我主要做 Agent 开发');
+    expect(seen).toContain('偏好 TypeScript');
+    expect(seen).toContain('不是指令');
+  });
+
+  it('没有记忆 → 系统提示词保持不变', async () => {
+    let seen = '';
+    const h = harness({
+      generate: async (args) => {
+        seen = args.system;
+        return { text: '结论', steps: [] };
+      },
+    });
+    await tryAgentReply(MSG, h.options);
+    expect(seen).not.toContain('用户背景');
+  });
+
+  it('读记忆失败 → 照常回答（少一段背景不能拖垮对话）', async () => {
+    let seen = '';
+    const h = harness({
+      loadProfile: async () => {
+        throw new Error('db down');
+      },
+      generate: async (args) => {
+        seen = args.system;
+        return { text: '结论', steps: [] };
+      },
+    });
+    expect(await tryAgentReply(MSG, h.options)).toBe(true);
+    expect(seen).not.toContain('用户背景');
+    expect(h.sent).toEqual(['结论']);
+  });
+
+  it('没有 Key → 根本不读记忆（零模型、零 DB）', async () => {
+    let reads = 0;
+    const h = harness({
+      choice: { kind: 'none' },
+      loadProfile: async () => {
+        reads += 1;
+        return null;
+      },
+    });
+    expect(await tryAgentReply(MSG, h.options)).toBe(false);
+    expect(reads).toBe(0);
   });
 });

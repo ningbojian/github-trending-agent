@@ -49,6 +49,31 @@ vi.mock('../src/wecom/welcome', () => ({
   WELCOME_MESSAGE: '欢迎',
 }));
 
+// 多轮状态在 router 里只做两件事：读 pending、把答复交给 handler。
+// 这里替换掉存储与副作用，保留真实的 interpretConfirmation（它是纯函数）。
+const pendingMock = vi.hoisted(() => ({
+  readPending: vi.fn(),
+  clearPending: vi.fn(),
+  handlePendingReply: vi.fn(),
+  askSubscribeKeyword: vi.fn(),
+  handleKeywordReply: vi.fn(),
+}));
+
+vi.mock('../src/agent/pending', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/agent/pending')>();
+  return {
+    ...actual,
+    readPending: pendingMock.readPending,
+    clearPending: pendingMock.clearPending,
+  };
+});
+
+vi.mock('../src/wecom/pending', () => ({
+  handlePendingReply: pendingMock.handlePendingReply,
+  askSubscribeKeyword: pendingMock.askSubscribeKeyword,
+  handleKeywordReply: pendingMock.handleKeywordReply,
+}));
+
 function makeMsg(overrides: Partial<InboundMessage> = {}): InboundMessage {
   return {
     toUserName: 'gh_agent',
@@ -89,6 +114,17 @@ beforeEach(() => {
   subscribeFlowMock.ensureSubscriber.mockResolvedValue(false);
   subscribeFlowMock.sendWelcomeFlow.mockReset();
   subscribeFlowMock.sendWelcomeFlow.mockResolvedValue(undefined);
+  // 默认没有待办：所有既有用例的行为保持不变。
+  pendingMock.readPending.mockReset();
+  pendingMock.readPending.mockResolvedValue(null);
+  pendingMock.clearPending.mockReset();
+  pendingMock.clearPending.mockResolvedValue(undefined);
+  pendingMock.handlePendingReply.mockReset();
+  pendingMock.handlePendingReply.mockResolvedValue(undefined);
+  pendingMock.askSubscribeKeyword.mockReset();
+  pendingMock.askSubscribeKeyword.mockResolvedValue(undefined);
+  pendingMock.handleKeywordReply.mockReset();
+  pendingMock.handleKeywordReply.mockResolvedValue(undefined);
   traceMock.notes.length = 0;
   resetHandlers();
   registerHandlers({
@@ -623,5 +659,103 @@ describe('默认 stub handlers（未注册时）', () => {
     await expect(routeMessage(makeMsg({ content: '帮助' }))).resolves.toBeUndefined();
     await expect(routeMessage(makeMsg({ content: '收藏 3' }))).resolves.toBeUndefined();
     await expect(routeMessage(makeMsg({ content: '随便搜' }))).resolves.toBeUndefined();
+  });
+});
+
+describe('多轮状态（pending）', () => {
+  const pending = {
+    kind: 'profile-suggestion' as const,
+    fact: '我最近更喜欢 python',
+    at: '2026-10-26T02:00:00.000Z',
+  };
+
+  it('有待办 +「对。」→ 消费为确认，不再走搜索', async () => {
+    pendingMock.readPending.mockResolvedValue(pending);
+
+    await routeMessage(makeMsg({ content: '对。' }));
+
+    expect(pendingMock.handlePendingReply).toHaveBeenCalledTimes(1);
+    expect(pendingMock.handlePendingReply.mock.calls[0]?.[1]).toEqual(pending);
+    expect(pendingMock.handlePendingReply.mock.calls[0]?.[2]).toBe('confirm');
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(traceMock.notes).toContainEqual(['pending-consumed', 'profile-suggestion:confirm']);
+  });
+
+  it('有待办 +「不」→ 消费为拒绝', async () => {
+    pendingMock.readPending.mockResolvedValue(pending);
+
+    await routeMessage(makeMsg({ content: '不' }));
+
+    expect(pendingMock.handlePendingReply.mock.calls[0]?.[2]).toBe('reject');
+    expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('有待办 + 其它内容 → 清空待办，按新消息正常处理', async () => {
+    pendingMock.readPending.mockResolvedValue(pending);
+
+    await routeMessage(makeMsg({ content: 'python 热榜' }));
+
+    expect(pendingMock.clearPending).toHaveBeenCalledWith('alice');
+    expect(pendingMock.handlePendingReply).not.toHaveBeenCalled();
+    expect(searchHandler).toHaveBeenCalledTimes(1);
+    expect(traceMock.notes).toContainEqual(['pending-clear', 'superseded']);
+  });
+
+  it('没有待办 →「对」按普通消息处理（不产生幽灵确认）', async () => {
+    await routeMessage(makeMsg({ content: '对' }));
+
+    expect(pendingMock.handlePendingReply).not.toHaveBeenCalled();
+    expect(searchHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('裸「订阅。」→ 追问一个关键词槽，不落搜索也不直接发用法', async () => {
+    await routeMessage(makeMsg({ content: '订阅。' }));
+
+    expect(pendingMock.askSubscribeKeyword).toHaveBeenCalledTimes(1);
+    expect(subscribeHandler).not.toHaveBeenCalled();
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(traceMock.notes).toContainEqual(['pending-set', 'subscribe-keyword']);
+  });
+
+  it('有待订阅 + 一个词 → 当作槽值消费', async () => {
+    pendingMock.readPending.mockResolvedValue({
+      kind: 'subscribe-keyword',
+      at: '2026-10-26T02:00:00.000Z',
+    });
+
+    await routeMessage(makeMsg({ content: 'python' }));
+
+    expect(pendingMock.handleKeywordReply).toHaveBeenCalledTimes(1);
+    expect(pendingMock.handleKeywordReply.mock.calls[0]?.[1]).toBe('python');
+    expect(searchHandler).not.toHaveBeenCalled();
+    expect(traceMock.notes).toContainEqual([
+      'pending-consumed',
+      'subscribe-keyword:keyword',
+    ]);
+  });
+
+  it('有待订阅 + 命令 → 清待办，命令照常执行（命令优先于追问）', async () => {
+    pendingMock.readPending.mockResolvedValue({
+      kind: 'subscribe-keyword',
+      at: '2026-10-26T02:00:00.000Z',
+    });
+
+    await routeMessage(makeMsg({ content: '帮助' }));
+
+    expect(pendingMock.clearPending).toHaveBeenCalledWith('alice');
+    expect(pendingMock.handleKeywordReply).not.toHaveBeenCalled();
+    expect(helpHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('有待订阅 + 带空格的查询 → 清待办后走搜索，不吞掉真正的问题', async () => {
+    pendingMock.readPending.mockResolvedValue({
+      kind: 'subscribe-keyword',
+      at: '2026-10-26T02:00:00.000Z',
+    });
+
+    await routeMessage(makeMsg({ content: 'python 热榜' }));
+
+    expect(pendingMock.handleKeywordReply).not.toHaveBeenCalled();
+    expect(searchHandler).toHaveBeenCalledTimes(1);
   });
 });

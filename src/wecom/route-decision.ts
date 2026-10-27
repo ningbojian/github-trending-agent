@@ -18,6 +18,7 @@ export type HandlerKey =
   | 'favorite'
   | 'list'
   | 'mySubscription'
+  | 'memory'
   | 'notInterested'
   | 'interested'
   | 'bind'
@@ -38,6 +39,7 @@ export type UsageKey =
   | 'unfavorite'
   | 'list'
   | 'mySubscription'
+  | 'memory'
   | 'bind'
   | 'unsubscribe'
   | 'setModel'
@@ -71,6 +73,13 @@ const CANCEL_SUBSCRIPTION_PATTERN = /^取消订阅(?:\s|$)/;
  */
 const NOT_INTERESTED_PATTERN = /^不感兴趣(?:\s|$)/;
 const INTERESTED_PATTERN = /^感兴趣(?:\s|$)/;
+
+/**
+ * 长期记忆：前缀即命令。「记住这个仓库 astral-sh/ruff」是让助手记住，
+ * 不是搜仓库；正文（可能为空）交给 handler 校验并回用法提示。
+ */
+const REMEMBER_PATTERN = /^记住/;
+const FORGET_PATTERN = /^忘掉/;
 
 /** 「条数 …」——前缀匹配（裸「条数」/非法输入由 handler 回用法提示）。 */
 const DIGEST_COUNT_PATTERN = /^条数/;
@@ -125,6 +134,9 @@ export function suspectedCommandUsage(content: string): UsageKey | null {
   if (content.startsWith('我的订阅')) {
     return 'mySubscription';
   }
+  if (content.startsWith('我的记忆')) {
+    return 'memory';
+  }
   if (content.startsWith('取消订阅')) {
     return 'cancelSubscription';
   }
@@ -167,6 +179,12 @@ export function decideTextRoute(content: string): RouteDecision {
   }
   if (text === '我的订阅') {
     return { kind: 'handler', handler: 'mySubscription' };
+  }
+  if (text === '我的记忆') {
+    return { kind: 'handler', handler: 'memory' };
+  }
+  if (REMEMBER_PATTERN.test(text) || FORGET_PATTERN.test(text)) {
+    return { kind: 'handler', handler: 'memory' };
   }
   if (NOT_INTERESTED_PATTERN.test(text)) {
     return { kind: 'handler', handler: 'notInterested' };

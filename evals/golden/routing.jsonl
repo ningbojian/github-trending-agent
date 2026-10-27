@@ -24,7 +24,7 @@
 {"id":"route-bind","text":"绑定","expected":{"route":{"kind":"handler","name":"bind"}}}
 {"id":"route-bind-typo","text":"绑定账号","expected":{"route":{"kind":"usage","name":"bind"}}}
 {"id":"route-subscribe","text":"订阅 python ai","expected":{"route":{"kind":"handler","name":"subscribe"}}}
-{"id":"route-subscribe-bare","text":"订阅","notes":"缺关键词由 handler 回用法提示，不进搜索","expected":{"route":{"kind":"handler","name":"subscribe"}}}
+{"id":"route-subscribe-bare","text":"订阅","notes":"缺关键词：router 落 pending 并追问一个词（命令本身仍归 subscribe）","expected":{"route":{"kind":"handler","name":"subscribe"}}}
 {"id":"route-cancel-subscription-bare","text":"取消订阅","expected":{"route":{"kind":"handler","name":"cancelSubscription"}}}
 {"id":"route-cancel-subscription-term","text":"取消订阅 rpa","expected":{"route":{"kind":"handler","name":"cancelSubscription"}}}
 {"id":"route-cancel-subscription-tight","text":"取消订阅rpa","notes":"无空白 → 用法提示，不静默吞词","expected":{"route":{"kind":"usage","name":"cancelSubscription"}}}
@@ -50,3 +50,7 @@
 {"id":"route-search-natural","text":"本周 python 的 ai 项目","expected":{"route":{"kind":"handler","name":"search"}}}
 {"id":"route-search-push-like","text":"每天给我推 python","notes":"「每天」开头但带内容 → 搜索","expected":{"route":{"kind":"handler","name":"search"}}}
 {"id":"route-search-about","text":"你都会些啥","notes":"意图是 about，但路由层只关心走哪个 handler","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-memory-remember","text":"记住 我主要做 Agent 开发","notes":"前缀即命令：就算后面像搜索词，也是在让助手记住","expected":{"route":{"kind":"handler","name":"memory"}}}
+{"id":"route-memory-forget","text":"忘掉 Rust","expected":{"route":{"kind":"handler","name":"memory"}}}
+{"id":"route-memory-show","text":"我的记忆","expected":{"route":{"kind":"handler","name":"memory"}}}
+{"id":"route-memory-show-typo","text":"我的记忆列表","notes":"带后缀不是合法指令 → 用法提示，别当搜索词","expected":{"route":{"kind":"usage","name":"memory"}}}

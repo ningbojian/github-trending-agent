@@ -2,6 +2,7 @@ import type { LanguageModel } from 'ai';
 import { llmFor, type LlmChoice } from '../agent/llm.js';
 import { resolveGithubToken } from '../agent/github-token.js';
 import { loadRepoSummaries } from '../agent/repo-summary.js';
+import { readProfile, renderProfileForPrompt, type Profile } from '../agent/profile.js';
 import { searchTrending, type SearchResultItem } from '../agent/search.js';
 import {
   readSubscription,
@@ -65,6 +66,7 @@ export interface AgentRouteOptions {
     items: SearchResultItem[],
     choice: LlmChoice,
   ) => Promise<Map<string, string>>;
+  loadProfile?: (userid: string) => Promise<Profile | null>;
   now?: () => number;
   timeoutMs?: number;
   maxSteps?: number;
@@ -72,6 +74,23 @@ export interface AgentRouteOptions {
 
 function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8');
+}
+
+/**
+ * 记忆只进「措辞层」：读失败就当没有，绝不因为一段背景让对话失败。
+ * 注入位置只有这里——共享的简介/解析缓存绝不能带个人背景，否则会串给别的用户。
+ */
+async function systemWithProfile(
+  userid: string,
+  loadProfile: (userid: string) => Promise<Profile | null>,
+): Promise<string> {
+  try {
+    const block = renderProfileForPrompt(await loadProfile(userid));
+    return block === '' ? AGENT_SYSTEM_PROMPT : `${AGENT_SYSTEM_PROMPT}\n\n${block}`;
+  } catch (err) {
+    console.warn('[agent-route] profile read failed:', err instanceof Error ? err.message : err);
+    return AGENT_SYSTEM_PROMPT;
+  }
 }
 
 async function summariesSafe(
@@ -121,8 +140,12 @@ export async function tryAgentReply(
   };
 
   const model = options.model ?? llmFor(options.choice.config);
+  const system = await systemWithProfile(
+    msg.fromUserName,
+    options.loadProfile ?? readProfile,
+  );
   const outcome = await runToolLoopSafe(
-    { system: AGENT_SYSTEM_PROMPT, prompt: msg.content },
+    { system, prompt: msg.content },
     {
       model,
       tools: createTools(ctx),

@@ -174,6 +174,15 @@ vi.mock('../src/wecom/capacity', () => ({
   refreshWeComMemberCount: capacityMock.refreshWeComMemberCount,
 }));
 
+// 每周复盘在独立文件里测编排；这里只证明端点把它接上了、响应形状稳定。
+const weeklyMock = vi.hoisted(() => ({
+  pushWeeklyReviews: vi.fn(async () => ({ sent: 0, skipped: 0, failed: 0 })),
+}));
+
+vi.mock('../src/agent/weekly-review', () => ({
+  pushWeeklyReviews: weeklyMock.pushWeeklyReviews,
+}));
+
 /**
  * 口味画像与推送历史：默认「空画像 / 无历史」，既有用例行为不变。
  * 只替换 I/O 两个函数，纯函数（rankByTaste / pushedRecently / emptySignals）保持真实实现。
@@ -1467,7 +1476,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
     expect(dbMock.selectConditions).toHaveLength(0);
   });
 
-  it('Bearer <CRON_SECRET> 正确 → 执行 pushDigests 并返回 {sent, skipped, failed, email} JSON', async () => {
+  it('Bearer <CRON_SECRET> 正确 → 执行 pushDigests 并返回 {sent, skipped, failed, email, weekly} JSON', async () => {
     dbMock.selectRows.push(
       makeSub(),
       makeSub({ id: 2, wecomUserid: 'bob' }),
@@ -1483,7 +1492,9 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
       skipped: 0,
       failed: 0,
       email: { sent: 0, skipped: 0, failed: 0 },
+      weekly: { sent: 0, skipped: 0, failed: 0 },
     });
+    expect(weeklyMock.pushWeeklyReviews).toHaveBeenCalledTimes(1);
     expect(res.headers['content-type']).toContain('application/json');
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
     // 两个渠道共用同一份快照：cron 读一次、pushDigests 内再读一次，

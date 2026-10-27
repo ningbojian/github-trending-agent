@@ -448,6 +448,49 @@ group by 1, 2 order by 3 desc limit 20;
 
 规则层每长大一点，就少一次模型调用、少一次误判——而且互动的模型调用本来就烧用户自己的 Key，运营方在这条链路上不产生开销。
 
+### 10.5 推送去重与口味
+
+每日简报不再「有什么推什么」，而是先过三道门再选条：
+
+| 门 | 规则 | 代码 |
+|---|---|---|
+| 7 天去重 | 最近 7 天推过的仓库不再出现（`pushed:<userid>`，记 60 条、60 天过期） | `src/agent/push-history.ts` |
+| 增长门槛 | 老面孔 7 天内至少涨 `GROWTH_MIN_DELTA = 100` 星；新上榜的（`isNew`）不看增量 | `src/agent/digest-filter.ts` |
+| 口味 | 已收藏的不推（用户已经知道了）；被「不感兴趣」压到 −2 的语言整门丢掉；收藏集中的语言/话题靠前 | `src/agent/taste.ts` |
+
+**没东西就静默**：全部被过滤掉时不发「今日暂无」，也不写 `search_caches`（「收藏 N」仍指向上一份真实列表），不回滚 claim（当天不再每小时重试）。距上次发消息满 3 天补一句「最近没有明显增长的新项目」；有屏蔽语言时点名原因（`（已按你的「不感兴趣」屏蔽 go）`），避免用户把沉默读成「坏了」。首日礼包也记推送历史，否则第二天会把礼包里的仓库再推一遍。
+
+**口味只有两个来源**，都可在库里直接看到，没有隐式推断：
+
+- 收藏（`favorites` join `repos`）：同一语言收藏 ≥2 个才算偏好，最多 +3；单个收藏是偶然，不参与排序。
+- 显式反馈（`taste:<userid>`）：看完简报回「感兴趣」/「不感兴趣」，作用于刚收到的那批。一次反馈最多影响该批的**前 2 门语言、前 3 个话题**；只看最近 10 次事件；语言权重 clamp ±3，累计 ≤ −2 才真正屏蔽；再连说两次「感兴趣」即可恢复。
+
+三条自查 SQL：
+
+```sql
+-- 最近给谁推了什么（7 天去重窗口的依据）；lastSentAt 用来算「静默了几天」
+select key, value->>'lastSentAt' as last_sent,
+       jsonb_array_length(value->'items') as n
+from kv_cache where key like 'pushed:%' and expires_at > now() order by 2 desc nulls last;
+
+-- 口味反馈（含被屏蔽的方向）
+select key, value->'events' from kv_cache where key like 'taste:%' and expires_at > now();
+
+-- 收藏画像：谁的收藏集中在哪些语言
+select f.wecom_userid, r.language, count(*) as n
+from favorites f join repos r on r.full_name = f.full_name
+where r.language is not null group by 1, 2 order by 3 desc limit 20;
+```
+
+**调阈值的依据，不是给用户加开关**：看 `/api/trace` 里 `kind=push` 的 `digest-empty` 占比。高于约 20% 说明门槛太严（用户会觉得简报「时有时无」），把 `src/agent/digest-filter.ts` 的 `GROWTH_MIN_DELTA` 从 100 往下调；显著低于 5% 说明门槛太松，可以往上调。一次只动这一个常量。
+
+trace 上对应的步骤：`signals`（收藏/屏蔽数量）、`dedup`（过滤前 → 剩下）、`digest-empty` 与 `quiet`（为什么没发）。
+
+**两条已知限制，不是 bug**（详见第 5 步 ⑤）：
+
+- 「我的收藏」走公开端点 `/users/<login>/starred`，只看得到**公开仓库**的 star；私有 star 需要 `user` scope，会让所有已绑定用户重新授权，不做。
+- 只列最近 10 条 + 总数 + 「在 GitHub 看全部」链接，不是全部列举。
+
 ---
 
 ## 附：观察指标落地准备

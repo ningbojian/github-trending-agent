@@ -25,6 +25,14 @@ const snapshotMock = vi.hoisted(() => ({
   getDailySnapshot: vi.fn(),
 }));
 
+const historyMock = vi.hoisted(() => ({
+  recordPush: vi.fn(),
+}));
+
+vi.mock('../src/agent/push-history', () => ({
+  recordPush: historyMock.recordPush,
+}));
+
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
 }));
@@ -83,6 +91,7 @@ beforeEach(() => {
   });
   digestMock.saveRecentResults.mockResolvedValue(undefined);
   digestMock.markDigestSent.mockResolvedValue(undefined);
+  historyMock.recordPush.mockResolvedValue(undefined);
 });
 
 describe('sendWelcomeFlow — 欢迎 + 首日简报', () => {
@@ -111,6 +120,15 @@ describe('sendWelcomeFlow — 欢迎 + 首日简报', () => {
     expect(
       digestMock.saveRecentResults.mock.invocationCallOrder[0]!,
     ).toBeLessThan(digestMock.markDigestSent.mock.invocationCallOrder[0]!);
+  });
+
+  it('礼包进推送历史：第二天不会把同一批仓库再推一遍', async () => {
+    await sendWelcomeFlow(makeMsg());
+
+    expect(historyMock.recordPush).toHaveBeenCalledWith('alice', [
+      'a/one',
+      'b/two',
+    ]);
   });
 
   it('当日快照可用时走快照构建：礼包多一段概览，且不额外调模型', async () => {

@@ -5,6 +5,7 @@ import {
   saveRecentResults,
 } from '../agent/digest.js';
 import { getDailySnapshot } from '../agent/digest-snapshot.js';
+import { recordPush } from '../agent/push-history.js';
 import { sendWeComText } from './api.js';
 import type { InboundMessage } from './router.js';
 
@@ -72,6 +73,14 @@ export async function sendWelcomeFlow(msg: InboundMessage): Promise<void> {
   } catch (err) {
     // 缓存写失败不能翻转「已送达」：用户在微信里仍然收到了这份简报。
     console.error('first-day digest cache write failed:', err);
+  }
+  // 礼包也算「推过」：否则第二天的定时简报会把同一批仓库再发一遍。
+  // 礼包本身不走任何过滤（新用户从零开始，给满最合适）。
+  if (digest.entries.length > 0) {
+    await recordPush(
+      userId,
+      digest.entries.map((entry) => entry.fullName),
+    );
   }
   try {
     await markDigestSent(userId);

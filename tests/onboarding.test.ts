@@ -41,6 +41,14 @@ vi.mock('../src/agent/digest', async (importOriginal) => {
   return { ...actual, ...digestMock };
 });
 
+// 首日礼包会记一条推送历史（垃圾数据也会进 kv_cache）。本文件只关心
+// onboarding 自己写了什么，推送历史单独在 welcome.test.ts 覆盖。
+vi.mock('../src/agent/push-history', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../src/agent/push-history')>();
+  return { ...actual, recordPush: vi.fn(async () => undefined) };
+});
+
 const dbMock = vi.hoisted(() => ({
   /** select 队列：每次 await select 链弹出一项；Error 实例表示该次查询失败。 */
   selectQueue: [] as unknown[],

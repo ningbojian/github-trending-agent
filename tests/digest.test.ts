@@ -174,6 +174,35 @@ vi.mock('../src/wecom/capacity', () => ({
   refreshWeComMemberCount: capacityMock.refreshWeComMemberCount,
 }));
 
+/**
+ * 口味画像与推送历史：默认「空画像 / 无历史」，既有用例行为不变。
+ * 只替换 I/O 两个函数，纯函数（rankByTaste / pushedRecently / emptySignals）保持真实实现。
+ */
+const tasteMock = vi.hoisted(() => ({ loadUserSignals: vi.fn() }));
+
+vi.mock('../src/agent/taste', async () => {
+  const actual = await vi.importActual<typeof import('../src/agent/taste')>(
+    '../src/agent/taste',
+  );
+  return { ...actual, loadUserSignals: tasteMock.loadUserSignals };
+});
+
+const historyMock = vi.hoisted(() => ({
+  readPushHistory: vi.fn(),
+  recordPush: vi.fn(),
+}));
+
+vi.mock('../src/agent/push-history', async () => {
+  const actual = await vi.importActual<typeof import('../src/agent/push-history')>(
+    '../src/agent/push-history',
+  );
+  return {
+    ...actual,
+    readPushHistory: historyMock.readPushHistory,
+    recordPush: historyMock.recordPush,
+  };
+});
+
 import {
   buildDigestForSubscriber,
   buildDigestFromSnapshot,
@@ -182,11 +211,18 @@ import {
   invalidateRecentResults,
   markDigestSent,
   pushDigests,
+  QUIET_NOTE_AFTER_DAYS,
+  quietNote,
   saveRecentResults,
   shanghaiHHMM,
   shanghaiMinutes,
   shanghaiToday,
 } from '../src/agent/digest';
+import {
+  composeSignals,
+  emptySignals,
+  type UserSignals,
+} from '../src/agent/taste';
 
 type SubscriberRow = typeof subscribers.$inferSelect;
 
@@ -255,6 +291,10 @@ beforeEach(() => {
   summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
   abstractMock.loadAbstractSafe.mockResolvedValue(null);
   apiMock.sendWeComText.mockResolvedValue(undefined);
+  // 默认空画像 + 无历史：既有用例只看「不过滤」的行为。
+  tasteMock.loadUserSignals.mockResolvedValue(emptySignals());
+  historyMock.readPushHistory.mockResolvedValue(null);
+  historyMock.recordPush.mockResolvedValue(undefined);
 });
 
 // ---------------------------------------------------------------------------
@@ -791,7 +831,7 @@ describe('pushDigests — 快照可用时优先且不查 trending 表', () => {
       date: '2026-10-25',
       dataDate: '2026-10-25',
       abstract: '快照里的今日概览。',
-      items: [makeSnapshotItem('s/one')],
+      items: [makeSnapshotItem('s/one', { starsDelta: 240 })],
     });
     dbMock.selectRows.push(makeSub());
     dbMock.claimResults.push([{ id: 1 }]);
@@ -906,12 +946,14 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
     errorSpy.mockRestore();
   });
 
-  it('空榜推送成功 → entries 为空 → 不写缓存（保留用户上一次有效缓存）', async () => {
+  it('空榜 → 不发空简报、不写缓存（静默，且保留用户上一次有效缓存）', async () => {
     dbMock.selectRows.push(makeSub());
 
     const result = await pushDigests();
 
-    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    // 没有历史（部署首日）→ 静默：不自作主张发「今日暂无」。
+    expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
     expect(dbMock.deleteCalls).toHaveLength(0);
     expect(dbMock.insertCalls).toHaveLength(0);
   });
@@ -1448,5 +1490,146 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
 describe('api/cron-push-digest — 函数时长上限', () => {
   it('导出 maxDuration = 300（秒；串行简报超过默认上限会尾部丢消息）', () => {
     expect(maxDuration).toBe(300);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pushDigests —— 只推新的（收藏 / 7 天去重 / 增长门槛 / 静默）
+// ---------------------------------------------------------------------------
+describe('pushDigests — 只推新的', () => {
+  const DAY = 24 * 3600 * 1000;
+
+  function sendHistory(daysAgo: number, items: Array<[string, number]> = []): void {
+    historyMock.readPushHistory.mockResolvedValue({
+      items: items.map(([fullName, days]) => ({
+        fullName,
+        at: new Date(Date.now() - days * DAY).toISOString(),
+      })),
+      lastSentAt: new Date(Date.now() - daysAgo * DAY).toISOString(),
+    });
+  }
+
+  it('已收藏的仓库不再出现在简报里（用户已经知道了）', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'), makeEntry('b/two'));
+    tasteMock.loadUserSignals.mockResolvedValue(
+      composeSignals([{ fullName: 'a/one', language: 'Go', topics: [] }], []),
+    );
+
+    const result = await pushDigests();
+
+    expect(result.sent).toBe(1);
+    const sent = apiMock.sendWeComText.mock.calls[0]?.[1] as string;
+    expect(sent).toContain('b/two');
+    expect(sent).not.toContain('a/one');
+    expect(dbMock.insertCalls[0]?.values).toEqual({
+      wecomUserid: 'alice',
+      results: [{ fullName: 'b/two' }],
+    });
+  });
+
+  it('7 天内推过的被跳过；第 8 天的仍然出现', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/recent'), makeEntry('b/old'));
+    sendHistory(2, [
+      ['a/recent', 2],
+      ['b/old', 9],
+    ]);
+
+    await pushDigests();
+
+    const sent = apiMock.sendWeComText.mock.calls[0]?.[1] as string;
+    expect(sent).toContain('b/old');
+    expect(sent).not.toContain('a/recent');
+  });
+
+  it('增长不够且不是新项目 → 不推（长尾噪音）', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/flat', { starsDelta: 3, isNew: false }));
+    sendHistory(1);
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+  });
+
+  it('全部被过滤 + 3 天内发过 → 零发送、不回滚 claim、不写 search_caches', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'));
+    tasteMock.loadUserSignals.mockResolvedValue(
+      composeSignals([{ fullName: 'a/one', language: 'Go', topics: [] }], []),
+    );
+    sendHistory(1);
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    expect(dbMock.insertCalls).toHaveLength(0);
+    // 静默不是失败：抢占保留，当天不再每小时重试。
+    expect(dbMock.updateCalls.filter((call) => call.kind === 'update')).toHaveLength(0);
+  });
+
+  it(`距上次 ≥${QUIET_NOTE_AFTER_DAYS} 天 → 只发一句补助，不写 search_caches`, async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'));
+    tasteMock.loadUserSignals.mockResolvedValue(
+      composeSignals([{ fullName: 'a/one', language: 'Go', topics: [] }], []),
+    );
+    sendHistory(QUIET_NOTE_AFTER_DAYS);
+
+    const result = await pushDigests();
+
+    expect(result.sent).toBe(1);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText.mock.calls[0]?.[1]).toBe(quietNote([], []));
+    // 补助不是列表：不动「收藏 N」的序号来源。
+    expect(dbMock.insertCalls).toHaveLength(0);
+    // 记账：空列表也刷新 lastSentAt，避免天天补一句。
+    expect(historyMock.recordPush).toHaveBeenCalledWith('alice', [], expect.any(Date));
+  });
+
+  it('静默补助点名被屏蔽的语言（沉默不等于坏了）', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(
+      makeEntry('a/go-one', { language: 'go' }),
+      makeEntry('b/go-two', { language: 'go' }),
+    );
+    tasteMock.loadUserSignals.mockResolvedValue(
+      composeSignals([], [
+        { at: new Date().toISOString(), kind: 'dislike', languages: ['go'], topics: [] },
+        { at: new Date().toISOString(), kind: 'dislike', languages: ['go'], topics: [] },
+      ]),
+    );
+    sendHistory(4);
+
+    await pushDigests();
+
+    const sent = apiMock.sendWeComText.mock.calls[0]?.[1] as string;
+    expect(sent).toContain('已按你的「不感兴趣」屏蔽 go');
+  });
+
+  it('部署首日（从没发过）→ 全被过滤也不凭空问候', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/flat', { starsDelta: 1 }));
+
+    const result = await pushDigests();
+
+    expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+  });
+
+  it('发送成功后 recordPush 记下实际展示的条目（不只是候选池）', async () => {
+    dbMock.selectRows.push(makeSub());
+    dbMock.executeRows.push(makeEntry('a/one'), makeEntry('b/two'));
+
+    await pushDigests();
+
+    expect(historyMock.recordPush).toHaveBeenCalledWith(
+      'alice',
+      ['a/one', 'b/two'],
+      expect.any(Date),
+    );
   });
 });

@@ -426,4 +426,31 @@ describe('selectEntriesForPreferences', () => {
       selectEntriesForPreferences(many, {}, 15),
     ).toHaveLength(15);
   });
+
+  it('accept 省略 / 传 undefined 时行为与现在逐字相同', () => {
+    expect(selectEntriesForPreferences(items, {}, 10, undefined)).toEqual(
+      selectEntriesForPreferences(items, {}, 10),
+    );
+  });
+
+  it('accept 谓词在 slice 之前生效：剔除后仍凑满条数', () => {
+    const picked = selectEntriesForPreferences(
+      items,
+      { digestCount: 2 },
+      10,
+      (entry) => !entry.fullName.startsWith('a/') && !entry.fullName.startsWith('b/'),
+    );
+    // 若先 slice(0,2) 再过滤，这里只剩 0 条。
+    expect(picked.map((entry) => entry.fullName)).toEqual(['c/rust-ai', 'd/other']);
+  });
+
+  it('accept 在语言过滤与关键词排序之后生效（顺序不变）', () => {
+    const picked = selectEntriesForPreferences(
+      items,
+      { languages: ['python', 'rust', 'go'], keywords: 'ai' },
+      10,
+      (entry) => entry.language !== 'go',
+    );
+    expect(picked.map((entry) => entry.fullName)).toEqual(['a/ai-one', 'c/rust-ai']);
+  });
 });

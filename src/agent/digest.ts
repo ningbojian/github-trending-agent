@@ -5,12 +5,20 @@ import { note, traceError, withTrace } from '../obs/trace.js';
 import { sendWeComText } from '../wecom/api.js';
 import { formatEntryLine } from '../wecom/text.js';
 import { loadAbstractSafe } from './abstract.js';
+import { applyHardFilters, passesGrowth } from './digest-filter.js';
 import {
   getDailySnapshot,
   selectEntriesForPreferences,
   type DigestSnapshot,
+  type DigestSnapshotItem,
 } from './digest-snapshot.js';
+import {
+  pushedRecently,
+  readPushHistory,
+  recordPush,
+} from './push-history.js';
 import { loadRepoSummaries } from './repo-summary.js';
+import { loadUserSignals, rankByTaste } from './taste.js';
 import { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
 
 export { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
@@ -47,11 +55,31 @@ const EMPTY_NOTICE = '今日暂无符合条件的热榜项目。';
 export const DIGEST_FOOTER =
   '💡 回复「收藏 N」收藏任意一条；「感兴趣 / 不感兴趣」调整口味；发「帮助」查看全部指令';
 
+/** 连续这么多天没有值得推的项目时，补一句「还在，只是没新东西」。 */
+export const QUIET_NOTE_AFTER_DAYS = 3;
+
+const DAY_MS = 24 * 3600 * 1000;
+
+/**
+ * 静默补助：沉默是正确的，但要能被理解成「今天没新东西」而不是「坏了」。
+ * 被「不感兴趣」屏蔽时点名原因；设置了语言偏好时说明当前只看哪些。
+ */
+export function quietNote(languages: string[], suppressedHit: string[]): string {
+  let text = '最近没有明显增长的新项目，有值得看的会第一时间推给你。';
+  if (suppressedHit.length > 0) {
+    text += `（已按你的「不感兴趣」屏蔽 ${suppressedHit.join('、')}）`;
+  } else if (languages.length > 0) {
+    text += `（当前只看 ${languages.join('/')}，发「订阅 …」可调整）`;
+  }
+  return text;
+}
+
 /** 简报单条：join 后的仓库 + 热榜快照字段。 */
 interface DigestEntry {
   fullName: string;
   description: string | null;
   topics: string[];
+  language: string | null;
   stars: number;
   starsDelta: number;
   isNew: boolean;
@@ -102,6 +130,7 @@ function composeTopSql(languages: string[]): SQL {
         ${trendingEntries.fullName} as ${sql.identifier('fullName')},
         ${repos.description} as ${sql.identifier('description')},
         ${repos.topics} as ${sql.identifier('topics')},
+        ${repos.language} as ${sql.identifier('language')},
         ${repos.stars} as ${sql.identifier('stars')},
         ${repos.htmlUrl} as ${sql.identifier('htmlUrl')},
         ${trendingEntries.starsDelta} as ${sql.identifier('starsDelta')},
@@ -132,6 +161,7 @@ async function fetchTopEntries(languages: string[]): Promise<DigestEntry[]> {
       fullName,
       description: row.description == null ? null : String(row.description),
       topics: Array.isArray(row.topics) ? row.topics.map((t) => String(t)) : [],
+      language: row.language == null ? null : String(row.language),
       stars: Number(row.stars),
       starsDelta: Number(row.starsDelta),
       isNew: Boolean(row.isNew),
@@ -313,12 +343,17 @@ export async function buildDigestWithEntries(
     };
   },
   now: Date = new Date(),
+  accept?: (entry: DigestEntry) => boolean,
 ): Promise<{ content: string; entries: { fullName: string }[] }> {
   const { languages, keywords, digestCount } = normalizePreferences(
     sub.preferences,
   );
   const pool = await fetchTopEntries(languages);
-  const shownEntries = rankByPreferences(pool, keywords).slice(0, digestCount);
+  const ranked = rankByPreferences(pool, keywords);
+  const shownEntries = (accept === undefined ? ranked : ranked.filter(accept)).slice(
+    0,
+    digestCount,
+  );
   const summaries = await loadSummariesSafe(shownEntries);
   const lines = shownEntries.map((entry, index) =>
     formatEntryLine(index + 1, entry, summaries.get(entry.fullName)),
@@ -349,15 +384,21 @@ export async function buildDigestFromSnapshot(
     };
   },
   snapshot: DigestSnapshot,
+  accept?: (item: DigestSnapshotItem) => boolean,
 ): Promise<{ content: string; entries: { fullName: string }[] }> {
   const { languages, keywords, digestCount } = normalizePreferences(
     sub.preferences,
   );
-  const selected = selectEntriesForPreferences(snapshot.items, {
-    languages,
-    keywords,
-    digestCount,
-  });
+  const selected = selectEntriesForPreferences(
+    snapshot.items,
+    {
+      languages,
+      keywords,
+      digestCount,
+    },
+    10,
+    accept,
+  );
   const lines = selected.map((item, index) =>
     formatEntryLine(index + 1, item, item.summary),
   );
@@ -579,12 +620,80 @@ export async function pushDigests(
       // 每个整点都会跑一遍，全记下来只会把真正有用的记录淹掉。
       await withTrace({ kind: 'push', userid: sub.wecomUserid }, async () => {
       note('digest-source', snapshot ? 'snapshot' : 'rebuild');
-      const { content, entries } = snapshot
-        ? await buildDigestFromSnapshot(sub, snapshot)
-        : await buildDigestWithEntries(sub, now);
+      const signals = await loadUserSignals(sub.wecomUserid);
+      const history = await readPushHistory(sub.wecomUserid, now);
+      note(
+        'signals',
+        `收藏 ${signals.starred.size} / 屏蔽 ${
+          signals.suppressed.size > 0 ? [...signals.suppressed].join(',') : '无'
+        }`,
+      );
+
+      // 同一个谓词，两条路径共用：要么作用在预筛过的 pool 上，要么交给
+      // buildDigestWithEntries 逐条判定（退化路径自己查库，拿不到 pool）。
+      const accept = (item: {
+        fullName: string;
+        language: string | null;
+        starsDelta: number;
+        isNew: boolean;
+      }): boolean => {
+        const language = (item.language ?? '').trim().toLowerCase();
+        return (
+          passesGrowth(item) &&
+          !signals.starred.has(item.fullName) &&
+          (language === '' || !signals.suppressed.has(language)) &&
+          !pushedRecently(history, item.fullName, now)
+        );
+      };
+
+      let built: { content: string; entries: { fullName: string }[] };
+      if (snapshot) {
+        const pool = rankByTaste(
+          applyHardFilters(snapshot.items, { signals, history, now }),
+          signals,
+        );
+        note('dedup', `过滤前 ${snapshot.items.length} → 剩下 ${pool.length}`);
+        built = await buildDigestFromSnapshot(sub, { ...snapshot, items: pool }, accept);
+      } else {
+        built = await buildDigestWithEntries(sub, now, accept);
+      }
+      const { content, entries } = built;
+
+      if (entries.length === 0) {
+        note('digest-empty', '没有通过硬过滤 + 增长门槛的条目');
+        // 静默分支不写 search_caches（「收藏 N」仍指向上一份真实列表），
+        // 也不回滚 claim（当天不再每小时重试）。
+        const lastSentAt = history?.lastSentAt ?? null;
+        const quietDays =
+          lastSentAt === null ? null : (now.getTime() - Date.parse(lastSentAt)) / DAY_MS;
+        if (
+          quietDays !== null &&
+          Number.isFinite(quietDays) &&
+          quietDays >= QUIET_NOTE_AFTER_DAYS
+        ) {
+          const { languages } = normalizePreferences(sub.preferences);
+          await sendWeComText(
+            sub.wecomUserid,
+            quietNote(languages, [...signals.suppressed]),
+          );
+          note('quiet', `距上次 ${Math.floor(quietDays)} 天，补一句`);
+          sent += 1;
+          await recordPush(sub.wecomUserid, [], now);
+        } else {
+          note('quiet', '静默（近期已发过或从未发过）');
+          skipped += 1;
+        }
+        return;
+      }
+
       await sendWeComText(sub.wecomUserid, content);
       note('send', `ok ${Buffer.byteLength(content, 'utf8')} 字节`);
       sent += 1;
+      await recordPush(
+        sub.wecomUserid,
+        entries.map((entry) => entry.fullName),
+        now,
+      );
       try {
         await saveRecentResults(sub.wecomUserid, entries);
       } catch (err) {

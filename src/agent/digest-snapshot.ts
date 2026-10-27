@@ -287,13 +287,15 @@ function matchesKeyword(item: DigestSnapshotItem, keyword: string): boolean {
 }
 
 /**
- * 纯函数选择层：语言过滤 → 关键词排序（不丢弃条目）→ 按条数截取。
+ * 纯函数选择层：语言过滤 → 关键词排序（不丢弃条目）→ 可选 accept 过滤 → 按条数截取。
  * 企微与邮件调用同一个函数，没有任何按用户的模型调用。
+ * accept 供推送侧剔除「已收藏 / 7 天内推过 / 增长不够」的条目；邮件通道不传，行为逐字不变。
  */
 export function selectEntriesForPreferences(
   items: DigestSnapshotItem[],
   preferences: { languages?: unknown; keywords?: unknown; digestCount?: unknown },
   defaultCount = 10,
+  accept?: (item: DigestSnapshotItem) => boolean,
 ): DigestSnapshotItem[] {
   const languages = normalizeList(preferences.languages);
   const keywords = normalizeKeywords(preferences.keywords);
@@ -316,5 +318,8 @@ export function selectEntriesForPreferences(
             Number(keywords.some((keyword) => matchesKeyword(a, keyword))),
         );
 
-  return ranked.slice(0, digestCount);
+  // accept 在 slice 之前：在用户自己的语言池里剔除不合格条目后仍能凑满条数。
+  const accepted = accept === undefined ? ranked : ranked.filter(accept);
+
+  return accepted.slice(0, digestCount);
 }

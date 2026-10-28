@@ -518,3 +518,40 @@ describe('loadRepoShortSummaries — 卡片标题专用短句', () => {
     expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
   });
 });
+
+describe('loadRepoShortSummaries — 分批', () => {
+  it('超过单批上限时拆成多次调用（一次塞太多会超时）', async () => {
+    const items = Array.from({ length: 25 }, (_, i) => ({
+      fullName: `a/r${i}`,
+      zh: `简介${i}`,
+    }));
+    llmMock.generateObjectSafe.mockImplementation(async (_schema, prompt: string) => {
+      const names = [...prompt.matchAll(/- (a\/r\d+)：/g)].map((m) => m[1]!);
+      return { summaries: names.map((fullName) => ({ fullName, short: '短句' })) };
+    });
+
+    const result = await loadRepoShortSummaries(items);
+
+    expect(result.size).toBe(25);
+    expect(llmMock.generateObjectSafe.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('某一批失败不影响其他批的结果', async () => {
+    const items = Array.from({ length: 20 }, (_, i) => ({
+      fullName: `a/r${i}`,
+      zh: `简介${i}`,
+    }));
+    let call = 0;
+    llmMock.generateObjectSafe.mockImplementation(async (_schema, prompt: string) => {
+      call += 1;
+      if (call === 1) throw new Error('timeout');
+      const names = [...prompt.matchAll(/- (a\/r\d+)：/g)].map((m) => m[1]!);
+      return { summaries: names.map((fullName) => ({ fullName, short: '短句' })) };
+    });
+
+    const result = await loadRepoShortSummaries(items);
+
+    expect(result.size).toBeGreaterThan(0);
+    expect(result.size).toBeLessThan(20);
+  });
+});

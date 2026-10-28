@@ -22,7 +22,7 @@ import { resolveTileImage } from '../src/wecom/tile-image.js';
  * 鉴权复用 CRON_SECRET（`?secret=` 或 `Authorization: Bearer`）。
  */
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 interface ProbeRequest {
   method?: string;

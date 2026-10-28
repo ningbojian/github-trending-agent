@@ -5,6 +5,7 @@ import {
   HOT_TOP_N,
   NEWS_MAX_ARTICLES,
   buildNewsArticles,
+  tileSlug,
   type NewsEntry,
 } from '../src/wecom/news';
 
@@ -62,12 +63,20 @@ describe('news 卡片图片', () => {
     expect(first.picurl).toBe('https://opengraph.githubassets.com/1/owner0/repo0');
   });
 
-  it('其余用同一域名下的 /api/tile，绝不让企微直连 GitHub', () => {
+  it('其余用静态语言色块（Vercel 静态 CDN，不经过函数）', () => {
     const articles = buildNewsArticles(entries(3), { baseUrl: 'https://ghtrending.cyou/' });
-    expect(articles[1].picurl).toBe(
-      'https://ghtrending.cyou/api/tile?repo=owner1%2Frepo1&lang=Rust',
-    );
-    expect(articles[2].picurl).toContain('https://ghtrending.cyou/api/tile');
+    expect(articles[1].picurl).toBe('https://ghtrending.cyou/tiles/rust.png');
+    expect(articles[2].picurl).toBe('https://ghtrending.cyou/tiles/rust.png');
+  });
+
+  it('语言名映射到静态文件名：C++ → cpp、C# → csharp、Jupyter Notebook → jupyter', () => {
+    expect(tileSlug('C++')).toBe('cpp');
+    expect(tileSlug('c#')).toBe('csharp');
+    expect(tileSlug('Jupyter Notebook')).toBe('jupyter');
+    expect(tileSlug('Rust')).toBe('rust');
+    expect(tileSlug('TypeScript')).toBe('typescript');
+    expect(tileSlug(null)).toBe('default');
+    expect(tileSlug('Brainfuck')).toBe('default');
   });
 });
 

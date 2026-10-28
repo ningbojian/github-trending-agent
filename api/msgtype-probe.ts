@@ -5,7 +5,6 @@ import { db } from '../src/db/client.js';
 import { subscribers } from '../src/db/schema.js';
 import { env } from '../src/config.js';
 import { sendWeComNews } from '../src/wecom/api.js';
-import { resolveTileImage } from '../src/wecom/tile-image.js';
 
 /**
  * 【临时预览端点，测完即删】把**生产同一套** news 渲染结果发给指定用户，
@@ -56,24 +55,6 @@ export default async function handler(
   req: ProbeRequest,
   res: ProbeResponse,
 ): Promise<void> {
-  // 图片模式必须**先于鉴权**：企微抓 picurl 不会带 secret，
-  // 放在鉴权后面会让所有缩略图 401（预览时表现为全部空白）。
-  // 生产 /api/tile 本来就是公开的，这里保持一致。
-  if (queryParam(req, 'tile') === '1') {
-    const image = await resolveTileImage(
-      queryParam(req, 'repo'),
-      queryParam(req, 'lang'),
-    );
-    if (image === null) {
-      res.status(400).send('bad repo');
-      return;
-    }
-    res.setHeader('content-type', image.contentType);
-    res.setHeader('cache-control', image.cache);
-    res.status(200).send(image.bytes);
-    return;
-  }
-
   const expected = env.CRON_SECRET ?? '';
   const provided = queryParam(req, 'secret') || bearerToken(req);
   if (expected === '' || provided !== expected) {
@@ -115,25 +96,10 @@ export default async function handler(
     { baseUrl },
   );
 
-  // 预览期间 /api/tile 还没部署：把第 2 篇起的图片指回本端点。
-  // `v=` 是 cache-buster：上一轮缩略图 401 的 URL 很可能被微信缓存了失败结果，
-  // 换 URL 才能验证「内容没问题，只是缓存」。
-  const version = String(Date.now());
-  const tilePrefix = `${baseUrl}/api/tile?`;
-  const probePrefix = `${baseUrl}/api/msgtype-probe?tile=1&`;
-  const preview = articles.map((article, index) =>
-    index === 0
-      ? article
-      : {
-          ...article,
-          picurl: `${article.picurl.replace(tilePrefix, probePrefix)}&v=${version}`,
-        },
-  );
-
-  // 服务端预热：先把每张图抓一遍（并行），让 CDN 命中；微信稍后抓图就秒回。
-  // 同时把状态码回给调用方——若这里就失败，问题在端点而不是微信。
+  // 服务端预热：确认静态色块可访问。微信是**打开会话时**才去抓图，
+  // 只有静态 CDN 才能保证秒开；这里顺便把状态码回给调用方排查。
   const warm = await Promise.all(
-    preview.slice(1).map(async (article) => {
+    articles.slice(1).map(async (article) => {
       try {
         const response = await fetch(article.picurl, {
           signal: AbortSignal.timeout(5000),
@@ -153,15 +119,15 @@ export default async function handler(
     }),
   );
 
-  await sendWeComNews(userid, preview);
+  await sendWeComNews(userid, articles);
 
   sendJson(res, 200, {
     userid,
     date: snapshot.date,
-    sent: preview.length,
+    sent: articles.length,
     entries,
     warm,
-    titles: preview.map((article) => ({
+    titles: articles.map((article) => ({
       title: article.title,
       bytes: Buffer.byteLength(article.title, 'utf8'),
       picurl: article.picurl,

@@ -4,11 +4,5 @@
       "path": "/api/cron-push-digest",
       "schedule": "0 1 * * *"
     }
-  ],
-  "rewrites": [
-    {
-      "source": "/api/avatar/:owner",
-      "destination": "https://avatars.githubusercontent.com/:owner"
-    }
   ]
 }

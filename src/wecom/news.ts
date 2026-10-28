@@ -7,8 +7,9 @@ import { displayWidth } from '../text-width.js';
  * - 一条 news 最多 8 篇，第 9 篇会被企微以 `45008 article size out of limit` 拒绝；
  * - 多篇布局里**只有标题可见**，`description` 不显示；
  * - 标题在客户端约 10–12 个汉字处被裁，尾部内容用户永远看不到；
- * - 第 2 篇之后是方形缩略图，第三方图床会被企微随机丢弃（灰头像），
- *   所以图片统一走我们自己的 `/api/tile`。
+ * - 第 2 篇之后是方形缩略图。企微会**打开会话时**才去抓图，抓图超时就是灰的；
+ *   实测动态函数（哪怕预热 CDN）仍会随机失败，所以缩略图必须是**静态文件**，
+ *   由 Vercel 静态 CDN 直接返回（`tiles/<language>.png`）。
  *
  * 标题的信息顺序因此是硬要求：仓库名必须在最前（最先可见），
  * 语言标签与短简介放在尾部（可被裁剪）。
@@ -136,11 +137,53 @@ function buildTitle(index: number, entry: NewsEntry, hot: boolean): string {
   return Buffer.byteLength(full, 'utf8') <= TITLE_MAX_BYTES ? full : head;
 }
 
+/** `tiles/` 下实际存在的色块文件名（生成脚本见 docs/deploy.md）。 */
+const TILE_SLUGS = new Set([
+  'python',
+  'typescript',
+  'javascript',
+  'go',
+  'rust',
+  'java',
+  'c',
+  'cpp',
+  'csharp',
+  'php',
+  'ruby',
+  'swift',
+  'kotlin',
+  'dart',
+  'shell',
+  'html',
+  'css',
+  'vue',
+  'lua',
+  'jupyter',
+  'dockerfile',
+  'makefile',
+  'scss',
+  'powershell',
+  'default',
+]);
+
+/** GitHub 语言名 → 文件名（`C++` 不能直接做文件名）。 */
+const TILE_SLUG_ALIASES: Record<string, string> = {
+  'c++': 'cpp',
+  'c#': 'csharp',
+  'jupyter notebook': 'jupyter',
+};
+
+/** 语言 → 静态色块 slug；未知语言/没有语言一律 default。 */
+export function tileSlug(language: string | null | undefined): string {
+  const key = (language ?? '').trim().toLowerCase();
+  if (key === '') return 'default';
+  const slug = TILE_SLUG_ALIASES[key] ?? key;
+  return TILE_SLUGS.has(slug) ? slug : 'default';
+}
+
 function tileUrl(baseUrl: string, entry: NewsEntry): string {
   const base = baseUrl.replace(/\/+$/, '');
-  const language = entry.language?.trim();
-  const query = `repo=${encodeURIComponent(entry.fullName)}${language ? `&lang=${encodeURIComponent(language)}` : ''}`;
-  return `${base}/api/tile?${query}`;
+  return `${base}/tiles/${tileSlug(entry.language)}.png`;
 }
 
 function ogUrl(fullName: string): string {

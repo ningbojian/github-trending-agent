@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
  * 被误删或改了时区都不会报错，只会安静地晚几个小时推送。
  * `0 1 * * *` 是 UTC，= 北京时间 09:00。
  */
-describe('Vercel Cron', () => {
+describe('Vercel 配置', () => {
   it('每天 01:00 UTC（北京 09:00）触发一次简报推送', () => {
     const config = JSON.parse(
       readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'),
@@ -20,14 +20,12 @@ describe('Vercel Cron', () => {
     ]);
   });
 
-  it('头像走同域 rewrite，不新增 Serverless Function（Hobby 上限 12 个）', () => {
-    const config = JSON.parse(
-      readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'),
-    ) as { rewrites?: Array<{ source: string; destination: string }> };
-
-    expect(config.rewrites).toContainEqual({
-      source: '/api/avatar/:owner',
-      destination: 'https://avatars.githubusercontent.com/:owner',
-    });
+  it('Serverless Function 不超过 12 个——Hobby 套餐的硬上限', () => {
+    // 超过 12 个的部署会整体失败（2026-10-28 加第 13 个函数时连挂三次，
+    // 错误在 Vercel 日志里，GitHub 状态只显示 Deployment has failed）。
+    const files = readdirSync(new URL('../api', import.meta.url)).filter((name) =>
+      name.endsWith('.ts'),
+    );
+    expect(files.length).toBeLessThanOrEqual(12);
   });
 });

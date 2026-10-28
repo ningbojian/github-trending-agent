@@ -1,5 +1,6 @@
-import { pushDigests } from '../src/agent/digest.js';
+import { PUSH_BUDGET_MS, pushDigests } from '../src/agent/digest.js';
 import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
+import { getDailyObservations } from '../src/agent/observation.js';
 import { pushWeeklyReviews } from '../src/agent/weekly-review.js';
 import { pushEmailDigests } from '../src/email/push.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
@@ -59,11 +60,27 @@ export default async function handler(
   }
 
   try {
+    const startedAt = Date.now();
     // 每小时顺带刷新成员数缓存（落地页名额门控用；失败不影响推送）。
     await refreshWeComMemberCount();
     // 当天快照只构建一次：企微与邮件两个渠道共用同一轮模型产出。
     const snapshot = await getDailySnapshot();
-    const wecom = await pushDigests();
+    // 观察：快照之后生成一次（全局共享）。快照已经耗掉太多时间就跳过，
+    // 保证简报一定有预算；观察失败绝不影响简报。
+    let observations: Awaited<ReturnType<typeof getDailyObservations>> = null;
+    if (Date.now() - startedAt < 30_000) {
+      try {
+        observations = await getDailyObservations(snapshot);
+      } catch (err) {
+        console.error('[cron] observations failed:', err);
+        observations = null;
+      }
+    }
+    const remaining = 285_000 - (Date.now() - startedAt);
+    const wecom = await pushDigests(undefined, {
+      observations,
+      budgetMs: Math.max(30_000, Math.min(PUSH_BUDGET_MS, remaining)),
+    });
     // cron 没有用户请求头，显式把站点根地址传进邮件推送（否则链接会回落 localhost）。
     const email = await pushEmailDigests({
       snapshot,

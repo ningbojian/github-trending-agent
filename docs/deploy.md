@@ -287,7 +287,8 @@ curl -i https://<domain>/api/oauth-github
   1. 「每日热榜管线」抓取 / 补全两步全绿；「简报小时触发」的触发步骤 curl 返回 `{"sent":N,"skipped":M,"failed":0}`（`failed` 必须为 0；`skipped` 是未到推送时间 / 当日已发 / 未满间隔的正常跳过）。
   2. Neon：`select count(*) from trending_entries where date = current_date;` 大于 0（20 个榜单：总榜 + `SCRAPER_LANGUAGES` 的 19 个语言榜）；`repos.topics` 有非空数组（enrich 生效）。
   3. 微信：`active = true` 的订阅者收到**每日简报 news 卡片**（最多 8 篇；仅首篇 OG 大图、其余不发图；标题为 `🔥/🆕 序号. owner/repo ★星标 (+增量)｜≤18 字短简介`，🔥 按增长率（+增量/总星标 ≥5%）给最快的 1–2 条；条数按「条数 N」设置、默认 8；不存在半句简介——短句由模型单独生成，拿不到就省略。news 发送失败时自动回退原纯文本简报，不会重复发送）。
-  4. Vercel Logs：手动触发的 `/api/cron-push-digest` 一次 200 记录。
+  4. 今日观察：如果当天有通过 7 天去重的新主题，简报**之前**会先收到一条「今日观察（MM-DD）」短文本（2–3 行，每行带 2–3 个仓库证据）；没有新主题则只有简报。Neon 可查 `select key from kv_cache where key like 'observation:v1:%' order by key desc limit 3;`；同一天重复触发不会重复发（标记 `observation-sent:v1:<date>:<userid>`）。观察生成/发送失败只记 trace，不影响简报。
+  5. Vercel Logs：手动触发的 `/api/cron-push-digest` 一次 200 记录。
 
 ### ② 自然语言搜索 → 纯文本列表
 

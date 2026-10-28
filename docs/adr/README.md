@@ -10,4 +10,5 @@
 | [0004](0004-kv-cache-to-tables.md) | kv_cache 只放短命键值 | 运行日志进 `agent_runs` / `tool_calls`，kv 保留为降级 |
 | [0005](0005-rule-first-routing.md) | 规则前置 | 常见指令零模型，模型只在拿不准时参与 |
 | [0006](0006-eval-harness.md) | 金标评测与门禁 | 规则/提示词改动可回放，改坏会让 CI 红 |
-| [0007](0007-wecom-news-digest.md) | 简报用 news 卡片 | 一条 8 篇封顶，首篇 OG、其余自建 tile，纯文本只做兜底 |
+| [0007](0007-wecom-news-digest.md) | 简报用 news 卡片 | 一条 8 篇封顶，首篇 OG、其余文字卡片，纯文本只做兜底 |
+| [0008](0008-daily-observations.md) | 今日观察 | 事实由 SQL 算，7 天去重，没有新主题就不发 |

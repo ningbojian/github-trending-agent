@@ -11,7 +11,11 @@ const weeklyMock = vi.hoisted(() => ({
 }));
 
 vi.mock('../src/agent/digest', () => ({
+  PUSH_BUDGET_MS: 240_000,
   pushDigests: async () => ({ sent: 3, skipped: 4, failed: 0 }),
+}));
+vi.mock('../src/agent/observation', () => ({
+  getDailyObservations: async () => null,
 }));
 vi.mock('../src/agent/digest-snapshot', () => ({
   getDailySnapshot: async () => ({ date: '2026-10-26', items: [] }),

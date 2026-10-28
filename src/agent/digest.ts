@@ -9,6 +9,12 @@ import { formatEntryLine } from '../wecom/text.js';
 import { loadAbstractSafe } from './abstract.js';
 import { applyHardFilters, passesGrowth } from './digest-filter.js';
 import {
+  getDailyObservations,
+  markObservationSent,
+  wasObservationSent,
+  type DailyObservations,
+} from './observation.js';
+import {
   getDailySnapshot,
   selectEntriesForPreferences,
   type DigestSnapshot,
@@ -475,6 +481,11 @@ export interface PushDigestsOptions {
   budgetMs?: number;
   /** 注入时钟（单测用）。 */
   clock?: () => number;
+  /**
+   * 当天观察；未传则在本轮开始时生成一次（全局共享）。
+   * `null` 表示当天不发观察（无新主题/历史读取失败/模型失败）。
+   */
+  observations?: DailyObservations | null;
 }
 
 /** 默认 240 秒：给 maxDuration=300 留 60 秒余量。 */
@@ -602,6 +613,18 @@ export async function pushDigests(
 
   // 当日快照只构建/读取一次，两个渠道共用；失败返回 null → 逐订阅者回退。
   const snapshot = await getDailySnapshot(now);
+  // 今日观察全局共享一次；失败绝不影响简报。
+  let observations: DailyObservations | null = null;
+  if (options.observations !== undefined) {
+    observations = options.observations;
+  } else {
+    try {
+      observations = await getDailyObservations(snapshot, now);
+    } catch (err) {
+      console.error('[digest] observations failed:', err instanceof Error ? err.message : err);
+      observations = null;
+    }
+  }
 
   const nowMinutes = shanghaiMinutes(now);
   const today = shanghaiToday(now);
@@ -747,6 +770,29 @@ export async function pushDigests(
           skipped += 1;
         }
         return;
+      }
+
+      // 今日观察：独立一条文本，先于简报；每人每天至多一次。
+      // 标记在发送前写入（at-most-once）：发送失败宁可丢这一次，也绝不重复。
+      if (observations?.message && entries.length > 0) {
+        try {
+          const already = await wasObservationSent(
+            sub.wecomUserid,
+            observations.date,
+            now,
+          );
+          if (!already) {
+            await markObservationSent(sub.wecomUserid, observations.date, now);
+            await sendWeComText(sub.wecomUserid, observations.message);
+            note('observation-send', 'ok');
+          }
+        } catch (err) {
+          note(
+            'observation-send',
+            `failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          // 吞掉：观察失败绝不影响简报。
+        }
       }
 
       if (articles !== null && newsSource !== null) {

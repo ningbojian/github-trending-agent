@@ -380,23 +380,31 @@ export async function loadRepoShortSummaries(
   // 没配 Key 的互动路径：只读缓存，不调模型。
   if (choice.kind === 'none') return result;
 
-  // 分批：一次塞 60 条会让 prompt/输出过大，实测网关直接超时；
-  // 单批失败只影响这一批，其余批照常（快照整体不能因短句失败而失败）。
-  const writes: CacheWrite[] = [];
+  // 分批**并行**：一次塞 60 条会让 prompt/输出过大直接超时；串行 6 批又会
+  // 超过 Cloudflare 的 100 秒源站超时（实测 524）。每批独立，单批失败只影响自己。
+  const batches: ShortSummaryInput[][] = [];
   for (let start = 0; start < misses.length; start += SHORT_BATCH_SIZE) {
-    const batch = misses.slice(start, start + SHORT_BATCH_SIZE);
-    let out: z.infer<typeof shortSchema> | null = null;
-    try {
-      const prompt = buildShortPrompt(batch);
-      out =
-        choice.kind === 'user'
-          ? await generateObjectSafe(shortSchema, prompt, choice.config)
-          : await generateObjectSafe(shortSchema, prompt);
-    } catch {
-      out = null;
-    }
-    if (out === null) continue;
+    batches.push(misses.slice(start, start + SHORT_BATCH_SIZE));
+  }
 
+  const writes: CacheWrite[] = [];
+  const finished = await Promise.all(
+    batches.map(async (batch) => {
+      try {
+        const prompt = buildShortPrompt(batch);
+        const out =
+          choice.kind === 'user'
+            ? await generateObjectSafe(shortSchema, prompt, choice.config)
+            : await generateObjectSafe(shortSchema, prompt);
+        return { batch, out };
+      } catch {
+        return { batch, out: null };
+      }
+    }),
+  );
+
+  for (const { batch, out } of finished) {
+    if (out === null) continue;
     const wanted = new Map(batch.map((item) => [item.fullName, item]));
     for (const entry of out.summaries) {
       const source = wanted.get(entry.fullName);

@@ -263,6 +263,19 @@ describe('pushEmailDigests — gates', () => {
     expect(dbState.updateCalls).toHaveLength(0);
   });
 
+  it('sends the next morning even when yesterday’s push was late (calendar days, not 24h)', async () => {
+    dbState.emailRows = [
+      emailRow({
+        // 昨天 21:00（北京）发过 → 今天 09:30 只隔 12.5 小时，仍应发。
+        // 精确 24 小时会让这次被跳过，之后每天的发送时间再也不会回到 09:00。
+        lastSentAt: new Date('2026-10-24T13:00:00Z'),
+      }),
+    ];
+    const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(mailState.sendCalls).toHaveLength(1);
+  });
+
   it('skips until the interval has elapsed', async () => {
     dbState.emailRows = [
       emailRow({

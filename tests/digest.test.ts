@@ -1326,7 +1326,7 @@ describe('pushDigests — 推送时间/间隔门控与抢占', () => {
     errorSpy.mockRestore();
   });
 
-  it('抢占 SQL 形状：AT TIME ZONE Asia/Shanghai 日期比较 + make_interval(days => intervalDays)', async () => {
+  it('抢占 SQL 形状：北京日期差 >= intervalDays（不再用 now() - make_interval）', async () => {
     dbMock.selectRows.push(
       subWith({ languages: [], keywords: [], pushTime: '00:00', intervalDays: 3 }, { id: 7 }),
     );
@@ -1337,7 +1337,6 @@ describe('pushDigests — 推送时间/间隔门控与抢占', () => {
     expect(claim).toBeDefined();
     const compiled = compileQuery(claim?.condition);
     expect(compiled.sql).toContain("AT TIME ZONE 'Asia/Shanghai'");
-    expect(compiled.sql).toContain('make_interval');
     expect(compiled.sql).toContain('"subscribers"."last_digest_at"');
     expect(compiled.sql).toContain('"subscribers"."active"');
     expect(compiled.params).toContain(7); // id
@@ -1349,6 +1348,12 @@ describe('pushDigests — 推送时间/间隔门控与抢占', () => {
       `"subscribers"."last_digest_at" AT TIME ZONE 'Asia/Shanghai')::date < (now() AT TIME ZONE 'Asia/Shanghai')::date`,
     );
     expect(normalized).not.toContain(')::date > (');
+    // 间隔按日历日：date - date → integer，与 JS 门控同语义。
+    // mutation：换回 `last_digest_at <= now() - make_interval(days => N)` 时
+    // 下面两条变红——那正是「一次 tick 延迟让推送时间永久后移」的成因。
+    expect(normalized).not.toContain('make_interval');
+    expect(normalized).toContain(')::date - (');
+    expect(normalized).toContain(')::date) >= $');
     // SET last_digest_at = now()（DB 时钟，与条件里的 now() 同源）
     const setValue = compileQuery(claim?.values.lastDigestAt);
     expect(setValue.sql).toContain('now()');
@@ -1384,20 +1389,116 @@ describe('pushDigests — 推送时间/间隔门控与抢占', () => {
     expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
   });
 
-  it('intervalDays 非法（0）→ 按默认 1 天门控：未满 24 小时不发', async () => {
+  it('intervalDays 非法（0）→ 按默认 1 天：跨天即发（不是等满 24 小时）', async () => {
     dbMock.selectRows.push(
       subWith(
         { languages: [], keywords: [], pushTime: '00:00', intervalDays: 0 },
         { lastDigestAt: new Date('2026-10-22T02:00:00Z') }, // 北京 10-22 10:00
       ),
     );
+    dbMock.executeRows.push(makeEntry('a/one'));
 
-    // 北京 10-23 09:00：跨日但距上次不足 24h → 按 1 天门控不发
-    // （若 0 被当作 0 天间隔则会误发）。
+    // 北京 10-23 09:00：跨了一个日历日 → 按默认 1 天发。
+    // （若 0 被当作 0 天间隔，同日就发，由「同一天不发两条」那条用例守住。）
     const result = await pushDigests(new Date('2026-10-23T01:00:00Z'));
 
-    expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
-    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // 间隔按「北京日历日」判定，不是精确 24 小时。
+  //
+  // 为什么：claim 把 last_digest_at 写成**实际发送时刻**。若再要求「距上次满
+  // 24 小时」，任何一次 tick 延迟（GitHub Actions 实测晚十几分钟）都会让次日
+  // 09:17 因为差几分钟被跳过，实际推送时间从此永久后移一小时——而且再也回不去。
+  // 用户选的是「每天 09:00 左右收到」，不是「距上次满 24 小时」。
+  // -------------------------------------------------------------------------
+  describe('间隔按日历日而不是精确 24 小时', () => {
+    it('昨天 21:00 发过 → 今天 09:17 照常发（不足 24 小时也要发）', async () => {
+      dbMock.selectRows.push(
+        subWith(
+          { languages: [], keywords: [], pushTime: '09:00' },
+          { lastDigestAt: new Date('2026-10-22T13:00:00Z') }, // 北京 10-22 21:00
+        ),
+      );
+      dbMock.executeRows.push(makeEntry('a/one'));
+
+      // 北京 10-23 09:17：距上次只有 12 小时 17 分。
+      const result = await pushDigests(new Date('2026-10-23T01:17:00Z'));
+
+      expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+      expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    });
+
+    it('昨天 23:59 发过 → 今天 00:05 照常发（跨日只差 6 分钟）', async () => {
+      dbMock.selectRows.push(
+        subWith(
+          { languages: [], keywords: [], pushTime: '00:00' },
+          { lastDigestAt: new Date('2026-10-22T15:59:00Z') }, // 北京 10-22 23:59
+        ),
+      );
+      dbMock.executeRows.push(makeEntry('a/one'));
+
+      const result = await pushDigests(new Date('2026-10-22T16:05:00Z')); // 北京 10-23 00:05
+
+      expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    });
+
+    it('跨月：9-30 21:00 发过 → 10-01 09:17 发', async () => {
+      dbMock.selectRows.push(
+        subWith(
+          { languages: [], keywords: [], pushTime: '09:00' },
+          { lastDigestAt: new Date('2026-09-30T13:00:00Z') }, // 北京 09-30 21:00
+        ),
+      );
+      dbMock.executeRows.push(makeEntry('a/one'));
+
+      const result = await pushDigests(new Date('2026-10-01T01:17:00Z')); // 北京 10-01 09:17
+
+      expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    });
+
+    it('跨年：12-31 21:00 发过 → 次年 01-01 09:17 发', async () => {
+      dbMock.selectRows.push(
+        subWith(
+          { languages: [], keywords: [], pushTime: '09:00' },
+          { lastDigestAt: new Date('2026-12-31T13:00:00Z') }, // 北京 12-31 21:00
+        ),
+      );
+      dbMock.executeRows.push(makeEntry('a/one'));
+
+      const result = await pushDigests(new Date('2027-01-01T01:17:00Z')); // 北京 01-01 09:17
+
+      expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    });
+
+    it('同一天只发一条：今天 09:17 发过 → 今天 22:00 不再发', async () => {
+      dbMock.selectRows.push(
+        subWith(
+          { languages: [], keywords: [], pushTime: '00:00' },
+          { lastDigestAt: new Date('2026-10-23T01:17:00Z') }, // 北京 10-23 09:17
+        ),
+      );
+
+      const result = await pushDigests(new Date('2026-10-23T14:00:00Z')); // 北京 10-23 22:00
+
+      expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+      expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    });
+
+    it('last_digest_at 落在未来（时钟偏移）→ 不发', async () => {
+      dbMock.selectRows.push(
+        subWith(
+          { languages: [], keywords: [], pushTime: '00:00' },
+          { lastDigestAt: new Date('2026-10-24T01:00:00Z') }, // 北京 10-24，晚于今天
+        ),
+      );
+
+      const result = await pushDigests(new Date('2026-10-23T01:17:00Z'));
+
+      expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
+    });
   });
 });
 

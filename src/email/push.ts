@@ -1,7 +1,7 @@
 import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { emailSubscribers, kvCache } from '../db/schema.js';
-import { shanghaiMinutes, shanghaiToday } from '../agent/time.js';
+import { calendarDaysBetween, shanghaiMinutes, shanghaiToday } from '../agent/time.js';
 import {
   getDailySnapshot,
   selectEntriesForPreferences,
@@ -55,15 +55,19 @@ function pushTimeMinutes(pushTime: string): number {
   return Number(hour) * 60 + Number(minute);
 }
 
+/**
+ * 今日是否可发：与企微侧同语义——间隔按**北京日历日**算，不是精确 24 小时。
+ * 按毫秒差判断时，一次 tick 延迟就会让次日的邮件永久晚一小时发出。
+ */
 function eligible(
   lastSentAt: Date | null,
   intervalDays: number,
-  now: Date,
   today: string,
 ): boolean {
   if (lastSentAt === null) return true;
-  if (shanghaiToday(lastSentAt) >= today) return false;
-  return lastSentAt.getTime() <= now.getTime() - intervalDays * 86_400_000;
+  const lastDay = shanghaiToday(lastSentAt);
+  if (lastDay >= today) return false;
+  return calendarDaysBetween(lastDay, today) >= intervalDays;
 }
 
 async function claim(id: number, intervalDays: number): Promise<boolean> {
@@ -75,7 +79,7 @@ async function claim(id: number, intervalDays: number): Promise<boolean> {
       isNull(emailSubscribers.lastSentAt),
       and(
         sql`(${emailSubscribers.lastSentAt} AT TIME ZONE 'Asia/Shanghai')::date < (now() AT TIME ZONE 'Asia/Shanghai')::date`,
-        sql`${emailSubscribers.lastSentAt} <= now() - make_interval(days => ${intervalDays})`,
+        sql`((now() AT TIME ZONE 'Asia/Shanghai')::date - (${emailSubscribers.lastSentAt} AT TIME ZONE 'Asia/Shanghai')::date) >= ${intervalDays}`,
       ),
     ),
   ) as SQL;
@@ -193,7 +197,7 @@ export async function pushEmailDigests(
       skipped += 1;
       continue;
     }
-    if (!eligible(row.lastSentAt ?? null, preferences.intervalDays, now, today)) {
+    if (!eligible(row.lastSentAt ?? null, preferences.intervalDays, today)) {
       skipped += 1;
       continue;
     }

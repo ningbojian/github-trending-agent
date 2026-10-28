@@ -22,7 +22,7 @@ import { normalizePreferences } from './preferences.js';
 import { loadRepoSummaries } from './repo-summary.js';
 import { normalizeRepoName } from './repo-name.js';
 import { loadUserSignalsStrict, rankByTaste, type UserSignals } from './taste.js';
-import { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
+import { calendarDaysBetween, shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
 
 /**
  * 偏好常量与规范化函数已迁到 preferences.ts（读取侧与「我的订阅」展示侧共用）。
@@ -38,7 +38,7 @@ export {
   normalizePreferences,
 } from './preferences.js';
 
-export { shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
+export { calendarDaysBetween, shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
 
 /**
  * 每日简报：按订阅者偏好取近 7 天 topN 热榜条目，每条一行
@@ -439,32 +439,37 @@ function pushTimeMinutes(pushTime: string): number {
 /**
  * 该订阅者今日是否可发（JS 侧门控，与抢占 SQL 的条件同语义）：
  * - 从未发送（last_digest_at 为 null）→ 可发；
- * - 上次发送的北京日期 >= 今日（当天已发/时钟偏移的未来时间）→ 不可发；
- * - 否则必须已满 intervalDays 天（`last <= now - intervalDays 天`）。
+ * - 上次发送的北京日期在「今天」或之后（当天已发/时钟偏移的未来时间）→ 不可发；
+ * - 否则要求**北京日期差 >= intervalDays**。
+ *
+ * 间隔按日历日而不是精确 24 小时：claim 写入的是实际发送时刻，若再要求满
+ * 24 小时，一次 tick 延迟（GitHub Actions 的每小时 cron 实测会晚十几分钟）
+ * 就会让次日同一时刻差几分钟被跳过，实际推送时间从此永久后移。
  * 抢占 SQL 仍是并发下的权威（两进程同时读到 null 时只有一方能 UPDATE 成功）。
  */
 function eligibleForPush(
   lastDigestAt: Date | null,
   intervalDays: number,
-  now: Date,
   today: string,
 ): boolean {
   if (lastDigestAt === null) {
     return true;
   }
-  if (shanghaiToday(lastDigestAt) >= today) {
+  const lastDay = shanghaiToday(lastDigestAt);
+  if (lastDay >= today) {
     return false;
   }
-  return lastDigestAt.getTime() <= now.getTime() - intervalDays * 86_400_000;
+  return calendarDaysBetween(lastDay, today) >= intervalDays;
 }
 
 /**
  * 条件 UPDATE 抢占（原子，防并发重复发送）：
  * `SET last_digest_at = now() WHERE id=$1 AND active AND
- *  (last_digest_at IS NULL OR (北京日期 < 今日 AND last_digest_at <= now() - intervalDays 天))`
+ *  (last_digest_at IS NULL OR (北京日期 < 今日 AND 北京日期差 >= intervalDays))`
  * 返回 true=抢到（可以构建发送）；false=已发过/并发对方先抢到。
  * 日期比较用 AT TIME ZONE 'Asia/Shanghai'——last_digest_at 是 timestamptz，
- * 转北京时间墙钟再取 date 才是用户的「今天」。
+ * 转北京时间墙钟再取 date 才是用户的「今天」；date - date 得整数天，
+ * 与 JS 侧 `calendarDaysBetween` 同语义（不是 now() - interval）。
  */
 async function claimDigest(id: number, intervalDays: number): Promise<boolean> {
   const condition = and(
@@ -474,7 +479,7 @@ async function claimDigest(id: number, intervalDays: number): Promise<boolean> {
       isNull(subscribers.lastDigestAt),
       and(
         sql`(${subscribers.lastDigestAt} AT TIME ZONE 'Asia/Shanghai')::date < (now() AT TIME ZONE 'Asia/Shanghai')::date`,
-        sql`${subscribers.lastDigestAt} <= now() - make_interval(days => ${intervalDays})`,
+        sql`((now() AT TIME ZONE 'Asia/Shanghai')::date - (${subscribers.lastDigestAt} AT TIME ZONE 'Asia/Shanghai')::date) >= ${intervalDays}`,
       ),
     ),
   ) as SQL;
@@ -577,7 +582,7 @@ export async function pushDigests(
         skipped += 1;
         continue;
       }
-      if (!eligibleForPush(sub.lastDigestAt ?? null, intervalDays, now, today)) {
+      if (!eligibleForPush(sub.lastDigestAt ?? null, intervalDays, today)) {
         skipped += 1;
         continue;
       }

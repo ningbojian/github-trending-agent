@@ -2,15 +2,17 @@ import { env } from '../src/config.js';
 import { postMessage } from '../src/wecom/api.js';
 
 /**
- * 【临时探针 v2，测完即删】第一轮确认了个人微信能显示 textcard / news，
- * 但没测图片；也没测 news 一条到底能放几篇。这一轮只回答两个问题：
+ * 【临时探针 v3，测完即删】v2 的结论：news 一条最多 8 篇（9 篇报 45008）；
+ * 微信里八篇全部展开；首篇大图 + 标题 + 完整简介；第 2 篇之后只有方形缩略图
+ * 和标题。问题是 OG 图是 1200×630 的「仓库名文字海报」，缩成方块只会裁到
+ * 一块文字，观感像截图而不是图标。
  *
- * 1. 带 `picurl` 的 news，在个人微信里有没有图？多篇时第 2 篇之后有没有缩略图？
- *    —— 决定「一条聚合卡片」方案成不成立。
- * 2. news 的 8 篇上限是硬限制还是文档过时？（第 4 条故意发 9 篇）
+ * 这一轮只验证两件事：
+ * 1. 方形缩略图换成**仓库所有者的头像**（正方形，200px）会不会像样；
+ * 2. 第 2 篇之后只有标题可见，把中文简介压进标题（≤128 字节）能显示多少。
  *
- * 图片用 GitHub 的 opengraph 图（每仓库的自动封面），不额外存图。
- * 发送仍复用生产 postMessage：token、中转、重试、errcode 校验必须一致。
+ * 三条消息：混合（首篇 OG + 其余头像，3 篇）、全头像 8 篇、全头像 3 篇
+ * （看方图放大成首篇大图是否可接受）。
  *
  * 用法：GET /api/msgtype-probe?secret=<CRON_SECRET>&u=<userid>
  */
@@ -42,42 +44,70 @@ function bearerToken(req: ProbeRequest): string {
 
 interface Sample {
   name: string;
+  owner: string;
   stars: number;
   delta: number;
   zh: string;
 }
 
-/** 真实仓库 + 真实字号的中文简介，观感才可信；第 9 个用于探 8 篇上限。 */
 const SAMPLES: Sample[] = [
-  { name: 'astral-sh/ruff', stars: 41200, delta: 320, zh: '用 Rust 写的极快 Python linter，一个工具替代 flake8、isort 与部分 black' },
-  { name: 'ollama/ollama', stars: 158300, delta: 610, zh: '一条命令在本地跑起 Llama、Qwen、DeepSeek 等大模型，自带模型仓库' },
-  { name: 'ggml-org/llama.cpp', stars: 92100, delta: 240, zh: '纯 C/C++ 的大模型推理实现，无依赖，CPU 与消费级显卡都能跑' },
-  { name: 'langchain-ai/langchain', stars: 118700, delta: 180, zh: '把大模型、检索与工具串成应用的开发框架，支持多模型与多向量库' },
-  { name: 'vercel/next.js', stars: 132500, delta: 150, zh: 'React 全栈框架，服务端渲染、路由与静态生成开箱即用' },
-  { name: 'microsoft/vscode', stars: 172800, delta: 90, zh: '微软开源的代码编辑器，插件生态覆盖几乎所有语言与工作流' },
-  { name: 'neovim/neovim', stars: 84300, delta: 70, zh: 'Vim 的现代重构版，内置 LSP、异步插件与 Lua 配置' },
-  { name: 'rustdesk/rustdesk', stars: 96500, delta: 210, zh: '开源自托管远程桌面，替代 TeamViewer，数据可以完全留在自己服务器' },
-  { name: 'openai/whisper', stars: 88700, delta: 130, zh: '多语言语音识别与转写模型，支持时间轴与翻译' },
+  { name: 'astral-sh/ruff', owner: 'astral-sh', stars: 41200, delta: 320, zh: '用 Rust 写的极快 Python linter，一个工具替代 flake8、isort 与部分 black' },
+  { name: 'ollama/ollama', owner: 'ollama', stars: 158300, delta: 610, zh: '一条命令在本地跑起 Llama、Qwen、DeepSeek 等大模型，自带模型仓库' },
+  { name: 'ggml-org/llama.cpp', owner: 'ggml-org', stars: 92100, delta: 240, zh: '纯 C/C++ 的大模型推理实现，无依赖，CPU 与消费级显卡都能跑' },
+  { name: 'langchain-ai/langchain', owner: 'langchain-ai', stars: 118700, delta: 180, zh: '把大模型、检索与工具串成应用的开发框架' },
+  { name: 'vercel/next.js', owner: 'vercel', stars: 132500, delta: 150, zh: 'React 全栈框架，服务端渲染与路由开箱即用' },
+  { name: 'microsoft/vscode', owner: 'microsoft', stars: 172800, delta: 90, zh: '微软开源的代码编辑器，插件生态覆盖所有语言' },
+  { name: 'neovim/neovim', owner: 'neovim', stars: 84300, delta: 70, zh: 'Vim 的现代重构版，内置 LSP 与 Lua 配置' },
+  { name: 'rustdesk/rustdesk', owner: 'rustdesk', stars: 96500, delta: 210, zh: '开源自托管远程桌面，数据可留在自己服务器' },
+  { name: 'openai/whisper', owner: 'openai', stars: 88700, delta: 130, zh: '多语言语音识别与转写模型' },
 ];
 
-/** GitHub 自动生成的仓库封面（1200×630 PNG），无需自己存图。 */
-function coverPic(name: string): string {
+/** 仓库封面海报（1200×630），适合首篇大图。 */
+function ogPic(name: string): string {
   return `https://opengraph.githubassets.com/1/${name}`;
 }
 
+/** 所有者头像（正方形），适合第 2 篇之后的方形缩略图；无需先解析重定向。 */
+function avatarPic(owner: string): string {
+  return `https://avatars.githubusercontent.com/${owner}`;
+}
+
+/** 43800 → 43.8k；标题空间有限，别写全量数字。 */
+function shortStars(stars: number): string {
+  if (stars < 1000) return String(stars);
+  const k = stars / 1000;
+  return `${Number.isInteger(k) ? k : k.toFixed(1)}k`;
+}
+
+/** 简介压进标题：汉字按 3 字节算，留出仓库名与星标的空间，最多约 16 字。 */
+function shortZh(zh: string): string {
+  const chars = Array.from(zh);
+  const max = 16;
+  return chars.length <= max ? zh : `${chars.slice(0, max).join('')}…`;
+}
+
 /**
- * 构造 news 文章列表。`label` 只加在第一篇标题上——第 2 篇之后标题保持
- * 生产样式，才能看出微信到底显示了多少信息。
+ * 生产式布局：首篇「大图 + 标题 + 完整简介」；第 2 篇起只看得到缩略图和标题，
+ * 所以标题里带一段压缩简介。`firstPic` 决定首篇用 OG 海报还是头像。
  */
-function articles(count: number, label: string): Array<Record<string, unknown>> {
-  return SAMPLES.slice(0, count).map((sample, index) => ({
-    title:
-      (index === 0 ? `${label} ` : '') +
-      `${index + 1}. ${sample.name} ★${sample.stars} (+${sample.delta})`,
-    description: sample.zh,
-    url: `https://github.com/${sample.name}`,
-    picurl: coverPic(sample.name),
-  }));
+function articles(
+  count: number,
+  lead: string,
+  firstPic: 'og' | 'avatar',
+): Array<Record<string, unknown>> {
+  return SAMPLES.slice(0, count).map((sample, index) => {
+    const star = `★${shortStars(sample.stars)} (+${sample.delta})`;
+    const first = index === 0;
+    return {
+      title: first
+        ? `${lead} 1. ${sample.name} ${star}`
+        : `${index + 1}. ${sample.name} ${star}｜${shortZh(sample.zh)}`,
+      description: sample.zh,
+      url: `https://github.com/${sample.name}`,
+      picurl:
+        first && firstPic === 'og' ? ogPic(sample.name) : avatarPic(sample.owner),
+    };
+  });
 }
 
 export default async function handler(
@@ -98,11 +128,10 @@ export default async function handler(
   }
 
   const agentid = Number(env.WECOM_AGENT_ID);
-  const cases: Array<{ label: string; count: number; lead: string }> = [
-    { label: 'news-1-pic', count: 1, lead: '【1/4 单篇+图】' },
-    { label: 'news-3-pic', count: 3, lead: '【2/4 三篇+图】' },
-    { label: 'news-8-pic', count: 8, lead: '【3/4 八篇+图】' },
-    { label: 'news-9-pic', count: 9, lead: '【4/4 九篇·应超限】' },
+  const cases: Array<{ label: string; count: number; lead: string; firstPic: 'og' | 'avatar' }> = [
+    { label: 'mixed-3', count: 3, lead: '【1/3 首篇OG其余头像】', firstPic: 'og' },
+    { label: 'avatar-8', count: 8, lead: '【2/3 八篇·全头像】', firstPic: 'avatar' },
+    { label: 'avatar-3', count: 3, lead: '【3/3 三篇·全头像】', firstPic: 'avatar' },
   ];
 
   const results: Array<{ type: string; ok: boolean; error?: string }> = [];
@@ -112,7 +141,7 @@ export default async function handler(
         touser: userid,
         agentid,
         msgtype: 'news',
-        news: { articles: articles(item.count, item.lead) },
+        news: { articles: articles(item.count, item.lead, item.firstPic) },
       });
       results.push({ type: item.label, ok: true });
     } catch (err) {
@@ -122,7 +151,6 @@ export default async function handler(
         error: err instanceof Error ? err.message : String(err),
       });
     }
-    // 间隔 600ms：这一轮每篇都要企微去抓图，比纯文本更值得错开
     await new Promise((resolve) => setTimeout(resolve, 600));
   }
 

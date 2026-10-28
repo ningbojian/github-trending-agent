@@ -349,6 +349,16 @@ curl -i https://<domain>/api/oauth-github
   3. 次日 20:30 后收到 3 条简报；间隔 2 天时次日不推、第三天推（默认 09:00 由 **Vercel Cron** `vercel.json` 的 `0 1 * * *` 触发，其余时间由 `.github/workflows/digest-hourly.yml` 每小时**第 17 分**兜底；门控在 `pushDigests` 内）。
   4. 越界输入（「条数 0」「推送时间 25:99」「每 99 天」）→ 回用法提示，不写库。
 
+### ⑦.5 跟踪仓库更新（GitHub）
+
+- **操作**：发「**追踪 astral-sh/ruff**」→ 收到 `✅ 已跟踪 …`；发「**我的追踪**」→ 看到编号列表；发「**取消追踪 1**」→ 收到取消回执。
+- **预期观察**：
+  1. Neon：`select identifier, cursor, active, last_checked_at from tracked_items where wecom_userid = '<测试用户>';` —— 新行 `cursor.releaseTag/lastStars` 是**当前**状态（建基线，不会立刻通知已有 release）。
+  2. 手动触发 `/api/cron-push-digest` 后：无变化时只推进 `last_checked_at`，不发消息；有变化时收到一条 `跟踪变化（MM-DD）`（每人每天至多一条）。
+  3. 发送失败时 `cursor` 不前进（下个 tick 重试）；`tracked-notice:v1:<date>:<userid>` 标记 48 小时。
+  4. 没有配置 `GITHUB_TOKEN` 时日志告警、检查整体跳过，命令仍可用。
+  5. 最多 10 个 active 跟踪项；超限回「先发『我的追踪』取消一个」。
+
 ### ⑧ 加入即自动收到简报（第二账号）
 
 - **操作**：用一个**新**企微成员账号把应用加入可见范围，然后从工作台点开该应用（触发 `enter_agent`），或直接发一条任意文本。

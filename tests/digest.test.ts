@@ -197,6 +197,19 @@ vi.mock('../src/agent/weekly-review', () => ({
   pushWeeklyReviews: weeklyMock.pushWeeklyReviews,
 }));
 
+const trackingMock = vi.hoisted(() => ({
+  pushTrackedChanges: vi.fn(async () => ({
+    sent: 0,
+    skipped: 0,
+    failed: 0,
+    checked: 0,
+  })),
+}));
+
+vi.mock('../src/agent/tracking-check', () => ({
+  pushTrackedChanges: trackingMock.pushTrackedChanges,
+}));
+
 /**
  * 口味画像与推送历史：默认「空画像 / 无历史」，既有用例行为不变。
  * 只替换 I/O 两个函数，纯函数（rankByTaste / pushedRecently / emptySignals）保持真实实现。
@@ -1812,7 +1825,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
     expect(dbMock.selectConditions).toHaveLength(0);
   });
 
-  it('Bearer <CRON_SECRET> 正确 → 执行 pushDigests 并返回 {sent, skipped, failed, email, weekly} JSON', async () => {
+  it('Bearer <CRON_SECRET> 正确 → 执行 pushDigests 并返回 {sent, skipped, failed, email, weekly, tracking} JSON', async () => {
     dbMock.selectRows.push(
       makeSub(),
       makeSub({ id: 2, wecomUserid: 'bob' }),
@@ -1829,6 +1842,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
       failed: 0,
       email: { sent: 0, skipped: 0, failed: 0 },
       weekly: { sent: 0, skipped: 0, failed: 0 },
+      tracking: { sent: 0, skipped: 0, failed: 0, checked: 0 },
     });
     expect(weeklyMock.pushWeeklyReviews).toHaveBeenCalledTimes(1);
     expect(res.headers['content-type']).toContain('application/json');

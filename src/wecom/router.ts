@@ -43,6 +43,14 @@ import {
   handleMySubscription,
 } from './subscription.js';
 import { sendWelcomeFlow } from './welcome.js';
+import {
+  MY_TRACKING_EMPTY_REPLY,
+  TRACK_USAGE_REPLY,
+  UNTRACK_USAGE_REPLY,
+  handleMyTracking,
+  handleTrack,
+  handleUntrack,
+} from './tracking-commands.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
 
 export interface InboundMessage {
@@ -83,6 +91,10 @@ export interface Handlers {
   setModel: MessageHandler;
   myModel: MessageHandler;
   clearModel: MessageHandler;
+  /** 「追踪 owner/repo」——关注仓库的 release / star 变化。 */
+  track: MessageHandler;
+  untrack: MessageHandler;
+  myTracking: MessageHandler;
 }
 
 /** 未注册时的静默 stub。 */
@@ -108,6 +120,9 @@ let handlers: Handlers = {
   setModel: stub,
   myModel: stub,
   clearModel: stub,
+  track: stub,
+  untrack: stub,
+  myTracking: stub,
 };
 
 /**
@@ -140,6 +155,9 @@ export function resetHandlers(): void {
     setModel: stub,
     myModel: stub,
     clearModel: stub,
+    track: stub,
+    untrack: stub,
+    myTracking: stub,
   };
 }
 
@@ -169,6 +187,9 @@ const USAGE_REPLIES: Record<UsageKey, string> = {
   setModel: SET_MODEL_USAGE_REPLY,
   clearModel: CLEAR_MODEL_USAGE_REPLY,
   myModel: MY_MODEL_USAGE_REPLY,
+  track: TRACK_USAGE_REPLY,
+  untrack: UNTRACK_USAGE_REPLY,
+  myTracking: MY_TRACKING_EMPTY_REPLY,
 };
 
 /** 把 handler 调用包成 promise（同步抛错也转为 rejected promise）。 */
@@ -362,4 +383,7 @@ registerHandlers({
   setModel: handleSetModel,
   myModel: handleMyModel,
   clearModel: handleClearModel,
+  track: handleTrack,
+  untrack: handleUntrack,
+  myTracking: handleMyTracking,
 });

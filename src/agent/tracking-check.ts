@@ -1,0 +1,208 @@
+import { and, eq, isNull, lt, or } from 'drizzle-orm';
+import { env } from '../config.js';
+import { db } from '../db/client.js';
+import { kvCache, subscribers, trackedItems, type TrackedCursor } from '../db/schema.js';
+import { createGithubClient, type ReleaseInfo, type RepoInfo } from '../github/client.js';
+import { sendWeComText } from '../wecom/api.js';
+import { shanghaiToday } from './time.js';
+import {
+  computeTrackedChanges,
+  formatTrackedSummary,
+  nextCursor,
+  type TrackedChange,
+} from './tracking.js';
+
+/**
+ * 每日跟踪检查（GitHub 仓库）。
+ *
+ * - 只检查「20 小时未检查」的 active 项，按用户原子处理：预算不够就整人跳过，
+ *   避免「这次查出了变化、却因为预算没发出去」被标记成已检查；
+ * - 每人每天最多一条变化摘要（marker 48h），发送前写 marker（at-most-once）；
+ * - **cursor 只在发送成功后推进**：发送失败保留旧 cursor，下个 tick 重试；
+ * - 不写 push-history：跟踪提醒和简报去重是两件事，混在一起会让仓库从简报里消失。
+ */
+
+const CHECK_INTERVAL_MS = 20 * 60 * 60 * 1000;
+const MARKER_PREFIX = 'tracked-notice:v1:';
+const MARKER_TTL_MS = 48 * 60 * 60 * 1000;
+const PER_ITEM_BUDGET_MS = 6_000;
+
+export interface PushTrackedOptions {
+  now?: Date;
+  /** 本次检查的时间预算（毫秒），默认 45 秒。 */
+  budgetMs?: number;
+  clock?: () => number;
+}
+
+export interface PushTrackedResult {
+  sent: number;
+  skipped: number;
+  failed: number;
+  checked: number;
+}
+
+interface DueRow {
+  id: number;
+  wecomUserid: string;
+  identifier: string;
+  displayName: string;
+  cursor: TrackedCursor;
+}
+
+function markerKey(date: string, userid: string): string {
+  return `${MARKER_PREFIX}${date}:${userid}`;
+}
+
+async function wasNoticeSent(userid: string, date: string, now: Date): Promise<boolean> {
+  const rows = await db()
+    .select()
+    .from(kvCache)
+    .where(eq(kvCache.key, markerKey(date, userid)));
+  const row = rows[0];
+  if (!row) return false;
+  return new Date(row.expiresAt).getTime() > now.getTime();
+}
+
+async function markNoticeSent(userid: string, date: string, now: Date): Promise<void> {
+  const expiresAt = new Date(now.getTime() + MARKER_TTL_MS);
+  await db()
+    .insert(kvCache)
+    .values({ key: markerKey(date, userid), value: { sent: true }, expiresAt })
+    .onConflictDoUpdate({
+      target: kvCache.key,
+      set: { value: { sent: true }, expiresAt },
+    });
+}
+
+/** 检查所有到期的跟踪项；返回计数供 cron 记录。 */
+export async function pushTrackedChanges(
+  options: PushTrackedOptions = {},
+): Promise<PushTrackedResult> {
+  const now = options.now ?? new Date();
+  const clock = options.clock ?? Date.now;
+  const budgetMs = options.budgetMs ?? 45_000;
+  const startedAt = clock();
+
+  const result: PushTrackedResult = { sent: 0, skipped: 0, failed: 0, checked: 0 };
+
+  // 未认证的 60 次/小时撑不起批量检查；没有服务端 token 就不查（命令仍可用）。
+  if (!env.GITHUB_TOKEN) {
+    console.warn('[tracking] GITHUB_TOKEN missing, skip checks');
+    return result;
+  }
+
+  const cutoff = new Date(now.getTime() - CHECK_INTERVAL_MS);
+  const rows = (await db()
+    .select({
+      id: trackedItems.id,
+      wecomUserid: trackedItems.wecomUserid,
+      identifier: trackedItems.identifier,
+      displayName: trackedItems.displayName,
+      cursor: trackedItems.cursor,
+    })
+    .from(trackedItems)
+    .innerJoin(
+      subscribers,
+      eq(trackedItems.wecomUserid, subscribers.wecomUserid),
+    )
+    .where(
+      and(
+        eq(trackedItems.active, true),
+        eq(trackedItems.kind, 'repo'),
+        eq(subscribers.active, true),
+        or(
+          isNull(trackedItems.lastCheckedAt),
+          lt(trackedItems.lastCheckedAt, cutoff),
+        ),
+      ),
+    )) as DueRow[];
+
+  const byUser = new Map<string, DueRow[]>();
+  for (const row of rows) {
+    const list = byUser.get(row.wecomUserid) ?? [];
+    list.push(row);
+    byUser.set(row.wecomUserid, list);
+  }
+
+  const date = shanghaiToday(now);
+  const client = createGithubClient();
+  const token = env.GITHUB_TOKEN;
+
+  for (const [userid, items] of byUser) {
+    // 预算不够覆盖这个人的全部条目：整人跳过，绝不查一半就标记。
+    if (clock() - startedAt + items.length * PER_ITEM_BUDGET_MS > budgetMs) {
+      result.skipped += 1;
+      continue;
+    }
+
+    if (await wasNoticeSent(userid, date, now)) {
+      result.skipped += 1;
+      continue;
+    }
+
+    const changes: TrackedChange[] = [];
+    const checkedSnapshots = new Map<
+      number,
+      { repo: RepoInfo; releases: ReleaseInfo[] }
+    >();
+
+    for (const item of items) {
+      const [owner, name] = item.identifier.split('/');
+      if (!owner || !name) continue;
+      const [repoResult, releasesResult] = await Promise.all([
+        client.getRepo({ owner, name }, token),
+        client.getReleases({ owner, name }, token),
+      ]);
+      result.checked += 1;
+      if (!repoResult.ok) continue;
+      const snapshot = {
+        repo: repoResult.data,
+        releases: releasesResult.ok ? releasesResult.data : [],
+      };
+      checkedSnapshots.set(item.id, snapshot);
+      changes.push(...computeTrackedChanges(item.cursor, snapshot, now));
+    }
+
+    if (changes.length === 0) {
+      // 没有变化：只推进 last_checked_at，cursor 本来就没变。
+      for (const item of items) {
+        if (!checkedSnapshots.has(item.id)) continue;
+        await db()
+          .update(trackedItems)
+          .set({ lastCheckedAt: now })
+          .where(eq(trackedItems.id, item.id));
+      }
+      result.skipped += 1;
+      continue;
+    }
+
+    const text = formatTrackedSummary(date, changes);
+    if (text === null) {
+      result.skipped += 1;
+      continue;
+    }
+
+    try {
+      // 先写 marker（at-most-once）：发送失败宁可丢这一次，也不重复。
+      await markNoticeSent(userid, date, now);
+      await sendWeComText(userid, text);
+      for (const item of items) {
+        const snapshot = checkedSnapshots.get(item.id);
+        if (!snapshot) continue;
+        await db()
+          .update(trackedItems)
+          .set({
+            cursor: nextCursor(item.cursor, snapshot, now),
+            lastCheckedAt: now,
+          })
+          .where(eq(trackedItems.id, item.id));
+      }
+      result.sent += 1;
+    } catch (err) {
+      console.error(`[tracking] send failed for ${userid}:`, err);
+      result.failed += 1;
+    }
+  }
+
+  return result;
+}

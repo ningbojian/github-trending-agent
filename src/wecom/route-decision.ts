@@ -31,6 +31,9 @@ export type HandlerKey =
   | 'setModel'
   | 'myModel'
   | 'clearModel'
+  | 'track'
+  | 'untrack'
+  | 'myTracking'
   | 'search';
 
 /** 疑似命令的用法提示键（文案由 router 映射）。 */
@@ -45,7 +48,10 @@ export type UsageKey =
   | 'setModel'
   | 'clearModel'
   | 'myModel'
-  | 'cancelSubscription';
+  | 'cancelSubscription'
+  | 'track'
+  | 'untrack'
+  | 'myTracking';
 
 export type RouteDecision =
   | { kind: 'handler'; handler: HandlerKey }
@@ -104,6 +110,11 @@ const PUSH_INTERVAL_PATTERN = new RegExp(
   `^每\\s*${NUMBER_TOKEN_PATTERN}\\s*天(推送|简报)?$`,
 );
 
+/** 跟踪：`取消追踪` 先于 `追踪`；`关注` 必须带空白，避免吞掉「关注度高的项目」。 */
+const MY_TRACKING_PATTERN = /^(我的追踪|追踪列表|跟踪列表)$/;
+const UNTRACK_PATTERN = /^取消(追踪|跟踪|关注)(?:\s|$)/;
+const TRACK_PATTERN = /^(追踪|跟踪|关注)\s+/;
+
 /** 尾部中英文标点（精确/前缀分发与疑似命令判定前统一剥除，「帮助。」也能命中）。 */
 const TRAILING_PUNCT_RE = /[。！？!?；;，,．.…]+$/;
 
@@ -156,6 +167,17 @@ export function suspectedCommandUsage(content: string): UsageKey | null {
   if (content.startsWith('我的模型')) {
     return 'myModel';
   }
+  // 跟踪命令的错字/缺参数：别当搜索词发出去。裸「关注」不在此列
+  // （「关注度高的项目」是合法搜索）。精确命令先判，避免「追踪列表」被当成「追踪」。
+  if (content.startsWith('我的追踪') || content.startsWith('追踪列表')) {
+    return 'myTracking';
+  }
+  if (content.startsWith('取消追踪') || content.startsWith('取消跟踪')) {
+    return 'untrack';
+  }
+  if (content.startsWith('追踪') || content.startsWith('跟踪')) {
+    return 'track';
+  }
   return null;
 }
 
@@ -182,6 +204,15 @@ export function decideTextRoute(content: string): RouteDecision {
   }
   if (text === '我的记忆') {
     return { kind: 'handler', handler: 'memory' };
+  }
+  if (MY_TRACKING_PATTERN.test(text)) {
+    return { kind: 'handler', handler: 'myTracking' };
+  }
+  if (UNTRACK_PATTERN.test(text)) {
+    return { kind: 'handler', handler: 'untrack' };
+  }
+  if (TRACK_PATTERN.test(text)) {
+    return { kind: 'handler', handler: 'track' };
   }
   if (REMEMBER_PATTERN.test(text) || FORGET_PATTERN.test(text)) {
     return { kind: 'handler', handler: 'memory' };

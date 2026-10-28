@@ -17,6 +17,9 @@ vi.mock('../src/agent/digest', () => ({
 vi.mock('../src/agent/observation', () => ({
   getDailyObservations: async () => null,
 }));
+vi.mock('../src/agent/tracking-check', () => ({
+  pushTrackedChanges: async () => ({ sent: 0, skipped: 0, failed: 0, checked: 0 }),
+}));
 vi.mock('../src/agent/digest-snapshot', () => ({
   getDailySnapshot: async () => ({ date: '2026-10-26', items: [] }),
 }));

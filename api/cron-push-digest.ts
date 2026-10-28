@@ -1,6 +1,7 @@
 import { PUSH_BUDGET_MS, pushDigests } from '../src/agent/digest.js';
 import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
 import { getDailyObservations } from '../src/agent/observation.js';
+import { pushTrackedChanges } from '../src/agent/tracking-check.js';
 import { pushWeeklyReviews } from '../src/agent/weekly-review.js';
 import { pushEmailDigests } from '../src/email/push.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
@@ -81,6 +82,13 @@ export default async function handler(
       observations,
       budgetMs: Math.max(30_000, Math.min(PUSH_BUDGET_MS, remaining)),
     });
+    // 跟踪检查：只处理 20 小时未检查的项；失败只记日志，不影响每日推送。
+    const tracking = await pushTrackedChanges({
+      budgetMs: Math.min(45_000, Math.max(0, 285_000 - (Date.now() - startedAt))),
+    }).catch((err: unknown) => {
+      console.error('[cron] tracking check failed:', err);
+      return { sent: 0, skipped: 0, failed: 0, checked: 0 };
+    });
     // cron 没有用户请求头，显式把站点根地址传进邮件推送（否则链接会回落 localhost）。
     const email = await pushEmailDigests({
       snapshot,
@@ -89,7 +97,7 @@ export default async function handler(
     // 每周复盘：自身按「周一 10 点后 + 本周未发」幂等，每小时的 tick 都能安全调用。
     // 它永远不会抛（内部逐人隔离），所以不会把每日推送的成功响应变成 500。
     const weekly = await pushWeeklyReviews();
-    sendJson(res, 200, { ...wecom, email, weekly });
+    sendJson(res, 200, { ...wecom, email, weekly, tracking });
   } catch (err) {
     console.error('cron-push-digest failed:', err);
     // detail 供 Bearer 鉴权后的调用方排障（端点不公开，不引入暴露面）

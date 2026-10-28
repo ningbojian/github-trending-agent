@@ -157,6 +157,49 @@ export const favorites = pgTable(
 );
 
 /**
+ * 用户主动跟踪的 GitHub 仓库/作者（第二阶段）。
+ *
+ * - `identifier` 是规范化后的主键（仓库 `owner/repo` 小写、作者 `owner` 小写）；
+ * - `cursor` 保存上次检查到的位置（release tag、上次 star 数等），
+ *   只在消息发送成功后才推进，发送失败留给下一个 tick 重试；
+ * - 这张表把用户与仓库关联起来，**绝不进入聚合指标/共享缓存**；
+ *   退订时删除该用户的行。
+ */
+export interface TrackedCursor {
+  releaseTag?: string;
+  releasePublishedAt?: string;
+  lastStars?: number;
+  lastCheckedAt?: string;
+  archived?: boolean;
+}
+
+export const trackedItems = pgTable(
+  'tracked_items',
+  {
+    id: serial('id').primaryKey(),
+    wecomUserid: text('wecom_userid').notNull(),
+    source: text('source', { enum: ['github'] }).notNull().default('github'),
+    kind: text('kind', { enum: ['repo', 'author'] }).notNull().default('repo'),
+    identifier: text('identifier').notNull(),
+    displayName: text('display_name').notNull(),
+    cursor: jsonb('cursor').$type<TrackedCursor>().notNull().default(sql`'{}'`),
+    active: boolean('active').notNull().default(true),
+    lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
+    lastChangeAt: timestamp('last_change_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('tracked_items_user_source_kind_identifier_unique').on(
+      t.wecomUserid,
+      t.source,
+      t.kind,
+      t.identifier,
+    ),
+    index('tracked_items_active_checked_idx').on(t.active, t.lastCheckedAt),
+  ],
+);
+
+/**
  * 最近一次检索结果缓存，供"收藏 N"按序号引用。
  */
 export const searchCaches = pgTable('search_caches', {

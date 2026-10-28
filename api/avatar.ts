@@ -1,5 +1,3 @@
-import { env } from './config.js';
-
 /**
  * 仓库头像代理：`GET /api/avatar?repo=owner/repo` → 所有者头像（PNG/JPEG）。
  *

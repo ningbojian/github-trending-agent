@@ -12,6 +12,7 @@
     "dev": "vercel dev",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:audit": "tsx scripts/db-audit.ts",
     "eval": "tsx evals/cli.ts --compare",
     "eval:ci": "tsx evals/cli.ts --compare",
     "eval:llm": "tsx evals/cli.ts --llm --compare",

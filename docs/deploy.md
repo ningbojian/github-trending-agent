@@ -42,6 +42,46 @@ select table_name from information_schema.tables
 应出现 9 张业务表：`repos`、`trending_entries`、`subscribers`、`favorites`、`search_caches`、`kv_cache`、`email_subscribers`、`agent_runs`、`tool_calls`（另有 drizzle 迁移记录表）。
 `npm run db:migrate` 重复执行安全（已应用的迁移不会重放）。
 
+**一条命令做同样的检查（推荐）**：
+
+```bash
+npm run db:audit
+```
+
+脚本只发 `SELECT`，不写任何数据。它比上面那条 SQL 多查四类东西：其他 schema 下的关系（别人可能在 `app`/`auth` 里建过表）、外来迁移工具的痕迹（`_prisma_migrations`、`knex_migrations` 等）、同库还在连的其他客户端（`pg_stat_activity`），以及我们 9 张表的**列结构**是否仍与 `drizzle/meta/0004_snapshot.json` 一致。最后给一个判定：
+
+| 判定 | 含义 | 退出码 |
+| --- | --- | --- |
+| `CLEAN` | 只有这 9 张表，结构一致，迁移账本 5 行 | 0 |
+| `EXTRA_EMPTY` | 多出别人的表，但都是空表 | 0 |
+| `EXTRA_WITH_DATA` | 多出别人的表且里面有数据——这个库被另一个项目用过 | 1 |
+| `MISSING_OR_ALTERED` | **我们自己的表**缺失、列被改、或账本落后（有人跑过 `db:push`/reset） | 2 |
+| `INCONCLUSIVE` | 有必要的检查没跑成（权限不足/超时）——**不能当成干净** | 2 |
+
+后几种的含义完全不同：`EXTRA_*` 是历史遗留，`MISSING_OR_ALTERED` 才是故障，`INCONCLUSIVE` 是「没查清」。处理建议见下方「库污染怎么处理」。
+
+### ⚠ 本库已知情况（2026-10-28 审计）与禁止事项
+
+生产库 `neondb` 里**同时住着另一个项目的 18 张表**：`tenants`、`rooms`、`sessions`、`session_assignments`、`bookings`、`booking_intake_refs`、`dms`、`dm_shifts`、`dm_run_events`、`dm_runs`、`dm_leaves`、`scripts`、`script_stages`、`public_scripts`、`import_runs`、`access_requests`、`search_usage_daily`、`usage_global_daily`。其中 `tenants`(1)、`dm_shifts`(42)、`script_stages`(20) 等**有真实数据**，是活的数据，不是空壳。
+
+我们的 9 张表与它们**完全不重叠**（表名、序列、迁移账本都独立），所以当前运行不受影响。真正的风险只有一个：
+
+> **绝对不要在这个数据库上执行 `drizzle-kit push`（或任何 `push` 类命令）。**
+
+`push` 会把「snapshot 里有」和「库里有」做差集，把 snapshot 里没有的表当成多余对象**删掉**——也就是上面那 18 张别人的表。`db:migrate` 是安全的：它只按账本增量执行我们自己的 SQL，不碰任何其他对象。改完 schema 的正确流程是 `db:generate` → 审 SQL → `db:migrate`，不是 `push`。
+
+彻底隔离的做法（推荐，10 分钟）：Neon 新建 project/branch → `npm run db:migrate` → 迁有状态的 4 张表（`subscribers`、`favorites`、`search_caches`、`kv_cache`，合计数百行）→ 换 Vercel 的 `NEON_DATABASE_URL` → 重新部署。
+
+**库污染怎么处理**（按风险从低到高）：
+
+1. `EXTRA_EMPTY`：什么都不做。空表不影响任何东西，删别人的表反而有风险。
+2. `EXTRA_WITH_DATA` + 那个项目已废弃：确认后删除，删前先 `pg_dump` 那几张表。
+3. `EXTRA_WITH_DATA` + 那个项目还在用：**不要动别人的表**。**动我们**——给本项目换新库（见上）。
+4. `MISSING_OR_ALTERED`：先看账本差几行——差 1 行补跑迁移即可；表结构被改形要逐列修，**不要**直接 `db:push`。
+5. `INCONCLUSIVE`：先解决那道跑不通的检查（通常是权限），再重跑。**不要**把它当 `CLEAN`。
+
+红线：**绝不 `DROP` 别人的表**；**绝不手改 `drizzle.__drizzle_migrations`**；**这个库上绝不跑 `db:push`**。
+
 ---
 
 ## 2. Vercel：导入仓库与环境变量

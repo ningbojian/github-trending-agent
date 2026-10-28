@@ -98,9 +98,9 @@ export interface ValidationDiagnostics {
 }
 
 /** 观察消息的字节上限（企微 text 2048，留足余量）。 */
-export const OBSERVATION_MAX_BYTES = 600;
+export const OBSERVATION_MAX_BYTES = 800;
 /** 每条观察 claim 的汉字上限。 */
-export const OBSERVATION_CLAIM_MAX_CHARS = 55;
+export const OBSERVATION_CLAIM_MAX_CHARS = 65;
 /** 观察历史保留 8 天（覆盖 7 天窗口）。 */
 export const OBSERVATION_HISTORY_DAYS = 7;
 /** 最多 3 条，少于 2 条不发。 */
@@ -438,11 +438,16 @@ export function validateObservationOutput(
     }
 
     // 模型经常把 `owner/repo` 写成 `repo`；短名也算提到了这个仓库。
-    const mentionsEvidence = candidate.evidence.some((name) => {
-      if (claim.includes(name)) return true;
-      const shortName = name.split('/')[1];
-      return shortName !== undefined && shortName !== '' && claim.includes(shortName);
-    });
+    // 主题观察的主语是主题本身（如 mcp），要求它点名仓库反而是噪音。
+    const mentionsEvidence =
+      (candidate.kind === 'theme-shift' &&
+        candidate.theme !== undefined &&
+        claim.toLowerCase().includes(candidate.theme.toLowerCase())) ||
+      candidate.evidence.some((name) => {
+        if (claim.includes(name)) return true;
+        const shortName = name.split('/')[1];
+        return shortName !== undefined && shortName !== '' && claim.includes(shortName);
+      });
     if (!mentionsEvidence) {
       diagnostics.missingRepo += 1;
       continue;

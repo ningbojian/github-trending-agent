@@ -224,6 +224,22 @@ describe('输出校验 — 数字与仓库白名单', () => {
     expect(lines).toHaveLength(1);
   });
 
+  it('主题观察提到主题名即可，不强制点名仓库', () => {
+    const theme = candidate({
+      kind: 'theme-shift',
+      signature: 'theme:topic:mcp',
+      mainRepo: null,
+      theme: 'mcp',
+      evidence: ['a/one', 'b/two'],
+      facts: '主题 mcp（topic）：今天 15 个，近 7 天平均 7.2 个',
+    });
+    const lines = validateObservationOutput(
+      { observations: [{ candidate: 1, claim: 'mcp 主题今天 15 个，密度接近翻倍' }] },
+      [theme],
+    );
+    expect(lines).toHaveLength(1);
+  });
+
   it('诊断记录丢弃原因，便于调提示词', () => {
     const diagnostics = {
       total: 0,
@@ -351,7 +367,7 @@ describe('渲染', () => {
     ];
     const text = renderObservationMessage(long, '2026-10-29');
     expect(text).not.toBeNull();
-    expect(Buffer.byteLength(text as string, 'utf8')).toBeLessThanOrEqual(600);
+    expect(Buffer.byteLength(text as string, 'utf8')).toBeLessThanOrEqual(800);
   });
 });
 

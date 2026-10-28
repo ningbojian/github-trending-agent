@@ -1,5 +1,6 @@
 import { inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { displayWidth } from '../text-width.js';
 import { env } from '../config.js';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
@@ -37,14 +38,27 @@ const summariesSchema = z.object({
   summaries: z.array(z.object({ fullName: z.string(), zh: z.string() })),
 });
 
+/** 卡片标题专用的短句：完整短语，≤10 个汉字。 */
+const shortSchema = z.object({
+  summaries: z.array(z.object({ fullName: z.string(), short: z.string() })),
+});
+
+/** 短句的显示宽度上限（汉字 2 列；标题里只剩约 20 列）。 */
+const SHORT_MAX_WIDTH = 20;
+
 interface CacheValue {
   zh: string;
   src: string;
 }
 
+interface ShortCacheValue {
+  short: string;
+  src: string;
+}
+
 interface CacheWrite {
   key: string;
-  value: CacheValue;
+  value: Record<string, unknown>;
   expiresAt: Date;
 }
 
@@ -254,6 +268,140 @@ export async function loadRepoSummaries(
       result.set(item.fullName, fb);
       writes.push(cacheWrite(item, fb, now + SHORT_TTL_MS));
     }
+  }
+
+  await writeCache(writes);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// 短简介（news 卡片标题用）
+// ---------------------------------------------------------------------------
+
+/**
+ * 卡片标题只剩约 20 列（10 个汉字），把 28 字简介硬截会得到半句话——
+ * 用户明确说过「截了一半，不好」。这里让模型单独生成一个**完整短语**，
+ * 缓存在独立的 `repo-short:` 键下（src = 完整简介，简介变了就失效）。
+ *
+ * 拿不到（LLM 失败/超宽/没配 Key）就不返回——渲染层会退回完整分句，
+ * 再不行干脆不写简介。绝不把长句切一半塞进标题。
+ */
+
+const SHORT_CACHE_PREFIX = 'repo-short:';
+
+function shortCacheKey(fullName: string): string {
+  return `${SHORT_CACHE_PREFIX}${fullName}`;
+}
+
+/** 去掉首尾空白、引号与结尾标点/省略号。 */
+function cleanShortText(text: string): string {
+  return text
+    .trim()
+    .replace(/^[「『“"'（(]+/, '')
+    .replace(/[，。；：、,.;:!?！？…「」『』“”"'）)]+$/u, '')
+    .trim();
+}
+
+/** 超宽就返回空串（不硬切）。 */
+function normalizeShortText(text: string): string {
+  const cleaned = cleanShortText(text);
+  if (cleaned === '') return '';
+  return displayWidth(cleaned) <= SHORT_MAX_WIDTH ? cleaned : '';
+}
+
+function buildShortPrompt(items: Array<{ fullName: string; zh: string }>): string {
+  return [
+    '把下列 GitHub 仓库的中文简介压成一个更短的中文短语，要求：',
+    '1. 不超过 10 个汉字，必须是完整短语，不加省略号，不要半句话；',
+    '2. 只说明它是什么或做什么，不评价、不夸张、不编造；',
+    '3. 每个仓库恰好输出一条；',
+    '4. 以 JSON 输出：{"summaries":[{"fullName":"owner/repo","short":"短语"}]}。',
+    '',
+    '仓库与简介：',
+    ...items.map((item) => `- ${item.fullName}：${item.zh}`),
+  ].join('\n');
+}
+
+export interface ShortSummaryInput {
+  fullName: string;
+  zh: string;
+}
+
+/**
+ * 批量加载卡片短句；key 与输入 fullName 对齐。
+ * 只返回「完整且不超宽」的短语；缺失的由调用方决定退化成什么。
+ */
+export async function loadRepoShortSummaries(
+  items: ShortSummaryInput[],
+  choice: LlmChoice = { kind: 'operator' },
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>();
+  if (items.length === 0) return result;
+
+  const unique = [...new Map(items.map((item) => [item.fullName, item])).values()];
+  const now = Date.now();
+
+  const rows = await db()
+    .select()
+    .from(kvCache)
+    .where(
+      inArray(
+        kvCache.key,
+        unique.map((item) => shortCacheKey(item.fullName)),
+      ),
+    );
+
+  const cached = new Map<string, ShortCacheValue>();
+  for (const row of rows) {
+    if (new Date(row.expiresAt).getTime() <= now) continue;
+    const value = row.value as Partial<ShortCacheValue> | null;
+    if (value && typeof value.short === 'string' && typeof value.src === 'string') {
+      cached.set(row.key, { short: value.short, src: value.src });
+    }
+  }
+
+  const misses: ShortSummaryInput[] = [];
+  for (const item of unique) {
+    const hit = cached.get(shortCacheKey(item.fullName));
+    if (hit && hit.src === item.zh) {
+      const normalized = normalizeShortText(hit.short);
+      if (normalized !== '') {
+        result.set(item.fullName, normalized);
+        continue;
+      }
+    }
+    misses.push(item);
+  }
+  if (misses.length === 0) return result;
+
+  // 没配 Key 的互动路径：只读缓存，不调模型。
+  if (choice.kind === 'none') return result;
+
+  let out: z.infer<typeof shortSchema> | null = null;
+  try {
+    const prompt = buildShortPrompt(misses);
+    out =
+      choice.kind === 'user'
+        ? await generateObjectSafe(shortSchema, prompt, choice.config)
+        : await generateObjectSafe(shortSchema, prompt);
+  } catch {
+    out = null;
+  }
+  if (out === null) return result;
+
+  const wanted = new Map(misses.map((item) => [item.fullName, item]));
+  const writes: CacheWrite[] = [];
+  for (const entry of out.summaries) {
+    const source = wanted.get(entry.fullName);
+    if (source === undefined) continue; // 防御：丢弃未请求的仓库
+    const short = normalizeShortText(entry.short);
+    if (short === '') continue;
+    result.set(entry.fullName, short);
+    writes.push({
+      key: shortCacheKey(entry.fullName),
+      value: { short, src: source.zh },
+      expiresAt: new Date(now + LONG_TTL_MS),
+    });
   }
 
   await writeCache(writes);

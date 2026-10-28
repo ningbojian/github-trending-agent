@@ -191,13 +191,13 @@ describe('removeSubscriptionTerm', () => {
 });
 
 describe('formatSubscriptionSummary', () => {
-  it('默认偏好：09:00、10 条、关键词未设置', () => {
+  it('默认偏好：09:00、8 条、关键词未设置', () => {
     const text = formatSubscriptionSummary({ languages: [], keywords: [] }, true);
 
     expect(text).toContain('你的订阅');
     expect(text).toContain('已开通每日简报');
     expect(text).toContain('每天 09:00（北京时间）');
-    expect(text).toContain('每次最多 10 条');
+    expect(text).toContain('每次最多 8 条');
     expect(text).toContain('未设置');
     expect(text).toContain('「订阅 <偏好>」');
   });
@@ -230,7 +230,7 @@ describe('formatSubscriptionSummary', () => {
     );
 
     expect(text).toContain('每天 09:00（北京时间）');
-    expect(text).toContain('每次最多 10 条');
+    expect(text).toContain('每次最多 8 条');
     expect(text).not.toContain('undefined');
     expect(text).not.toContain('NaN');
   });

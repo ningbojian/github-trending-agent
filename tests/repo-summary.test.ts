@@ -47,7 +47,7 @@ vi.mock('../src/db/client', () => ({
 
 vi.mock('../src/config', () => ({ env: configMock.env }));
 
-import { loadRepoSummaries } from '../src/agent/repo-summary';
+import { loadRepoShortSummaries, loadRepoSummaries } from '../src/agent/repo-summary';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LONG_TTL_MS = 180 * DAY_MS;
@@ -421,5 +421,100 @@ describe('loadRepoSummaries — 边界', () => {
     const compiled = compileQuery(dbMock.selectConditions[0]);
     expect(compiled.sql).toMatch(/"key" in \(\$\d+\)/);
     expect(compiled.params).toContain('repo-zh:a/one');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 短简介（news 卡片标题用）：模型生成 ≤10 个汉字的完整短语，绝不截半句
+// ---------------------------------------------------------------------------
+function shortCacheRow(fullName: string, short: string, src: string): Record<string, unknown> {
+  return {
+    key: `repo-short:${fullName}`,
+    value: { short, src },
+    expiresAt: new Date(Date.now() + LONG_TTL_MS),
+  };
+}
+
+describe('loadRepoShortSummaries — 卡片标题专用短句', () => {
+  it('全命中：不调 LLM，直接返回缓存短句', async () => {
+    dbMock.selectRows.push(shortCacheRow('a/one', '极快 linter', '中文简介一'));
+    llmMock.generateObjectSafe.mockResolvedValue({
+      summaries: [{ fullName: 'a/one', short: '不该被调用' }],
+    });
+
+    const result = await loadRepoShortSummaries([
+      { fullName: 'a/one', zh: '中文简介一' },
+    ]);
+
+    expect(result.get('a/one')).toBe('极快 linter');
+    expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
+    expect(dbMock.insertValues).toHaveLength(0);
+  });
+
+  it('未命中：把简介压成短句，写 repo-short 缓存（长 TTL）', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue({
+      summaries: [{ fullName: 'a/one', short: '极快 linter' }],
+    });
+
+    const result = await loadRepoShortSummaries([
+      { fullName: 'a/one', zh: '用 Rust 写的极快 Python linter，替代 flake8' },
+    ]);
+
+    expect(result.get('a/one')).toBe('极快 linter');
+    const prompt = llmMock.generateObjectSafe.mock.calls[0]?.[1] as string;
+    expect(prompt).toContain('不超过 10 个汉字');
+    expect(prompt).toContain('用 Rust 写的极快 Python linter');
+    const written = dbMock.insertValues[0]!;
+    expect(written.key).toBe('repo-short:a/one');
+    expect(written.value).toEqual({
+      short: '极快 linter',
+      src: '用 Rust 写的极快 Python linter，替代 flake8',
+    });
+    const expiresAt = (written.expiresAt as Date).getTime();
+    expect(expiresAt).toBeGreaterThanOrEqual(Date.now() + LONG_TTL_MS - 1000);
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + LONG_TTL_MS + 1000);
+  });
+
+  it('LLM 失败：不写缓存、不返回——由渲染层退回完整分句或不写', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue(null);
+
+    const result = await loadRepoShortSummaries([{ fullName: 'a/one', zh: '中文简介' }]);
+
+    expect(result.size).toBe(0);
+    expect(dbMock.insertValues).toHaveLength(0);
+  });
+
+  it('模型返回超宽短语（超过 20 列）：丢弃，不把长句硬塞进标题', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue({
+      summaries: [
+        { fullName: 'a/one', short: '这是一个非常非常长的短语完全放不进标题' },
+      ],
+    });
+
+    const result = await loadRepoShortSummaries([{ fullName: 'a/one', zh: '中文简介' }]);
+
+    expect(result.size).toBe(0);
+  });
+
+  it('kind: none（用户没配 Key）：只读缓存，不调模型', async () => {
+    dbMock.selectRows.push(shortCacheRow('a/one', '缓存短句', '中文简介'));
+    llmMock.generateObjectSafe.mockResolvedValue({
+      summaries: [{ fullName: 'a/one', short: '不该被调用' }],
+    });
+
+    const result = await loadRepoShortSummaries(
+      [{ fullName: 'a/one', zh: '中文简介' }],
+      { kind: 'none' },
+    );
+
+    expect(result.get('a/one')).toBe('缓存短句');
+    expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
+  });
+
+  it('空输入：不查库、不调模型', async () => {
+    const result = await loadRepoShortSummaries([]);
+    expect(result.size).toBe(0);
+    expect(dbMock.selectCalls).toBe(0);
+    expect(llmMock.generateObjectSafe).not.toHaveBeenCalled();
   });
 });

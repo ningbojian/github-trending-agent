@@ -3,7 +3,7 @@ import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
 import { shanghaiToday } from './time.js';
 import { loadAbstractSafe } from './abstract.js';
-import { loadRepoSummaries } from './repo-summary.js';
+import { loadRepoShortSummaries, loadRepoSummaries } from './repo-summary.js';
 
 /**
  * 每日快照：一天只构建一次，企微与邮件两个渠道共用（一轮模型）。
@@ -31,6 +31,8 @@ export interface DigestSnapshotItem {
   isNew: boolean;
   htmlUrl: string;
   summary?: string;
+  /** 卡片标题专用的完整短句（≤10 个汉字）；生成失败时缺省。 */
+  short?: string;
 }
 
 export interface DigestSnapshot {
@@ -167,6 +169,23 @@ async function loadSummariesSafe(
   return merged;
 }
 
+async function loadShortsSafe(
+  items: DigestSnapshotItem[],
+  summaries: Map<string, string>,
+): Promise<Map<string, string>> {
+  const withSummary = items
+    .filter((item) => (summaries.get(item.fullName) ?? '').trim() !== '')
+    .map((item) => ({ fullName: item.fullName, zh: summaries.get(item.fullName) as string }));
+  if (withSummary.length === 0) return new Map();
+  try {
+    return await loadRepoShortSummaries(withSummary);
+  } catch (err) {
+    // 卡片标题会退回「完整分句」或不写简介，快照本身绝不能因此失败。
+    console.error('snapshot short summaries failed (degrade to clause):', err);
+    return new Map();
+  }
+}
+
 function isSnapshot(value: unknown): value is DigestSnapshot {
   if (!value || typeof value !== 'object') return false;
   const snapshot = value as Partial<DigestSnapshot>;
@@ -211,6 +230,11 @@ async function buildSnapshot(
   for (const item of items) {
     const zh = summaries.get(item.fullName);
     if (zh !== undefined) item.summary = zh;
+  }
+  const shorts = await loadShortsSafe(items, summaries);
+  for (const item of items) {
+    const short = shorts.get(item.fullName);
+    if (short !== undefined) item.short = short;
   }
   const abstract = await loadAbstractSafe(items, summaries);
   return { date, dataDate, abstract, items };

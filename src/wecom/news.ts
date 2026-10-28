@@ -1,3 +1,5 @@
+import { displayWidth } from '../text-width.js';
+
 /**
  * 企微 news 卡片的渲染规则（纯函数，无网络/DB）。
  *
@@ -9,18 +11,23 @@
  *   所以图片统一走我们自己的 `/api/tile`。
  *
  * 标题的信息顺序因此是硬要求：仓库名必须在最前（最先可见），
- * 语言标签与压缩简介放在尾部（可被裁剪）。
+ * 语言标签与短简介放在尾部（可被裁剪）。
+ *
+ * 简介不硬截：短简介由模型单独生成（≤10 个汉字，完整短语）；
+ * 拿不到就退回「完整分句」，再拿不到就**干脆不写**——绝不出现半句话加省略号。
  */
 
 /** 企微 news 一条消息最多 8 篇（第 9 篇实测被拒：45008）。 */
 export const NEWS_MAX_ARTICLES = 8;
 
-/** 新增星标达到该值给 🔥。低于它但 `isNew` 的给 🆕（二选一，省标题空间）。 */
-export const HOT_DELTA = 300;
+/** 只有这批里增量最猛的 1–2 条给 🔥；每条都亮等于每条都不亮。 */
+export const HOT_TOP_N = 2;
+/** 火苗的绝对下限：增量没到这条线，一个都不给（避免冷清的日子也硬凑）。 */
+export const HOT_MIN_DELTA = 300;
 
 /**
- * 压缩简介的显示宽度上限（列）：汉字/全角算 2 列，ASCII 算 1 列。
- * 实测行标题在仓库名与星标之后只剩约 20 列，超出会被客户端裁掉。
+ * 短简介的显示宽度上限（列）：汉字/全角算 2 列，ASCII 算 1 列。
+ * 实测行标题在仓库名与星标之后只剩约 20 列。
  */
 export const SHORT_SUMMARY_MAX_WIDTH = 20;
 
@@ -34,8 +41,10 @@ export interface NewsEntry {
   starsDelta: number;
   isNew: boolean;
   language: string | null;
-  /** 完整中文简介；标题里只用压缩后的前一段。 */
+  /** 完整中文简介（多篇布局不显示，仍随卡片发送）。 */
   summary?: string;
+  /** 模型生成的完整短句（≤10 个汉字）；缺省时退回完整分句。 */
+  short?: string;
 }
 
 export interface NewsArticle {
@@ -59,51 +68,30 @@ export function shortStars(stars: number): string {
   return k < 100 ? `${Number.isInteger(k) ? k : k.toFixed(1)}k` : `${Math.round(k)}k`;
 }
 
-/** 全角/宽字符按 2 列计（CJK、全角标点、emoji 大致如此）。 */
-function isWide(codePoint: number): boolean {
-  return (
-    (codePoint >= 0x1100 && codePoint <= 0x115f) ||
-    (codePoint >= 0x2e80 && codePoint <= 0xa4cf) ||
-    (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
-    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-    (codePoint >= 0xfe30 && codePoint <= 0xfe4f) ||
-    (codePoint >= 0xff00 && codePoint <= 0xff60) ||
-    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
-    (codePoint >= 0x1f300 && codePoint <= 0x1faff)
-  );
+/** 去掉首尾空白与结尾标点/省略号：短句不该以「，」「…」收尾。 */
+function cleanShort(text: string): string {
+  return text
+    .trim()
+    .replace(/^[「『“"'（(]+/, '')
+    .replace(/[，。；：、,.;:!?！？…「」『』“”"'）)]+$/u, '')
+    .trim();
 }
 
-/** 可以作为截断点的字符：空白与中英文标点。 */
-const BOUNDARY_RE = /[\s，。、；：！？,.;:!?·…]/;
-
-/**
- * 压缩简介到约 `maxWidth` 列，优先停在标点/空格处，必要时补省略号。
- * 不拆英文单词、不把中文句子切在半个词上。
- */
-export function shortSummary(summary: string | undefined, maxWidth = SHORT_SUMMARY_MAX_WIDTH): string {
+/** 完整分句：取第一个标点之前的部分；超过显示宽度就放弃（宁可没有，也不截半句）。 */
+export function deriveShort(summary: string | undefined): string {
   const text = (summary ?? '').trim();
   if (text === '') return '';
+  const clause = text.split(/[，。；：、,.;:!?！？]/u)[0] ?? '';
+  const candidate = cleanShort(clause);
+  if (candidate === '') return '';
+  return displayWidth(candidate) <= SHORT_SUMMARY_MAX_WIDTH ? candidate : '';
+}
 
-  const chars = Array.from(text);
-  let width = 0;
-  let fit = 0;
-  for (let i = 0; i < chars.length; i += 1) {
-    const next = width + (isWide(chars[i].codePointAt(0) ?? 0) ? 2 : 1);
-    if (next > maxWidth) break;
-    width = next;
-    fit = i + 1;
-  }
-  if (fit === chars.length) return text;
-
-  // 向左回退到最近的边界；退不到就硬截，至少保留可读的一段。
-  for (let i = fit - 1; i > 0; i -= 1) {
-    if (BOUNDARY_RE.test(chars[i])) {
-      const head = chars.slice(0, i).join('').trimEnd();
-      if (head !== '') return `${head}…`;
-      break;
-    }
-  }
-  return `${chars.slice(0, fit).join('').trimEnd()}…`;
+/** 模型给的短句：清洗后仍超宽就放弃——不把长句硬切进标题。 */
+function normalizeShort(short: string | undefined): string {
+  const text = cleanShort(short ?? '');
+  if (text === '') return '';
+  return displayWidth(text) <= SHORT_SUMMARY_MAX_WIDTH ? text : '';
 }
 
 /** 按码点截断到不超过 maxBytes，保留结尾省略号的位置。 */
@@ -123,43 +111,29 @@ function clipToBytes(text: string, maxBytes: number): string {
 }
 
 /** 标题头：标记 + 序号 + 仓库 + 星标 + 语言标签（一定可见的部分）。 */
-function titleHead(index: number, entry: NewsEntry): string {
-  const marker =
-    entry.starsDelta >= HOT_DELTA ? '🔥 ' : entry.isNew ? '🆕 ' : '';
+function titleHead(index: number, entry: NewsEntry, hot: boolean): string {
+  const marker = hot ? '🔥 ' : entry.isNew ? '🆕 ' : '';
   const language = entry.language?.trim();
   const tag = language ? ` · ${language}` : '';
   return `${marker}${index + 1}. ${entry.fullName} ★${shortStars(entry.stars)} (+${entry.starsDelta})${tag}`;
 }
 
 /**
- * 组装标题：固定头 + `｜压缩简介`。
- * 头本身超限（极长仓库名）时硬截；简介超限时逐步让位，保证总字节 ≤ 128。
+ * 组装标题：固定头 + `｜短简介`。
+ * 头本身超限（极长仓库名）时硬截；加上简介会超限时**整段简介放弃**，
+ * 不把短句切一半——用户已经明确说过半句话比没有更糟。
  */
-function buildTitle(index: number, entry: NewsEntry): string {
-  const head = titleHead(index, entry);
+function buildTitle(index: number, entry: NewsEntry, hot: boolean): string {
+  const head = titleHead(index, entry, hot);
   if (Buffer.byteLength(head, 'utf8') > TITLE_MAX_BYTES) {
     return clipToBytes(head, TITLE_MAX_BYTES);
   }
 
-  const short = shortSummary(entry.summary);
+  const short = normalizeShort(entry.short) || deriveShort(entry.summary);
   if (short === '') return head;
 
   const full = `${head}｜${short}`;
-  if (Buffer.byteLength(full, 'utf8') <= TITLE_MAX_BYTES) return full;
-
-  // 从压缩简介里逐字回退，给省略号留位置。
-  const separator = '｜';
-  const budget = TITLE_MAX_BYTES - Buffer.byteLength(`${head}${separator}…`, 'utf8');
-  const chars = Array.from(short.endsWith('…') ? short.slice(0, -1) : short);
-  let used = 0;
-  let keep = 0;
-  for (const char of chars) {
-    const size = Buffer.byteLength(char, 'utf8');
-    if (used + size > budget) break;
-    used += size;
-    keep += 1;
-  }
-  return `${head}${separator}${chars.slice(0, keep).join('').trimEnd()}…`;
+  return Buffer.byteLength(full, 'utf8') <= TITLE_MAX_BYTES ? full : head;
 }
 
 function tileUrl(baseUrl: string, entry: NewsEntry): string {
@@ -173,6 +147,16 @@ function ogUrl(fullName: string): string {
   return `https://opengraph.githubassets.com/1/${fullName}`;
 }
 
+/** 增量最猛的 1–2 条（且不低于绝对下限）才给 🔥。 */
+function hotIndexes(entries: NewsEntry[]): Set<number> {
+  const ranked = entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => b.entry.starsDelta - a.entry.starsDelta)
+    .slice(0, HOT_TOP_N)
+    .filter((item) => item.entry.starsDelta >= HOT_MIN_DELTA);
+  return new Set(ranked.map((item) => item.index));
+}
+
 /**
  * 把条目渲染成 news 文章列表：
  * - 第 1 篇用 OG 海报（多篇布局里唯一的大图）；
@@ -183,10 +167,12 @@ export function buildNewsArticles(
   entries: NewsEntry[],
   options: BuildNewsOptions,
 ): NewsArticle[] {
-  return entries.slice(0, NEWS_MAX_ARTICLES).map((entry, index) => {
+  const limited = entries.slice(0, NEWS_MAX_ARTICLES);
+  const hot = hotIndexes(limited);
+  return limited.map((entry, index) => {
     const htmlUrl = options.htmlUrlOf?.(entry)?.trim();
     return {
-      title: buildTitle(index, entry),
+      title: buildTitle(index, entry, hot.has(index)),
       // 多篇布局不显示 description；保留完整简介，客户端若显示则更有信息量。
       ...(entry.summary?.trim() ? { description: entry.summary.trim() } : {}),
       url: htmlUrl !== undefined && htmlUrl !== '' ? htmlUrl : `https://github.com/${entry.fullName}`,

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  HOT_DELTA,
+  HOT_MIN_DELTA,
+  HOT_TOP_N,
   NEWS_MAX_ARTICLES,
   buildNewsArticles,
-  shortSummary,
   type NewsEntry,
 } from '../src/wecom/news';
 
@@ -28,6 +28,7 @@ function entry(overrides: Partial<NewsEntry> = {}): NewsEntry {
     isNew: false,
     language: 'Rust',
     summary: LONG_ZH,
+    short: '极快 Python linter',
     ...overrides,
   };
 }
@@ -85,51 +86,79 @@ describe('news 卡片标题', () => {
     expect(article.title.endsWith('…')).toBe(true);
   });
 
-  it('🔥 只给增长够猛的项目，新上榜用 🆕', () => {
-    const hot = buildNewsArticles([entry({ starsDelta: HOT_DELTA })], {
-      baseUrl: 'https://x.test',
-    })[0];
-    const fresh = buildNewsArticles([entry({ starsDelta: HOT_DELTA - 1, isNew: true })], {
-      baseUrl: 'https://x.test',
-    })[0];
-    const plain = buildNewsArticles([entry({ starsDelta: 1, isNew: false })], {
-      baseUrl: 'https://x.test',
-    })[0];
+  it('🔥 只给这批里最猛的 1–2 条——每条都亮等于每条都不亮', () => {
+    const articles = buildNewsArticles(
+      [
+        entry({ fullName: 'a/one', starsDelta: 500 }),
+        entry({ fullName: 'a/two', starsDelta: 400 }),
+        entry({ fullName: 'a/three', starsDelta: 300 }),
+      ],
+      { baseUrl: 'https://x.test' },
+    );
 
-    expect(hot.title.startsWith('🔥 ')).toBe(true);
-    expect(fresh.title.startsWith('🆕 ')).toBe(true);
-    expect(plain.title.startsWith('🔥')).toBe(false);
-    expect(plain.title.startsWith('🆕')).toBe(false);
+    expect(articles).toHaveLength(3);
+    expect(articles[0].title.startsWith('🔥 ')).toBe(true);
+    expect(articles[1].title.startsWith('🔥 ')).toBe(true);
+    expect(articles[2].title.startsWith('🔥')).toBe(false);
+    expect(HOT_TOP_N).toBe(2);
+  });
+
+  it('增量都没超过下限时一个火苗都不给', () => {
+    const [article] = buildNewsArticles([entry({ starsDelta: HOT_MIN_DELTA - 1 })], {
+      baseUrl: 'https://x.test',
+    });
+    expect(article.title.startsWith('🔥')).toBe(false);
+  });
+
+  it('新上榜用 🆕，不与 🔥 叠加', () => {
+    const [article] = buildNewsArticles(
+      [entry({ starsDelta: 1, isNew: true })],
+      { baseUrl: 'https://x.test' },
+    );
+    expect(article.title.startsWith('🆕 ')).toBe(true);
+    expect(article.title).not.toContain('🔥');
   });
 
   it('语言标签跟星标后、简介前——尾部会被裁，仓库名必须最先可见', () => {
     const title = buildNewsArticles([entry()], { baseUrl: 'https://x.test' })[0].title;
-    expect(title).toBe('🔥 1. astral-sh/ruff ★41.2k (+320) · Rust｜用 Rust 写的极快…');
+    expect(title).toBe('🔥 1. astral-sh/ruff ★41.2k (+320) · Rust｜极快 Python linter');
+  });
+
+  it('没有短句时退回完整分句，绝不加省略号截半句', () => {
+    const [article] = buildNewsArticles(
+      [
+        entry({
+          short: undefined,
+          summary: '极快的 Python linter，替代 flake8 与 isort',
+        }),
+      ],
+      { baseUrl: 'https://x.test' },
+    );
+    expect(article.title).toBe(
+      '🔥 1. astral-sh/ruff ★41.2k (+320) · Rust｜极快的 Python linter',
+    );
+  });
+
+  it('连完整分句都太长时宁可不写简介，也不给半句', () => {
+    const [article] = buildNewsArticles(
+      [
+        entry({
+          short: undefined,
+          summary: '一段没有标点而且非常非常长的中文简介文字内容',
+        }),
+      ],
+      { baseUrl: 'https://x.test' },
+    );
+    expect(article.title).not.toContain('｜');
   });
 
   it('没有语言或简介时不留孤零零的分隔符', () => {
-    const title = buildNewsArticles([entry({ language: null, summary: undefined })], {
-      baseUrl: 'https://x.test',
-    })[0].title;
+    const title = buildNewsArticles(
+      [entry({ language: null, summary: undefined, short: undefined })],
+      {
+        baseUrl: 'https://x.test',
+      },
+    )[0].title;
     expect(title).toBe('🔥 1. astral-sh/ruff ★41.2k (+320)');
-  });
-});
-
-describe('短简介', () => {
-  it('按显示宽度截断：一个汉字算两列，停在词/句边界', () => {
-    expect(shortSummary(LONG_ZH)).toBe('用 Rust 写的极快…');
-  });
-
-  it('本来就短的原样返回，不加省略号', () => {
-    expect(shortSummary('极快的 Python linter')).toBe('极快的 Python linter');
-  });
-
-  it('优先在中文标点处断开', () => {
-    expect(shortSummary('大模型推理框架，支持 CPU 与显卡，零依赖')).toBe('大模型推理框架…');
-  });
-
-  it('空简介返回空串', () => {
-    expect(shortSummary(undefined)).toBe('');
-    expect(shortSummary('   ')).toBe('');
   });
 });

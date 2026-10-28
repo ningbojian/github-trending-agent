@@ -56,14 +56,9 @@ export default async function handler(
   req: ProbeRequest,
   res: ProbeResponse,
 ): Promise<void> {
-  const expected = env.CRON_SECRET ?? '';
-  const provided = queryParam(req, 'secret') || bearerToken(req);
-  if (expected === '' || provided !== expected) {
-    res.status(401).send('unauthorized');
-    return;
-  }
-
-  // 图片模式：预览卡片的缩略图（与 /api/tile 共用解析逻辑）。
+  // 图片模式必须**先于鉴权**：企微抓 picurl 不会带 secret，
+  // 放在鉴权后面会让所有缩略图 401（预览时表现为全部空白）。
+  // 生产 /api/tile 本来就是公开的，这里保持一致。
   if (queryParam(req, 'tile') === '1') {
     const image = await resolveTileImage(
       queryParam(req, 'repo'),
@@ -76,6 +71,13 @@ export default async function handler(
     res.setHeader('content-type', image.contentType);
     res.setHeader('cache-control', image.cache);
     res.status(200).send(image.bytes);
+    return;
+  }
+
+  const expected = env.CRON_SECRET ?? '';
+  const provided = queryParam(req, 'secret') || bearerToken(req);
+  if (expected === '' || provided !== expected) {
+    res.status(401).send('unauthorized');
     return;
   }
 

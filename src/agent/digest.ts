@@ -411,6 +411,7 @@ export async function buildDigestNewsFromSnapshot(
       isNew: item.isNew,
       language: item.language,
       summary: item.summary,
+      short: item.short,
     })),
     {
       baseUrl: options.baseUrl,

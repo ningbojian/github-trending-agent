@@ -62,6 +62,11 @@ const summaryState = vi.hoisted(() => ({
   calls: [] as string[][],
 }));
 
+const shortState = vi.hoisted(() => ({
+  shorts: new Map<string, string>(),
+  calls: [] as string[][],
+}));
+
 vi.mock('../src/agent/repo-summary', () => ({
   loadRepoSummaries: async (items: Array<{ fullName: string }>) => {
     summaryState.calls.push(items.map((item) => item.fullName));
@@ -72,6 +77,15 @@ vi.mock('../src/agent/repo-summary', () => ({
     for (const item of items) {
       const zh = summaryState.summaries.get(item.fullName);
       if (zh !== undefined) out.set(item.fullName, zh);
+    }
+    return out;
+  },
+  loadRepoShortSummaries: async (items: Array<{ fullName: string; zh: string }>) => {
+    shortState.calls.push(items.map((item) => item.fullName));
+    const out = new Map<string, string>();
+    for (const item of items) {
+      const short = shortState.shorts.get(item.fullName);
+      if (short !== undefined) out.set(item.fullName, short);
     }
     return out;
   },
@@ -133,6 +147,8 @@ beforeEach(() => {
   summaryState.summaries = new Map();
   summaryState.failFor = new Set();
   summaryState.calls = [];
+  shortState.shorts = new Map();
+  shortState.calls = [];
 });
 
 describe('getDailySnapshot', () => {
@@ -152,6 +168,18 @@ describe('getDailySnapshot', () => {
     expect(snapshot?.items[0].summary).toBe('第一个项目。');
     expect(snapshot?.items[1].summary).toBeUndefined();
     expect(summaryState.calls).toEqual([['a/one', 'b/two']]);
+  });
+
+  it('为有摘要的条目生成卡片短句（≤10 字），没有摘要的不生成', async () => {
+    dbState.executeRows = [row('a/one'), row('b/two', { language: 'Rust' })];
+    summaryState.summaries.set('a/one', '第一个项目。');
+    shortState.shorts.set('a/one', '第一个项目');
+
+    const snapshot = await getDailySnapshot(NOW);
+
+    expect(snapshot?.items[0].short).toBe('第一个项目');
+    expect(snapshot?.items[1].short).toBeUndefined();
+    expect(shortState.calls).toEqual([['a/one']]);
   });
 
   it('writes the snapshot to kv_cache under digest-snapshot:<date>', async () => {

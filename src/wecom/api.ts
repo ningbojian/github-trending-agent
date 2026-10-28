@@ -128,11 +128,8 @@ function sleep(ms: number): Promise<void> {
  * message/send 统一出站：token 获取、出站中转头、errcode 校验、瞬断重试都集中在此。
  * - 网络异常（fetch reject）/ HTTP 5xx：250ms 退避后重试一次；仍失败则抛错。
  * - HTTP 4xx / 业务 errcode≠0：不重试，直接抛错（重试只会复现同样结果）。
- *
- * 导出是为了让「格式探针」走同一条发送路径——探针若自己写一份 fetch，
- * 测出来的行为（中转、重试、errcode 处理）就和生产不一致，那测了也没意义。
  */
-export async function postMessage(
+async function postMessage(
   userId: string,
   payload: Record<string, unknown>,
 ): Promise<void> {

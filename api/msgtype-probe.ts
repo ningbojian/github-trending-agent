@@ -64,9 +64,11 @@ function ogPic(name: string): string {
 }
 
 function avatarPic(name: string): string {
-  // 走自己的代理：企微直连 avatars.githubusercontent.com 会随机取不到（灰头像）。
+  // 走自己域名的 Vercel rewrite：企微直连 avatars.githubusercontent.com 会随机取不到（灰头像）。
+  // 注意不能新增 Serverless Function——Hobby 每部署上限 12 个，项目已经占满。
+  const owner = name.split('/')[0] ?? '';
   const base = env.PUBLIC_BASE_URL?.replace(/\/+$/, '') ?? 'https://ghtrending.cyou';
-  return `${base}/api/avatar?repo=${encodeURIComponent(name)}`;
+  return `${base}/api/avatar/${encodeURIComponent(owner)}`;
 }
 
 function shortStars(stars: number): string {

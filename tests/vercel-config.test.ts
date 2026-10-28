@@ -19,4 +19,15 @@ describe('Vercel Cron', () => {
       { path: '/api/cron-push-digest', schedule: '0 1 * * *' },
     ]);
   });
+
+  it('头像走同域 rewrite，不新增 Serverless Function（Hobby 上限 12 个）', () => {
+    const config = JSON.parse(
+      readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'),
+    ) as { rewrites?: Array<{ source: string; destination: string }> };
+
+    expect(config.rewrites).toContainEqual({
+      source: '/api/avatar/:owner',
+      destination: 'https://avatars.githubusercontent.com/:owner',
+    });
+  });
 });

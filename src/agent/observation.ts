@@ -81,12 +81,26 @@ export interface DailyObservations {
   lines: ObservationLine[];
   /** null = 当天不发。 */
   message: string | null;
+  /** 生成诊断（原始输出与丢弃原因），只进缓存供调参，不发给用户。 */
+  debug?: unknown;
+}
+
+/** 校验阶段的丢弃原因计数；用于判断阈值/提示词是否过严。 */
+export interface ValidationDiagnostics {
+  total: number;
+  invalidCandidate: number;
+  emptyClaim: number;
+  tooLong: number;
+  missingRepo: number;
+  badNumber: number;
+  duplicate: number;
+  kept: number;
 }
 
 /** 观察消息的字节上限（企微 text 2048，留足余量）。 */
 export const OBSERVATION_MAX_BYTES = 600;
 /** 每条观察 claim 的汉字上限。 */
-export const OBSERVATION_CLAIM_MAX_CHARS = 45;
+export const OBSERVATION_CLAIM_MAX_CHARS = 55;
 /** 观察历史保留 8 天（覆盖 7 天窗口）。 */
 export const OBSERVATION_HISTORY_DAYS = 7;
 /** 最多 3 条，少于 2 条不发。 */
@@ -368,34 +382,71 @@ function numbersIn(text: string): Set<number> {
   return values;
 }
 
+function blankDiagnostics(): ValidationDiagnostics {
+  return {
+    total: 0,
+    invalidCandidate: 0,
+    emptyClaim: 0,
+    tooLong: 0,
+    missingRepo: 0,
+    badNumber: 0,
+    duplicate: 0,
+    kept: 0,
+  };
+}
+
 /**
  * 确定性校验（不信任模型）：
  * - 候选编号必须存在；
  * - claim 里的每个数字都必须在候选事实的白名单里；
- * - claim 必须至少提到一个证据仓库；
+ * - claim 必须提到至少一个证据仓库（全名或 `owner/repo` 的短名都算）；
  * - 最多 3 条，签名由候选决定。
  */
 export function validateObservationOutput(
   out: RawObservationOutput | null | undefined,
   candidates: ObservationCandidate[],
+  diagnostics: ValidationDiagnostics = blankDiagnostics(),
 ): ObservationLine[] {
   const raw = out?.observations;
   if (!Array.isArray(raw)) return [];
+  diagnostics.total = raw.length;
 
   const lines: ObservationLine[] = [];
   const seen = new Set<string>();
 
   for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
+    if (!item || typeof item !== 'object') {
+      diagnostics.invalidCandidate += 1;
+      continue;
+    }
     const record = item as { candidate?: unknown; claim?: unknown };
     const index = typeof record.candidate === 'number' ? record.candidate - 1 : -1;
     const candidate = candidates[index];
-    if (candidate === undefined) continue;
+    if (candidate === undefined) {
+      diagnostics.invalidCandidate += 1;
+      continue;
+    }
 
     const claim = typeof record.claim === 'string' ? record.claim.trim() : '';
-    if (claim === '') continue;
-    if (Array.from(claim).length > OBSERVATION_CLAIM_MAX_CHARS) continue;
-    if (!candidate.evidence.some((name) => claim.includes(name))) continue;
+    if (claim === '') {
+      diagnostics.emptyClaim += 1;
+      continue;
+    }
+    if (Array.from(claim).length > OBSERVATION_CLAIM_MAX_CHARS) {
+      diagnostics.tooLong += 1;
+      continue;
+    }
+
+    // 模型经常把 `owner/repo` 写成 `repo`；短名也算提到了这个仓库。
+    const mentionsEvidence = candidate.evidence.some((name) => {
+      if (claim.includes(name)) return true;
+      const shortName = name.split('/')[1];
+      return shortName !== undefined && shortName !== '' && claim.includes(shortName);
+    });
+    if (!mentionsEvidence) {
+      diagnostics.missingRepo += 1;
+      continue;
+    }
 
     const allowed = numbersIn(candidate.facts);
     // 仓库名里天然带数字（llama.cpp、gpt-4、a/r0），不能把它们当成编造的数字。
@@ -404,9 +455,15 @@ export function validateObservationOutput(
       ' ',
     );
     const numbers = (claimWithoutRepoNames.match(/\d+(?:\.\d+)?/g) ?? []).map(Number);
-    if (numbers.some((number) => !allowed.has(number))) continue;
+    if (numbers.some((number) => !allowed.has(number))) {
+      diagnostics.badNumber += 1;
+      continue;
+    }
 
-    if (seen.has(candidate.signature)) continue;
+    if (seen.has(candidate.signature)) {
+      diagnostics.duplicate += 1;
+      continue;
+    }
     seen.add(candidate.signature);
     lines.push({
       kind: candidate.kind,
@@ -415,6 +472,7 @@ export function validateObservationOutput(
       evidence: candidate.evidence,
       ...(candidate.theme !== undefined ? { theme: candidate.theme } : {}),
     });
+    diagnostics.kept += 1;
     if (lines.length >= OBSERVATION_MAX_LINES) break;
   }
 
@@ -711,6 +769,7 @@ export async function getDailyObservations(
   });
 
   let lines: ObservationLine[] = [];
+  let debug: unknown = { candidates: candidates.length };
   if (candidates.length > 0) {
     const out = await generateObjectSafe(
       observationSchema,
@@ -718,9 +777,15 @@ export async function getDailyObservations(
       undefined,
       { timeoutMs: LLM_TIMEOUT_MS },
     ).catch(() => null);
-    lines = validateObservationOutput(out, candidates).filter((line) =>
-      passesNoveltyGate(line, history),
-    );
+    const validation = blankDiagnostics();
+    const validated = validateObservationOutput(out, candidates, validation);
+    lines = validated.filter((line) => passesNoveltyGate(line, history));
+    debug = {
+      llm: out === null ? 'null' : 'ok',
+      validation,
+      noveltyDropped: validated.length - lines.length,
+      raw: out?.observations?.slice(0, 5).map((item) => item.claim) ?? [],
+    };
   }
 
   const result: DailyObservations = {
@@ -728,6 +793,7 @@ export async function getDailyObservations(
     dataDate,
     lines,
     message: renderObservationMessage(lines, date),
+    debug,
   };
   try {
     await writeObservationCache(result);

@@ -216,6 +216,41 @@ describe('输出校验 — 数字与仓库白名单', () => {
     expect(lines).toEqual([]);
   });
 
+  it('模型只写短名（不含 owner）也算提到了证据仓库', () => {
+    const lines = validateObservationOutput(
+      { observations: [{ candidate: 1, claim: 'rocket 今天涨了 3 倍' }] },
+      candidates,
+    );
+    expect(lines).toHaveLength(1);
+  });
+
+  it('诊断记录丢弃原因，便于调提示词', () => {
+    const diagnostics = {
+      total: 0,
+      invalidCandidate: 0,
+      emptyClaim: 0,
+      tooLong: 0,
+      missingRepo: 0,
+      badNumber: 0,
+      duplicate: 0,
+      kept: 0,
+    };
+    validateObservationOutput(
+      {
+        observations: [
+          { candidate: 9, claim: 'acme/rocket 今天涨了 3 倍' },
+          { candidate: 1, claim: 'acme/rocket 今天涨了 7 倍' },
+          { candidate: 1, claim: 'acme/rocket 今天涨了 3 倍' },
+        ],
+      },
+      candidates,
+      diagnostics,
+    );
+    expect(diagnostics.invalidCandidate).toBe(1);
+    expect(diagnostics.badNumber).toBe(1);
+    expect(diagnostics.kept).toBe(1);
+  });
+
   it('候选编号越界 → 丢弃', () => {
     const lines = validateObservationOutput(
       { observations: [{ candidate: 9, claim: 'acme/rocket 今天涨了 3 倍' }] },

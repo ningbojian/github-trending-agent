@@ -15,7 +15,7 @@ import { displayWidth } from '../text-width.js';
  * 标题的信息顺序因此是硬要求：仓库名必须在最前（最先可见），
  * 短简介放在尾部（可被裁剪）。
  *
- * 简介不硬截：短简介由模型单独生成（≤10 个汉字，完整短语）；
+ * 简介不硬截：短简介由模型单独生成（≤18 个汉字，完整短语）；
  * 拿不到就退回「完整分句」，再拿不到就**干脆不写**——绝不出现半句话加省略号。
  */
 
@@ -33,7 +33,7 @@ export const HOT_MIN_RATE = 0.05;
  * 短简介的显示宽度上限（列）：汉字/全角算 2 列，ASCII 算 1 列。
  * 实测行标题在仓库名与星标之后只剩约 20 列。
  */
-export const SHORT_SUMMARY_MAX_WIDTH = 20;
+export const SHORT_SUMMARY_MAX_WIDTH = 40;
 
 /** 企微 news 单篇标题的字节上限。 */
 const TITLE_MAX_BYTES = 128;
@@ -47,7 +47,7 @@ export interface NewsEntry {
   language: string | null;
   /** 完整中文简介（多篇布局不显示，仍随卡片发送）。 */
   summary?: string;
-  /** 模型生成的完整短句（≤10 个汉字）；缺省时退回完整分句。 */
+  /** 模型生成的完整短句（≤18 个汉字）；缺省时退回完整分句。 */
   short?: string;
 }
 

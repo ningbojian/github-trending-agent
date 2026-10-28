@@ -31,7 +31,7 @@ export interface DigestSnapshotItem {
   isNew: boolean;
   htmlUrl: string;
   summary?: string;
-  /** 卡片标题专用的完整短句（≤10 个汉字）；生成失败时缺省。 */
+  /** 卡片标题专用的完整短句（≤18 个汉字）；生成失败时缺省。 */
   short?: string;
 }
 

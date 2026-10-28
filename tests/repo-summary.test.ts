@@ -429,7 +429,7 @@ describe('loadRepoSummaries — 边界', () => {
 // ---------------------------------------------------------------------------
 function shortCacheRow(fullName: string, short: string, src: string): Record<string, unknown> {
   return {
-    key: `repo-short:v2:${fullName}`,
+    key: `repo-short:v3:${fullName}`,
     value: { short, src: src + '|' },
     expiresAt: new Date(Date.now() + LONG_TTL_MS),
   };
@@ -467,14 +467,14 @@ describe('loadRepoShortSummaries — 卡片标题专用短句', () => {
 
     expect(result.get('a/one')).toBe('一键修复代码风格');
     const prompt = llmMock.generateObjectSafe.mock.calls[0]?.[1] as string;
-    expect(prompt).toContain('不超过 10 个汉字');
+    expect(prompt).toContain('不超过 18 个汉字');
     expect(prompt).toContain('完成什么');
     expect(prompt).toContain('用 Rust 写的极快 Python linter');
     // 原始 description/topics 必须一起进 prompt——否则模型只能看到「XX 工具」的类别，写不出能力。
     expect(prompt).toContain('An extremely fast Python linter');
     expect(prompt).toContain('formatter');
     const written = dbMock.insertValues[0]!;
-    expect(written.key).toBe('repo-short:v2:a/one');
+    expect(written.key).toBe('repo-short:v3:a/one');
     expect(written.value).toEqual({
       short: '一键修复代码风格',
       src: '用 Rust 写的极快 Python linter，替代 flake8|An extremely fast Python linter and code formatter',
@@ -496,7 +496,7 @@ describe('loadRepoShortSummaries — 卡片标题专用短句', () => {
   it('模型返回超宽短语（超过 20 列）：丢弃，不把长句硬塞进标题', async () => {
     llmMock.generateObjectSafe.mockResolvedValue({
       summaries: [
-        { fullName: 'a/one', short: '这是一个非常非常长的短语完全放不进标题' },
+        { fullName: 'a/one', short: '这是一个非常非常长的短语完全放不进标题即使两行也放不下' },
       ],
     });
 

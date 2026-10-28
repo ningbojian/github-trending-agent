@@ -38,13 +38,13 @@ const summariesSchema = z.object({
   summaries: z.array(z.object({ fullName: z.string(), zh: z.string() })),
 });
 
-/** 卡片标题专用的短句：完整短语，≤10 个汉字。 */
+/** 卡片标题专用的短句：完整短语，≤18 个汉字。 */
 const shortSchema = z.object({
   summaries: z.array(z.object({ fullName: z.string(), short: z.string() })),
 });
 
 /** 短句的显示宽度上限（汉字 2 列；标题里只剩约 20 列）。 */
-const SHORT_MAX_WIDTH = 20;
+const SHORT_MAX_WIDTH = 40;
 
 interface CacheValue {
   zh: string;
@@ -279,7 +279,7 @@ export async function loadRepoSummaries(
 // ---------------------------------------------------------------------------
 
 /**
- * 卡片标题只剩约 20 列（10 个汉字），把 28 字简介硬截会得到半句话——
+ * 卡片标题只剩约 40 列（18 个汉字），把 28 字简介硬截会得到半句话——
  * 用户明确说过「截了一半，不好」。这里让模型单独生成一个**完整短语**，
  * 缓存在独立的 `repo-short:` 键下（src = 完整简介，简介变了就失效）。
  *
@@ -287,7 +287,7 @@ export async function loadRepoSummaries(
  * 再不行干脆不写简介。绝不把长句切一半塞进标题。
  */
 
-const SHORT_CACHE_PREFIX = 'repo-short:v2:';
+const SHORT_CACHE_PREFIX = 'repo-short:v3:';
 
 /** 单批仓库数：一次塞太多会让网关超时（2026-10-28 实测 60 条直接 abort）。 */
 const SHORT_BATCH_SIZE = 10;
@@ -315,9 +315,9 @@ function normalizeShortText(text: string): string {
 function buildShortPrompt(items: ShortSummaryInput[]): string {
   return [
     '把下列 GitHub 仓库压成一个更短的中文短语，要求：',
-    '1. 说清楚它能帮用户**完成什么**（动作 + 结果），不要只写「XX 工具 / 框架 / 平台」；',
+    '1. 说清楚它能帮用户**完成什么**（动作 + 结果），写成一句完整的话，不要只写「XX 工具 / 框架 / 平台」；',
     '   例：「跨平台内容搜索工具」应写成「跨平台搜内容并汇总」；',
-    '2. 不超过 10 个汉字，必须是完整短语，不加省略号，不要半句话；',
+    '2. 不超过 18 个汉字，必须是一句完整的话，不加省略号，不要半句话；',
     '3. 不评价、不夸张、不编造资料里没有的功能；',
     '4. 每个仓库恰好输出一条；',
     '5. 以 JSON 输出：{"summaries":[{"fullName":"owner/repo","short":"短语"}]}。',

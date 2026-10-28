@@ -22,8 +22,10 @@ export const NEWS_MAX_ARTICLES = 8;
 
 /** 只有这批里增量最猛的 1–2 条给 🔥；每条都亮等于每条都不亮。 */
 export const HOT_TOP_N = 2;
-/** 火苗的绝对下限：增量没到这条线，一个都不给（避免冷清的日子也硬凑）。 */
-export const HOT_MIN_DELTA = 300;
+/** 火苗的绝对下限：增量没到这条线，一个都不给（避免小仓库靠极低基数刷榜）。 */
+export const HOT_MIN_DELTA = 100;
+/** 火苗的增长率下限：`+增量 / 总星标` ≥ 5%（一周）。基量大小不再决定谁能亮。 */
+export const HOT_MIN_RATE = 0.05;
 
 /**
  * 短简介的显示宽度上限（列）：汉字/全角算 2 列，ASCII 算 1 列。
@@ -110,12 +112,10 @@ function clipToBytes(text: string, maxBytes: number): string {
   return `${chars.slice(0, keep).join('').trimEnd()}${ellipsis}`;
 }
 
-/** 标题头：标记 + 序号 + 仓库 + 星标 + 语言标签（一定可见的部分）。 */
+/** 标题头：标记 + 序号 + 仓库 + 星标（一定可见的部分）。 */
 function titleHead(index: number, entry: NewsEntry, hot: boolean): string {
   const marker = hot ? '🔥 ' : entry.isNew ? '🆕 ' : '';
-  const language = entry.language?.trim();
-  const tag = language ? ` · ${language}` : '';
-  return `${marker}${index + 1}. ${entry.fullName} ★${shortStars(entry.stars)} (+${entry.starsDelta})${tag}`;
+  return `${marker}${index + 1}. ${entry.fullName} ★${shortStars(entry.stars)} (+${entry.starsDelta})`;
 }
 
 /**
@@ -147,13 +147,20 @@ function ogUrl(fullName: string): string {
   return `https://opengraph.githubassets.com/1/${fullName}`;
 }
 
-/** 增量最猛的 1–2 条（且不低于绝对下限）才给 🔥。 */
+/** 一周增长率：新增星标 / 总星标。绝对增量会永远锁死在榜首，增长率不会。 */
+function growthRate(entry: NewsEntry): number {
+  return entry.stars > 0 ? entry.starsDelta / entry.stars : 0;
+}
+
+/** 增长率过线、且增量不低于绝对下限的条目里，取增长最快的 1–2 条。 */
 function hotIndexes(entries: NewsEntry[]): Set<number> {
   const ranked = entries
-    .map((entry, index) => ({ entry, index }))
-    .sort((a, b) => b.entry.starsDelta - a.entry.starsDelta)
-    .slice(0, HOT_TOP_N)
-    .filter((item) => item.entry.starsDelta >= HOT_MIN_DELTA);
+    .map((entry, index) => ({ entry, index, rate: growthRate(entry) }))
+    .filter(
+      (item) => item.entry.starsDelta >= HOT_MIN_DELTA && item.rate >= HOT_MIN_RATE,
+    )
+    .sort((a, b) => b.rate - a.rate)
+    .slice(0, HOT_TOP_N);
   return new Set(ranked.map((item) => item.index));
 }
 

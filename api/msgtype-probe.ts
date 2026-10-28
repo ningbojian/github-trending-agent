@@ -116,10 +116,41 @@ export default async function handler(
   );
 
   // 预览期间 /api/tile 还没部署：把第 2 篇起的图片指回本端点。
+  // `v=` 是 cache-buster：上一轮缩略图 401 的 URL 很可能被微信缓存了失败结果，
+  // 换 URL 才能验证「内容没问题，只是缓存」。
+  const version = String(Date.now());
   const tilePrefix = `${baseUrl}/api/tile?`;
   const probePrefix = `${baseUrl}/api/msgtype-probe?tile=1&`;
   const preview = articles.map((article, index) =>
-    index === 0 ? article : { ...article, picurl: article.picurl.replace(tilePrefix, probePrefix) },
+    index === 0
+      ? article
+      : {
+          ...article,
+          picurl: `${article.picurl.replace(tilePrefix, probePrefix)}&v=${version}`,
+        },
+  );
+
+  // 服务端预热：先把每张图抓一遍（并行），让 CDN 命中；微信稍后抓图就秒回。
+  // 同时把状态码回给调用方——若这里就失败，问题在端点而不是微信。
+  const warm = await Promise.all(
+    preview.slice(1).map(async (article) => {
+      try {
+        const response = await fetch(article.picurl, {
+          signal: AbortSignal.timeout(5000),
+        });
+        return {
+          url: article.picurl,
+          status: response.status,
+          type: response.headers.get('content-type'),
+        };
+      } catch (err) {
+        return {
+          url: article.picurl,
+          status: 0,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }),
   );
 
   await sendWeComNews(userid, preview);
@@ -129,6 +160,7 @@ export default async function handler(
     date: snapshot.date,
     sent: preview.length,
     entries,
+    warm,
     titles: preview.map((article) => ({
       title: article.title,
       bytes: Buffer.byteLength(article.title, 'utf8'),

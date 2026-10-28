@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   HOT_MIN_DELTA,
+  HOT_MIN_RATE,
   HOT_TOP_N,
   NEWS_MAX_ARTICLES,
   buildNewsArticles,
@@ -86,42 +87,62 @@ describe('news 卡片标题', () => {
     expect(article.title.endsWith('…')).toBe(true);
   });
 
-  it('🔥 只给这批里最猛的 1–2 条——每条都亮等于每条都不亮', () => {
+  it('🔥 按增长率而不是绝对增量——基量小的暴涨项目也能亮', () => {
     const articles = buildNewsArticles(
       [
-        entry({ fullName: 'a/one', starsDelta: 500 }),
-        entry({ fullName: 'a/two', starsDelta: 400 }),
-        entry({ fullName: 'a/three', starsDelta: 300 }),
+        // 增量最大，但基量大、增长率只有 2%。
+        entry({ fullName: 'big/steady', stars: 50000, starsDelta: 1000 }),
+        // 增量不是最大，但一周涨了 20%。
+        entry({ fullName: 'small/hot', stars: 2000, starsDelta: 400 }),
+        // 一周涨 6%，也过线。
+        entry({ fullName: 'mid/hot', stars: 10000, starsDelta: 600 }),
       ],
       { baseUrl: 'https://x.test' },
     );
 
-    expect(articles).toHaveLength(3);
+    expect(articles[0].title.startsWith('🔥')).toBe(false);
+    expect(articles[1].title.startsWith('🔥 ')).toBe(true);
+    expect(articles[2].title.startsWith('🔥 ')).toBe(true);
+    expect(HOT_MIN_RATE).toBeGreaterThan(0);
+  });
+
+  it('火苗最多 2 个，按增长率取前二', () => {
+    const articles = buildNewsArticles(
+      [
+        entry({ fullName: 'a/one', stars: 1000, starsDelta: 300 }), // 30%
+        entry({ fullName: 'a/two', stars: 1000, starsDelta: 200 }), // 20%
+        entry({ fullName: 'a/three', stars: 1000, starsDelta: 100 }), // 10%
+      ],
+      { baseUrl: 'https://x.test' },
+    );
+
     expect(articles[0].title.startsWith('🔥 ')).toBe(true);
     expect(articles[1].title.startsWith('🔥 ')).toBe(true);
     expect(articles[2].title.startsWith('🔥')).toBe(false);
     expect(HOT_TOP_N).toBe(2);
   });
 
-  it('增量都没超过下限时一个火苗都不给', () => {
-    const [article] = buildNewsArticles([entry({ starsDelta: HOT_MIN_DELTA - 1 })], {
-      baseUrl: 'https://x.test',
-    });
+  it('增量太小（低于绝对下限）时，增长率再高也不给火苗', () => {
+    const [article] = buildNewsArticles(
+      [entry({ stars: 10, starsDelta: HOT_MIN_DELTA - 1 })],
+      { baseUrl: 'https://x.test' },
+    );
     expect(article.title.startsWith('🔥')).toBe(false);
   });
 
   it('新上榜用 🆕，不与 🔥 叠加', () => {
     const [article] = buildNewsArticles(
-      [entry({ starsDelta: 1, isNew: true })],
+      [entry({ stars: 41200, starsDelta: 320, isNew: true })],
       { baseUrl: 'https://x.test' },
     );
     expect(article.title.startsWith('🆕 ')).toBe(true);
     expect(article.title).not.toContain('🔥');
   });
 
-  it('语言标签跟星标后、简介前——尾部会被裁，仓库名必须最先可见', () => {
+  it('标题不显示语言标签——把空间留给短简介，仓库名与星标后直接接简介', () => {
     const title = buildNewsArticles([entry()], { baseUrl: 'https://x.test' })[0].title;
-    expect(title).toBe('🔥 1. astral-sh/ruff ★41.2k (+320) · Rust｜极快 Python linter');
+    expect(title).toBe('1. astral-sh/ruff ★41.2k (+320)｜极快 Python linter');
+    expect(title).not.toContain('· Rust');
   });
 
   it('没有短句时退回完整分句，绝不加省略号截半句', () => {
@@ -135,7 +156,7 @@ describe('news 卡片标题', () => {
       { baseUrl: 'https://x.test' },
     );
     expect(article.title).toBe(
-      '🔥 1. astral-sh/ruff ★41.2k (+320) · Rust｜极快的 Python linter',
+      '1. astral-sh/ruff ★41.2k (+320)｜极快的 Python linter',
     );
   });
 
@@ -159,6 +180,6 @@ describe('news 卡片标题', () => {
         baseUrl: 'https://x.test',
       },
     )[0].title;
-    expect(title).toBe('🔥 1. astral-sh/ruff ★41.2k (+320)');
+    expect(title).toBe('1. astral-sh/ruff ★41.2k (+320)');
   });
 });

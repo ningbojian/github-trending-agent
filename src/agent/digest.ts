@@ -1,9 +1,11 @@
 import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { env } from '../config.js';
 import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
 import { loadStarredNames } from '../github/starred-names.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
-import { sendWeComText } from '../wecom/api.js';
+import { sendWeComNews, sendWeComText } from '../wecom/api.js';
+import { NEWS_MAX_ARTICLES, buildNewsArticles, type NewsArticle } from '../wecom/news.js';
 import { formatEntryLine } from '../wecom/text.js';
 import { loadAbstractSafe } from './abstract.js';
 import { applyHardFilters, passesGrowth } from './digest-filter.js';
@@ -18,7 +20,7 @@ import {
   readPushHistory,
   recordPush,
 } from './push-history.js';
-import { normalizePreferences } from './preferences.js';
+import { DEFAULT_DIGEST_COUNT, normalizePreferences } from './preferences.js';
 import { loadRepoSummaries } from './repo-summary.js';
 import { normalizeRepoName } from './repo-name.js';
 import { loadUserSignalsStrict, rankByTaste, type UserSignals } from './taste.js';
@@ -268,7 +270,7 @@ function assemble(
  * （全中文文案，纯文本单行 + 裸链接 + 中文简介）。
  * - preferences.languages 为空/缺失 → 全量语言榜；非空（已小写化）→ lower(repos.language) IN 过滤
  * - keywords 轻量提升排序（不丢弃条目）
- * - 条数按 preferences.digestCount（clamp 1–20，默认 10）
+ * - 条数按 preferences.digestCount（clamp 1–8，默认 8；企微 news 一条最多 8 篇）
  * - 头部日期按北京时间（now 可注入，供测试与 Task 5 复用）
  * - 简介失败（null/抛错/缓存未命中降级）→ 无破折号后段，repo 列表始终存在
  * - entries 顺序 = 消息行顺序（排序 + digestCount 截断 + 1900 字节截断之后）；
@@ -336,7 +338,7 @@ export async function buildDigestFromSnapshot(
       keywords,
       digestCount,
     },
-    10,
+    DEFAULT_DIGEST_COUNT,
     accept,
   );
   const lines = selected.map((item, index) =>
@@ -352,6 +354,73 @@ export async function buildDigestFromSnapshot(
     entries: selected
       .slice(0, keptCount)
       .map((entry) => ({ fullName: entry.fullName })),
+  };
+}
+
+/**
+ * 站点根 URL：news 卡片的图片必须是绝对地址，且必须是我们自己的域名
+ * （企微直连第三方图床会随机丢弃，只剩灰头像）。
+ *
+ * 优先级：`PUBLIC_BASE_URL`（自定义域名，邮件链接也用）→ Vercel 系统域名。
+ * 都取不到（本地/测试）返回 null，调用方直接走纯文本——绝不拼相对地址。
+ */
+export function siteBaseUrl(): string | null {
+  const explicit = env.PUBLIC_BASE_URL?.replace(/\/+$/, '');
+  if (explicit !== undefined && explicit !== '') return explicit;
+  const system = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
+  if (system !== undefined && system !== '') {
+    return `https://${system.replace(/\/+$/, '')}`;
+  }
+  return null;
+}
+
+/**
+ * 从当日快照构建 news 卡片（企微的主格式）：
+ * - 选择层与文本/邮件同源（语言过滤 + 关键词排序 + accept），再截到 8 篇；
+ * - entries 与卡片顺序逐一对应，`收藏 N` 才能指向用户看到的那一条；
+ * - 第 1 篇 OG 海报、其余 `/api/tile` 缩略图的规则在 `wecom/news.ts` 里。
+ */
+export async function buildDigestNewsFromSnapshot(
+  sub: {
+    preferences: {
+      languages?: unknown;
+      keywords?: unknown;
+      digestCount?: unknown;
+    };
+  },
+  snapshot: DigestSnapshot,
+  options: {
+    baseUrl: string;
+    accept?: (item: DigestSnapshotItem) => boolean;
+  },
+): Promise<{ articles: NewsArticle[]; entries: { fullName: string }[] }> {
+  const { languages, keywords, digestCount } = normalizePreferences(sub.preferences);
+  const selected = selectEntriesForPreferences(
+    snapshot.items,
+    { languages, keywords, digestCount },
+    DEFAULT_DIGEST_COUNT,
+    options.accept,
+  ).slice(0, NEWS_MAX_ARTICLES);
+
+  const byName = new Map(snapshot.items.map((item) => [item.fullName, item]));
+  const articles = buildNewsArticles(
+    selected.map((item) => ({
+      fullName: item.fullName,
+      stars: item.stars,
+      starsDelta: item.starsDelta,
+      isNew: item.isNew,
+      language: item.language,
+      summary: item.summary,
+    })),
+    {
+      baseUrl: options.baseUrl,
+      htmlUrlOf: (entry) => byName.get(entry.fullName)?.htmlUrl,
+    },
+  );
+
+  return {
+    articles,
+    entries: selected.map((item) => ({ fullName: item.fullName })),
   };
 }
 
@@ -644,7 +713,12 @@ export async function pushDigests(
         );
       };
 
-      let built: { content: string; entries: { fullName: string }[] };
+      // news 是企微的主格式；纯文本只在「拿不到站点域名」或「news 发送失败」时兜底。
+      let content: string | null = null;
+      let articles: NewsArticle[] | null = null;
+      let entries: { fullName: string }[];
+      let newsSource: { snapshot: DigestSnapshot; pool: DigestSnapshotItem[] } | null = null;
+
       if (snapshot) {
         const pool = rankByTaste(
           applyHardFilters(snapshot.items, { signals, history, now }),
@@ -653,11 +727,26 @@ export async function pushDigests(
         // 拆成两条：看板可以分别聚合「候选量」与「去重后剩余」，不用解析文案。
         note('dedup-before', String(snapshot.items.length));
         note('dedup-after', String(pool.length));
-        built = await buildDigestFromSnapshot(sub, { ...snapshot, items: pool }, accept);
+        newsSource = { snapshot, pool };
+        const baseUrl = siteBaseUrl();
+        if (baseUrl === null) {
+          const built = await buildDigestFromSnapshot(sub, { ...snapshot, items: pool }, accept);
+          content = built.content;
+          entries = built.entries;
+        } else {
+          const news = await buildDigestNewsFromSnapshot(
+            sub,
+            { ...snapshot, items: pool },
+            { baseUrl, accept },
+          );
+          articles = news.articles;
+          entries = news.entries;
+        }
       } else {
-        built = await buildDigestWithEntries(sub, now, accept);
+        const built = await buildDigestWithEntries(sub, now, accept);
+        content = built.content;
+        entries = built.entries;
       }
-      const { content, entries } = built;
 
       if (entries.length === 0) {
         note('digest-empty', '没有通过硬过滤 + 增长门槛的条目');
@@ -686,8 +775,32 @@ export async function pushDigests(
         return;
       }
 
-      await sendWeComText(sub.wecomUserid, content);
-      note('send', `ok ${Buffer.byteLength(content, 'utf8')} 字节`);
+      if (articles !== null && newsSource !== null) {
+        note('format', `news ${articles.length} 篇`);
+        try {
+          await sendWeComNews(sub.wecomUserid, articles);
+          note('send', `news ok ${articles.length} 篇`);
+        } catch (err) {
+          // news 被拒（参数/errcode）或网络失败：同一条消息退回纯文本。
+          // 此时 news 一条都没送达，不会造成重复推送。
+          note('news-fallback', err instanceof Error ? err.message : String(err));
+          const fallback = await buildDigestFromSnapshot(
+            sub,
+            { ...newsSource.snapshot, items: newsSource.pool },
+            accept,
+          );
+          if (fallback.entries.length === 0) throw err;
+          content = fallback.content;
+          entries = fallback.entries;
+          await sendWeComText(sub.wecomUserid, content);
+          note('send', `text ok ${Buffer.byteLength(content, 'utf8')} 字节（news 回退）`);
+        }
+      } else {
+        note('format', 'text');
+        if (content === null) throw new Error('digest content missing');
+        await sendWeComText(sub.wecomUserid, content);
+        note('send', `ok ${Buffer.byteLength(content, 'utf8')} 字节`);
+      }
       sent += 1;
       await recordPush(
         sub.wecomUserid,

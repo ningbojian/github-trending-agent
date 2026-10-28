@@ -8,12 +8,12 @@
  * 全部是纯函数/常量：不碰 DB、不读 env。
  */
 
-/** 简报默认条数（用户未设置 digestCount 时）。 */
-export const DEFAULT_DIGEST_COUNT = 10;
+/** 简报默认条数（用户未设置 digestCount 时）。8 = 企微 news 一条的上限。 */
+export const DEFAULT_DIGEST_COUNT = 8;
 /** 简报条数下限（「条数 N」指令在 handler 层拦截 0/负数；此处 clamp 兜底脏数据）。 */
 export const MIN_DIGEST_COUNT = 1;
-/** 简报条数上限（成本护栏）。 */
-export const MAX_DIGEST_COUNT = 20;
+/** 简报条数上限：企微 news 一条最多 8 篇，多一条整条消息会被 45008 拒绝。 */
+export const MAX_DIGEST_COUNT = 8;
 /** 简报默认推送时间（北京时间 HH:MM）。 */
 export const DEFAULT_PUSH_TIME = '09:00';
 /** 推送间隔下限（天）。 */
@@ -49,7 +49,7 @@ export interface NormalizedPreferences {
  * preferences 运行时防御：字段缺失/非数组一律按空处理（languages 空 → 全量）；
  * keywords 去中英文标点后 trim/lowercase（读取侧清洗存量脏数据，逻辑与 parse-query 一致）；
  * languages 只 trim/lowercase（语言过滤逻辑不变）；
- * digestCount 非有限数字（含字符串/NaN/缺失）→ 默认 10，有限数字 → clamp 1–20；
+ * digestCount 非有限数字（含字符串/NaN/缺失）→ 默认 8，有限数字 → clamp 1–8；
  * pushTime 不匹配 `^([01]\d|2[0-3]):[0-5]\d$` → 默认 09:00；
  * intervalDays 非 1–30 整数 → 默认 1（Handler写入侧已拦截越界，此处兜底脏数据）。
  */

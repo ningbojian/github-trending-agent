@@ -671,7 +671,7 @@ describe('handleHelp（帮助 → 完整用法说明）', () => {
 // handleDigestCount（「条数 N」→ preferences.digestCount）+ 订阅保留 digestCount
 // ---------------------------------------------------------------------------
 describe('handleDigestCount（条数 N → 简报条数自定义）', () => {
-  it('「条数 15」→ 写 digestCount=15，保留原 languages/keywords，确认回执', async () => {
+  it('「条数 7」→ 写 digestCount=7，保留原 languages/keywords，确认回执', async () => {
     dbMock.selectQueue.push([
       {
         wecomUserid: 'alice',
@@ -680,25 +680,26 @@ describe('handleDigestCount（条数 N → 简报条数自定义）', () => {
       },
     ]);
 
-    await handleDigestCount(makeMsg({ content: '条数 15' }));
+    await handleDigestCount(makeMsg({ content: '条数 7' }));
 
     expect(dbMock.updateCalls).toHaveLength(1);
     expect(dbMock.updateCalls[0]?.values).toMatchObject({
-      preferences: { languages: [], keywords: ['ai'], digestCount: 15 },
+      preferences: { languages: [], keywords: ['ai'], digestCount: 7 },
     });
     expect(apiMock.sendWeComText).toHaveBeenCalledWith(
       'alice',
-      '✅ 每日简报条数已设为 15（1–20）',
+      '✅ 每日简报条数已设为 7（1–8）',
     );
   });
 
-  it('「条数 0」「条数 99」「条数 abc」→ 用法提示，不写库', async () => {
+  it('「条数 0」「条数 9」「条数 99」「条数 abc」→ 用法提示，不写库', async () => {
     await handleDigestCount(makeMsg({ content: '条数 0' }));
+    await handleDigestCount(makeMsg({ content: '条数 9' }));
     await handleDigestCount(makeMsg({ content: '条数 99' }));
     await handleDigestCount(makeMsg({ content: '条数 abc' }));
 
     expect(dbMock.updateCalls).toHaveLength(0);
-    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(3);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(4);
     for (const [, content] of apiMock.sendWeComText.mock.calls) {
       expect(content as string).toContain('用法');
       expect(content as string).toContain('条数 N');
@@ -719,7 +720,7 @@ describe('handleDigestCount（条数 N → 简报条数自定义）', () => {
     });
     expect(apiMock.sendWeComText).toHaveBeenCalledWith(
       'alice',
-      '✅ 每日简报条数已设为 5（1–20）',
+      '✅ 每日简报条数已设为 5（1–8）',
     );
   });
 

@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { env } from '../config.js';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
+import type { NewsArticle } from './news.js';
 
 /**
  * 企业微信 access_token 获取与消息推送。
@@ -176,6 +177,25 @@ export async function postMessage(
     }
     return;
   }
+}
+
+/**
+ * 以图文卡片（news）推送给指定成员。errcode 非 0 时抛错。
+ *
+ * 一条最多 8 篇、标题 ≤128 字节、第 1 篇会被放大——这些客户端约束由
+ * `news.ts` 的纯函数负责收口，这里只做发送。图片必须是我们自己域名
+ * （`/api/tile`）：企微直连第三方图床会随机丢弃，用户只看到灰头像。
+ */
+export async function sendWeComNews(
+  userId: string,
+  articles: NewsArticle[],
+): Promise<void> {
+  await postMessage(userId, {
+    touser: userId,
+    msgtype: 'news',
+    agentid: Number(env.WECOM_AGENT_ID),
+    news: { articles },
+  });
 }
 
 /**

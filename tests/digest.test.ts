@@ -1,6 +1,6 @@
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import handler, {
   type CronRequest,
   type CronResponse,
@@ -13,6 +13,7 @@ import { searchCaches, subscribers } from '../src/db/schema';
 // ---------------------------------------------------------------------------
 const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
+  sendWeComNews: vi.fn(),
 }));
 
 const summaryMock = vi.hoisted(() => ({
@@ -45,6 +46,7 @@ const dbMock = vi.hoisted(() => ({
 
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
+  sendWeComNews: apiMock.sendWeComNews,
 }));
 
 /**
@@ -229,6 +231,7 @@ vi.mock('../src/agent/push-history', async () => {
 import {
   buildDigestForSubscriber,
   buildDigestFromSnapshot,
+  buildDigestNewsFromSnapshot,
   buildDigestWithEntries,
   DIGEST_FOOTER,
   invalidateRecentResults,
@@ -409,20 +412,20 @@ describe('buildDigestForSubscriber — 偏好过滤', () => {
     expect(compiled.params.at(-1)).toBe(20);
   });
 
-  it('最多取 top 10 条进入简报', async () => {
-    for (let i = 1; i <= 12; i += 1) {
+  it('未设置条数时默认取 top 8（企微 news 上限）', async () => {
+    for (let i = 1; i <= 10; i += 1) {
       dbMock.executeRows.push(makeEntry(`o/r${i}`, { starsDelta: 1000 - i }));
     }
 
     const digest = await buildDigestForSubscriber(makeSub());
 
-    expect(digest).toContain('10. o/r10');
-    expect(digest).not.toContain('o/r11');
+    expect(digest).toContain('8. o/r8');
+    expect(digest).not.toContain('o/r9');
   });
 });
 
 // ---------------------------------------------------------------------------
-// buildDigestForSubscriber — digestCount 用户自定义条数（clamp 1–20，默认 10）
+// buildDigestForSubscriber — digestCount 用户自定义条数（clamp 1–8，默认 8）
 // ---------------------------------------------------------------------------
 describe('buildDigestForSubscriber — digestCount 用户自定义', () => {
   it('preferences.digestCount=3 → 简报恰 3 条', async () => {
@@ -451,8 +454,8 @@ describe('buildDigestForSubscriber — digestCount 用户自定义', () => {
     expect(digest).not.toContain('o/r2');
   });
 
-  it('digestCount=99 → clamp 到上限 20（成本护栏）', async () => {
-    for (let i = 1; i <= 21; i += 1) {
+  it('digestCount=99 → clamp 到上限 8（news 一条最多 8 篇）', async () => {
+    for (let i = 1; i <= 10; i += 1) {
       dbMock.executeRows.push(makeEntry(`o/r${i}`, { starsDelta: 1000 - i }));
     }
 
@@ -462,12 +465,12 @@ describe('buildDigestForSubscriber — digestCount 用户自定义', () => {
       }),
     );
 
-    expect(digest).toContain('20. o/r20');
-    expect(digest).not.toContain('o/r21');
+    expect(digest).toContain('8. o/r8');
+    expect(digest).not.toContain('o/r9');
   });
 
-  it('digestCount 为字符串等非法类型 → 回退默认 10', async () => {
-    for (let i = 1; i <= 12; i += 1) {
+  it('digestCount 为字符串等非法类型 → 回退默认 8', async () => {
+    for (let i = 1; i <= 10; i += 1) {
       dbMock.executeRows.push(makeEntry(`o/r${i}`, { starsDelta: 1000 - i }));
     }
 
@@ -481,8 +484,8 @@ describe('buildDigestForSubscriber — digestCount 用户自定义', () => {
       }),
     );
 
-    expect(digest).toContain('10. o/r10');
-    expect(digest).not.toContain('o/r11');
+    expect(digest).toContain('8. o/r8');
+    expect(digest).not.toContain('o/r9');
   });
 });
 
@@ -729,7 +732,7 @@ describe('buildDigestWithEntries — entries 与消息展示一致', () => {
 
     expect(content).toContain('（内容过长，已截断）');
     expect(entries.length).toBeGreaterThan(0);
-    expect(entries.length).toBeLessThan(20);
+    expect(entries.length).toBeLessThan(8);
     expect(entries[0]).toEqual({ fullName: 'owner0/repo-with-a-rather-long-name-0' });
     // 每个 entries 条目都必须真实出现在消息里；被丢弃的最后一条不得出现。
     for (const entry of entries) {
@@ -832,7 +835,7 @@ describe('buildDigestFromSnapshot — 快照优先', () => {
 
     expect(content).toContain('（内容过长，已截断）');
     expect(entries.length).toBeGreaterThan(0);
-    expect(entries.length).toBeLessThan(20);
+    expect(entries.length).toBeLessThan(8);
     for (const entry of entries) {
       expect(content).toContain(entry.fullName);
     }
@@ -846,6 +849,121 @@ describe('buildDigestFromSnapshot — 快照优先', () => {
     );
     expect(content).toContain('今日暂无符合条件的热榜项目。');
     expect(entries).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// news 卡片：企微简报的主格式（纯文本只在 news 发送失败时兜底）
+// ---------------------------------------------------------------------------
+describe('buildDigestNewsFromSnapshot — news 卡片', () => {
+  it('最多 8 篇，entries 与卡片顺序一致', async () => {
+    const items = Array.from({ length: 10 }, (_, i) =>
+      makeSnapshotItem(`s/${i}`, { starsDelta: 1000 - i }),
+    );
+
+    const { articles, entries } = await buildDigestNewsFromSnapshot(
+      makeSub({ preferences: { languages: [], keywords: [], digestCount: 20 } }),
+      { date: '2026-10-28', dataDate: null, abstract: null, items },
+      { baseUrl: 'https://ghtrending.cyou' },
+    );
+
+    expect(articles).toHaveLength(8);
+    expect(entries.map((entry) => entry.fullName)).toEqual(
+      Array.from({ length: 8 }, (_, i) => `s/${i}`),
+    );
+    expect(articles[0].picurl).toBe('https://opengraph.githubassets.com/1/s/0');
+    expect(articles[1].picurl).toContain('https://ghtrending.cyou/api/tile?repo=s%2F1');
+  });
+
+  it('accept 在截取之前生效：不合格条目不占名额、也不被补位', async () => {
+    const items = Array.from({ length: 5 }, (_, i) => makeSnapshotItem(`s/${i}`));
+
+    const { entries } = await buildDigestNewsFromSnapshot(
+      makeSub(),
+      { date: '2026-10-28', dataDate: null, abstract: null, items },
+      {
+        baseUrl: 'https://ghtrending.cyou',
+        accept: (item) => item.fullName !== 's/0',
+      },
+    );
+
+    expect(entries.map((entry) => entry.fullName)).toEqual(['s/1', 's/2', 's/3', 's/4']);
+  });
+});
+
+describe('pushDigests — news 主格式与纯文本兜底', () => {
+  const previousVercelUrl = process.env.VERCEL_URL;
+
+  afterEach(() => {
+    if (previousVercelUrl === undefined) {
+      delete process.env.VERCEL_URL;
+    } else {
+      process.env.VERCEL_URL = previousVercelUrl;
+    }
+  });
+
+  function snapshotWithOne(): void {
+    snapshotMock.getDailySnapshot.mockResolvedValueOnce({
+      date: '2026-10-28',
+      dataDate: '2026-10-28',
+      abstract: '快照里的今日概览。',
+      items: [makeSnapshotItem('s/one', { starsDelta: 240 })],
+    });
+    dbMock.selectRows.push(makeSub());
+    dbMock.claimResults.push([{ id: 1 }]);
+  }
+
+  it('有站点域名时发 news 卡片，不发纯文本', async () => {
+    process.env.VERCEL_URL = 'ghtrending.cyou';
+    snapshotWithOne();
+
+    const result = await pushDigests(new Date('2026-10-28T01:00:00Z'));
+
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    const [userid, articles] = apiMock.sendWeComNews.mock.calls[0] as [
+      string,
+      Array<{ title: string; picurl: string }>,
+    ];
+    expect(userid).toBe('alice');
+    expect(articles).toHaveLength(1);
+    expect(articles[0].picurl).toBe('https://opengraph.githubassets.com/1/s/one');
+    const saved = dbMock.insertCalls.find((call) => call.table === searchCaches);
+    expect(saved?.values).toEqual({
+      wecomUserid: 'alice',
+      results: [{ fullName: 's/one' }],
+    });
+  });
+
+  it('news 发送失败 → 回退纯文本，条目仍与消息一致，且只发一次', async () => {
+    process.env.VERCEL_URL = 'ghtrending.cyou';
+    snapshotWithOne();
+    apiMock.sendWeComNews.mockRejectedValueOnce(new Error('45008'));
+
+    const result = await pushDigests(new Date('2026-10-28T01:00:00Z'));
+
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    const content = apiMock.sendWeComText.mock.calls[0][1] as string;
+    expect(content).toContain('s/one');
+    const saved = dbMock.insertCalls.find((call) => call.table === searchCaches);
+    expect(saved?.values).toEqual({
+      wecomUserid: 'alice',
+      results: [{ fullName: 's/one' }],
+    });
+  });
+
+  it('没有站点域名（本地/测试）→ 直接纯文本，不构造相对图片 URL', async () => {
+    delete process.env.VERCEL_URL;
+    snapshotWithOne();
+
+    const result = await pushDigests(new Date('2026-10-28T01:00:00Z'));
+
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(apiMock.sendWeComNews).not.toHaveBeenCalled();
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -949,7 +1067,7 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
     await pushDigests();
 
     const results = dbMock.insertCalls[0]?.values.results as Array<{ fullName: string }>;
-    expect(results.length).toBeLessThan(20);
+    expect(results.length).toBeLessThan(8);
     expect(results[0]?.fullName).toBe('owner0/repo-with-a-rather-long-name-0');
     expect(results.map((r) => r.fullName)).not.toContain(
       'owner19/repo-with-a-rather-long-name-19',

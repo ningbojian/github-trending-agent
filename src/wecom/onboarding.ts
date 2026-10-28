@@ -49,11 +49,11 @@ export const UNSUBSCRIBE_FAILURE_REPLY = '退订失败，请稍后再试';
 export const DIGEST_COUNT_REPLY_PREFIX = '✅ 每日简报条数已设为 ';
 
 /** 「条数 N」确认文案尾句（同时声明合法范围）。 */
-export const DIGEST_COUNT_REPLY_SUFFIX = '（1–20）';
+export const DIGEST_COUNT_REPLY_SUFFIX = '（1–8）';
 
 /** 「条数 N」用法/非法输入提示（不写库）。 */
 export const DIGEST_COUNT_USAGE_REPLY =
-  '用法：「条数 N」，N 为 1–20 的整数，例如：条数 5';
+  '用法：「条数 N」，N 为 1–8 的整数，例如：条数 5';
 
 /** 「条数 N」更新失败的兜底文案。 */
 export const DIGEST_COUNT_FAILURE_REPLY = '条数设置失败，请稍后再试';
@@ -119,7 +119,7 @@ export const HELP_MESSAGE = [
   '· 订阅：回复「订阅 <偏好>」设置每日简报偏好，如「订阅 python,ai」。',
   '· 取消订阅：回复「取消订阅 <关键词>」只去掉一个偏好词（不退订简报）。',
   '· 退订：回复「退订」，停止每日简报（可随时重新订阅）。',
-  '· 条数：回复「条数 N」自定义每日简报条数（1–20，仅影响简报），如「条数 5」。',
+  '· 条数：回复「条数 N」自定义每日简报条数（1–8，仅影响简报），如「条数 5」。',
   '· 推送时间：回复「每天 H 点」或「推送时间 HH:MM」设置每日推送时间（北京时间），如「每天 9 点」。',
   '· 推送间隔：回复「每 N 天」设置推送间隔（1–30 天，1 为每天），如「每 2 天」。',
   '· 设置模型：回复「设置模型」，填自己的 AI Key（互动用你的额度）；发「我的模型」查看、「清除模型」删除。',
@@ -269,17 +269,17 @@ const DIGEST_COUNT_PREFIX = '条数';
 
 /**
  * 「条数 N」handler（router 按「条数」前缀分发）：
- * - 解析「条数 N」：N 必须是 1–20 整数；裸「条数」/非数字/越界 → 用法提示，不写库
+ * - 解析「条数 N」：N 必须是 1–8 整数；裸「条数」/非数字/越界 → 用法提示，不写库
  *   （越界 REJECTED 而非静默 clamp：用户显式输入了数字，静默改值会误导）
  * - 读-合并-写：只更新 preferences.digestCount，保留原 languages/keywords
- * - digest.ts 消费端再做 clamp 1–20 + 默认 10 兜底（脏数据防御双保险）
+ * - digest.ts 消费端再做 clamp 1–8 + 默认 8 兜底（脏数据防御双保险）
  */
 export async function handleDigestCount(msg: InboundMessage): Promise<void> {
   try {
     const content = msg.content.trim();
     const match = new RegExp(`^${DIGEST_COUNT_PREFIX}\\s*(\\d+)$`).exec(content);
     const n = match === null ? Number.NaN : Number.parseInt(match[1] ?? '', 10);
-    if (!Number.isInteger(n) || n < 1 || n > 20) {
+    if (!Number.isInteger(n) || n < 1 || n > 8) {
       await sendWeComText(msg.fromUserName, DIGEST_COUNT_USAGE_REPLY);
       return;
     }

@@ -216,12 +216,25 @@ describe('输出校验 — 数字与仓库白名单', () => {
     expect(lines).toEqual([]);
   });
 
-  it('模型只写短名（不含 owner）也算提到了证据仓库', () => {
+  it('claim 没点名仓库不再丢弃：证据由渲染层补在行尾', () => {
+    const diagnostics = {
+      total: 0,
+      invalidCandidate: 0,
+      emptyClaim: 0,
+      tooLong: 0,
+      missingRepo: 0,
+      badNumber: 0,
+      duplicate: 0,
+      kept: 0,
+    };
     const lines = validateObservationOutput(
-      { observations: [{ candidate: 1, claim: 'rocket 今天涨了 3 倍' }] },
+      { observations: [{ candidate: 1, claim: '一项目今天涨了 3 倍' }] },
       candidates,
+      diagnostics,
     );
     expect(lines).toHaveLength(1);
+    expect(diagnostics.missingRepo).toBe(1);
+    expect(lines[0].evidence).toEqual(['acme/rocket', 'acme/other']);
   });
 
   it('主题观察提到主题名即可，不强制点名仓库', () => {

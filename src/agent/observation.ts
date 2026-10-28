@@ -437,8 +437,8 @@ export function validateObservationOutput(
       continue;
     }
 
-    // 模型经常把 `owner/repo` 写成 `repo`；短名也算提到了这个仓库。
-    // 主题观察的主语是主题本身（如 mcp），要求它点名仓库反而是噪音。
+    // 模型经常把 `owner/repo` 写成 `repo`，甚至完全不点名（写成「一项目…」）。
+    // 证据不靠模型：渲染层会把没提到的证据仓库补在行尾，这里只记诊断。
     const mentionsEvidence =
       (candidate.kind === 'theme-shift' &&
         candidate.theme !== undefined &&
@@ -448,10 +448,7 @@ export function validateObservationOutput(
         const shortName = name.split('/')[1];
         return shortName !== undefined && shortName !== '' && claim.includes(shortName);
       });
-    if (!mentionsEvidence) {
-      diagnostics.missingRepo += 1;
-      continue;
-    }
+    if (!mentionsEvidence) diagnostics.missingRepo += 1;
 
     const allowed = numbersIn(candidate.facts);
     // 仓库名里天然带数字（llama.cpp、gpt-4、a/r0），不能把它们当成编造的数字。

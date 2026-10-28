@@ -429,8 +429,8 @@ describe('loadRepoSummaries — 边界', () => {
 // ---------------------------------------------------------------------------
 function shortCacheRow(fullName: string, short: string, src: string): Record<string, unknown> {
   return {
-    key: `repo-short:${fullName}`,
-    value: { short, src },
+    key: `repo-short:v2:${fullName}`,
+    value: { short, src: src + '|' },
     expiresAt: new Date(Date.now() + LONG_TTL_MS),
   };
 }
@@ -451,24 +451,33 @@ describe('loadRepoShortSummaries — 卡片标题专用短句', () => {
     expect(dbMock.insertValues).toHaveLength(0);
   });
 
-  it('未命中：把简介压成短句，写 repo-short 缓存（长 TTL）', async () => {
+  it('未命中：结合简介与原始 description 生成「能做什么」，写 repo-short 缓存（长 TTL）', async () => {
     llmMock.generateObjectSafe.mockResolvedValue({
-      summaries: [{ fullName: 'a/one', short: '极快 linter' }],
+      summaries: [{ fullName: 'a/one', short: '一键修复代码风格' }],
     });
 
     const result = await loadRepoShortSummaries([
-      { fullName: 'a/one', zh: '用 Rust 写的极快 Python linter，替代 flake8' },
+      {
+        fullName: 'a/one',
+        zh: '用 Rust 写的极快 Python linter，替代 flake8',
+        description: 'An extremely fast Python linter and code formatter',
+        topics: ['python', 'linter', 'formatter'],
+      },
     ]);
 
-    expect(result.get('a/one')).toBe('极快 linter');
+    expect(result.get('a/one')).toBe('一键修复代码风格');
     const prompt = llmMock.generateObjectSafe.mock.calls[0]?.[1] as string;
     expect(prompt).toContain('不超过 10 个汉字');
+    expect(prompt).toContain('完成什么');
     expect(prompt).toContain('用 Rust 写的极快 Python linter');
+    // 原始 description/topics 必须一起进 prompt——否则模型只能看到「XX 工具」的类别，写不出能力。
+    expect(prompt).toContain('An extremely fast Python linter');
+    expect(prompt).toContain('formatter');
     const written = dbMock.insertValues[0]!;
-    expect(written.key).toBe('repo-short:a/one');
+    expect(written.key).toBe('repo-short:v2:a/one');
     expect(written.value).toEqual({
-      short: '极快 linter',
-      src: '用 Rust 写的极快 Python linter，替代 flake8',
+      short: '一键修复代码风格',
+      src: '用 Rust 写的极快 Python linter，替代 flake8|An extremely fast Python linter and code formatter',
     });
     const expiresAt = (written.expiresAt as Date).getTime();
     expect(expiresAt).toBeGreaterThanOrEqual(Date.now() + LONG_TTL_MS - 1000);

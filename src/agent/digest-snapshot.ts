@@ -175,7 +175,12 @@ async function loadShortsSafe(
 ): Promise<Map<string, string>> {
   const withSummary = items
     .filter((item) => (summaries.get(item.fullName) ?? '').trim() !== '')
-    .map((item) => ({ fullName: item.fullName, zh: summaries.get(item.fullName) as string }));
+    .map((item) => ({
+      fullName: item.fullName,
+      zh: summaries.get(item.fullName) as string,
+      description: item.description,
+      topics: item.topics,
+    }));
   if (withSummary.length === 0) return new Map();
   try {
     return await loadRepoShortSummaries(withSummary);

@@ -287,7 +287,7 @@ export async function loadRepoSummaries(
  * 再不行干脆不写简介。绝不把长句切一半塞进标题。
  */
 
-const SHORT_CACHE_PREFIX = 'repo-short:';
+const SHORT_CACHE_PREFIX = 'repo-short:v2:';
 
 /** 单批仓库数：一次塞太多会让网关超时（2026-10-28 实测 60 条直接 abort）。 */
 const SHORT_BATCH_SIZE = 10;
@@ -312,22 +312,37 @@ function normalizeShortText(text: string): string {
   return displayWidth(cleaned) <= SHORT_MAX_WIDTH ? cleaned : '';
 }
 
-function buildShortPrompt(items: Array<{ fullName: string; zh: string }>): string {
+function buildShortPrompt(items: ShortSummaryInput[]): string {
   return [
-    '把下列 GitHub 仓库的中文简介压成一个更短的中文短语，要求：',
-    '1. 不超过 10 个汉字，必须是完整短语，不加省略号，不要半句话；',
-    '2. 只说明它是什么或做什么，不评价、不夸张、不编造；',
-    '3. 每个仓库恰好输出一条；',
-    '4. 以 JSON 输出：{"summaries":[{"fullName":"owner/repo","short":"短语"}]}。',
+    '把下列 GitHub 仓库压成一个更短的中文短语，要求：',
+    '1. 说清楚它能帮用户**完成什么**（动作 + 结果），不要只写「XX 工具 / 框架 / 平台」；',
+    '   例：「跨平台内容搜索工具」应写成「跨平台搜内容并汇总」；',
+    '2. 不超过 10 个汉字，必须是完整短语，不加省略号，不要半句话；',
+    '3. 不评价、不夸张、不编造资料里没有的功能；',
+    '4. 每个仓库恰好输出一条；',
+    '5. 以 JSON 输出：{"summaries":[{"fullName":"owner/repo","short":"短语"}]}。',
     '',
-    '仓库与简介：',
-    ...items.map((item) => `- ${item.fullName}：${item.zh}`),
+    '仓库与资料：',
+    ...items.map((item) => {
+      const description = item.description?.trim();
+      const topics =
+        item.topics && item.topics.length > 0 ? `；topics: ${item.topics.join(', ')}` : '';
+      return `- ${item.fullName}：${item.zh}${description ? `；description: ${description}` : ''}${topics}`;
+    }),
   ].join('\n');
 }
 
 export interface ShortSummaryInput {
   fullName: string;
   zh: string;
+  /** 原始 description/topics：短句要写「能做什么」，只靠 28 字概括常常只剩类别。 */
+  description?: string | null;
+  topics?: string[];
+}
+
+/** 缓存失效依据：简介或原始描述变了都该重新生成。 */
+function shortSrc(item: ShortSummaryInput): string {
+  return `${item.zh}|${item.description ?? ''}`;
 }
 
 /**
@@ -366,7 +381,7 @@ export async function loadRepoShortSummaries(
   const misses: ShortSummaryInput[] = [];
   for (const item of unique) {
     const hit = cached.get(shortCacheKey(item.fullName));
-    if (hit && hit.src === item.zh) {
+    if (hit && hit.src === shortSrc(item)) {
       const normalized = normalizeShortText(hit.short);
       if (normalized !== '') {
         result.set(item.fullName, normalized);
@@ -414,7 +429,7 @@ export async function loadRepoShortSummaries(
       result.set(entry.fullName, short);
       writes.push({
         key: shortCacheKey(entry.fullName),
-        value: { short, src: source.zh },
+        value: { short, src: shortSrc(source) },
         expiresAt: new Date(now + LONG_TTL_MS),
       });
     }

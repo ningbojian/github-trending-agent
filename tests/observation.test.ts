@@ -3,6 +3,7 @@ import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import {
   buildObservationCandidates,
+  buildObservationPrompt,
   buildThemeStats,
   composeObservationFactsSql,
   passesNoveltyGate,
@@ -392,5 +393,18 @@ describe('事实 SQL', () => {
     expect(query.sql).toContain('trending_entries');
     expect(query.sql).toContain('distinct on');
     expect(query.params).toContain(DATA_DATE);
+  });
+});
+
+describe('提示词', () => {
+  it('带上证据仓库的短简介，并要求先给判断、数字只作证据', () => {
+    const prompt = buildObservationPrompt(
+      [candidate()],
+      new Map([['acme/rocket', '极快工具']]),
+    );
+    expect(prompt).toContain('acme/rocket（极快工具）');
+    expect(prompt).toContain('先给判断');
+    expect(prompt).toContain('不要用「今日 N 个」');
+    expect(prompt).toContain('设计工具集中上榜');
   });
 });

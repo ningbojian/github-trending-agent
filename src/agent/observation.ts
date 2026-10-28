@@ -100,7 +100,7 @@ export interface ValidationDiagnostics {
 /** 观察消息的字节上限（企微 text 2048，留足余量）。 */
 export const OBSERVATION_MAX_BYTES = 800;
 /** 每条观察 claim 的汉字上限。 */
-export const OBSERVATION_CLAIM_MAX_CHARS = 65;
+export const OBSERVATION_CLAIM_MAX_CHARS = 80;
 /** 观察历史保留 8 天（覆盖 7 天窗口）。 */
 export const OBSERVATION_HISTORY_DAYS = 7;
 /** 最多 3 条，少于 2 条不发。 */
@@ -350,18 +350,31 @@ export function buildObservationCandidates(
     .slice(0, MAX_CANDIDATES);
 }
 
-/** 观察提示词：只给候选事实，要求写成一句人话并引用候选里的仓库。 */
-export function buildObservationPrompt(candidates: ObservationCandidate[]): string {
+/** 观察提示词：只给候选事实与证据仓库的功能短句，要求先判断、数字作证据。 */
+export function buildObservationPrompt(
+  candidates: ObservationCandidate[],
+  summaries: Map<string, string> = new Map(),
+): string {
+  const evidence = (candidate: ObservationCandidate): string =>
+    candidate.evidence
+      .map((name) => {
+        const summary = summaries.get(name)?.trim();
+        return summary ? `${name}（${summary}）` : name;
+      })
+      .join('、');
   const lines = candidates.map((candidate, index) => {
-    return `[${index + 1}] (${candidate.kind}) ${candidate.facts}｜证据：${candidate.evidence.join('、')}`;
+    return `[${index + 1}] (${candidate.kind}) ${candidate.facts}｜证据：${evidence(candidate)}`;
   });
   return [
     '下面是今天 GitHub 热榜中「和过去 7 天不同」的事实候选。请写 2 到 3 条今日观察：',
-    `1. 每条一句话、不超过 ${OBSERVATION_CLAIM_MAX_CHARS} 个汉字，说清楚「发生了什么、意味着什么」；`,
-    '2. 只能引用候选里出现的仓库名和数字，不要编造任何列表之外的事实；',
-    '3. 不要用「可能 / 也许 / 值得关注」这类空话，不要 emoji、不要链接；',
-    '4. 每条对应一个候选编号；',
-    '5. 以 JSON 输出：{"observations":[{"candidate":1,"claim":"一句话"}]}。',
+    `1. 每条一句话、不超过 ${OBSERVATION_CLAIM_MAX_CHARS} 个汉字，先给判断、再说证据，回答「社区在集中解决什么问题」；`,
+    '2. 不要用「今日 N 个」「平均 N 个」开头，也不要只复述数量；数字只作为句子里的证据；',
+    '3. 只能引用候选里出现的仓库名和数字，不要编造任何列表之外的事实；',
+    '4. 不要用「可能 / 也许 / 值得关注」这类空话，不要 emoji、不要链接；',
+    '5. 每条对应一个候选编号；',
+    '6. 以 JSON 输出：{"observations":[{"candidate":1,"claim":"一句话"}]}。',
+    '',
+    '示例风格（不是今天的事实）：设计工具集中上榜：ruff 与 hallmark 同时在解决「AI 生成的页面一眼假」的问题。',
     '',
     '候选：',
     ...lines,
@@ -773,9 +786,12 @@ export async function getDailyObservations(
   let lines: ObservationLine[] = [];
   let debug: unknown = { candidates: candidates.length };
   if (candidates.length > 0) {
+    const summaries = new Map(
+      snapshot.items.map((item) => [item.fullName, item.short ?? item.summary ?? '']),
+    );
     const out = await generateObjectSafe(
       observationSchema,
-      buildObservationPrompt(candidates),
+      buildObservationPrompt(candidates, summaries),
       undefined,
       { timeoutMs: LLM_TIMEOUT_MS },
     ).catch(() => null);

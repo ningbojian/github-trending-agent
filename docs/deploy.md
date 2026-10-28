@@ -161,6 +161,8 @@ curl -i https://<domain>/api/wecom-callback
 curl -i https://<domain>/api/oauth-github
 ```
 
+> **推送有两个触发源**：`vercel.json` 的 Vercel Cron `0 1 * * *`（UTC，= 北京 09:00）负责默认时段的准点触发，Vercel 会带上 `Authorization: Bearer $CRON_SECRET`（前提是该项目已配置同名环境变量）；GitHub Actions 的 `digest-hourly.yml` 作为其余时段的兜底。GitHub 的 schedule 实测会整段丢触发（2026-10-28 出现过 09:17–13:17 连续五个 tick 不跑），**不要**把它当准点保障。
+>
 > `VERCEL_URL` 作为 Actions secret 时**只填域名**（`myapp.vercel.app`），不带 `https://` 前缀、不带尾斜杠——`digest-hourly.yml` 会拼成 `https://${VERCEL_URL}/api/cron-push-digest`（`daily.yml` 抓取/补全之后还会**兜底触发一次**简报推送；`pushDigests` 的三重门控保证与小时触发不重复）。
 
 ---
@@ -343,7 +345,7 @@ curl -i https://<domain>/api/oauth-github
 - **预期观察**：
   1. 三条回执分别为 `✅ 每日简报条数已设为 3（1–20）`、`✅ 简报推送时间已设为 20:30（北京时间）`、`✅ 简报推送间隔已设为每 2 天（1–30，未到间隔不重复推送）`。
   2. Neon：`select preferences from subscribers where wecom_userid = '<测试用户>';` 三个字段同时存在（后续「订阅 …」不会把它们刷掉）。
-  3. 次日 20:30 后收到 3 条简报；间隔 2 天时次日不推、第三天推（tick 由 `.github/workflows/digest-hourly.yml` 每小时**第 17 分**触发，不是整点；门控在 `pushDigests` 内）。
+  3. 次日 20:30 后收到 3 条简报；间隔 2 天时次日不推、第三天推（默认 09:00 由 **Vercel Cron** `vercel.json` 的 `0 1 * * *` 触发，其余时间由 `.github/workflows/digest-hourly.yml` 每小时**第 17 分**兜底；门控在 `pushDigests` 内）。
   4. 越界输入（「条数 0」「推送时间 25:99」「每 99 天」）→ 回用法提示，不写库。
 
 ### ⑧ 加入即自动收到简报（第二账号）

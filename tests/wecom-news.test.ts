@@ -5,7 +5,6 @@ import {
   HOT_TOP_N,
   NEWS_MAX_ARTICLES,
   buildNewsArticles,
-  tileSlug,
   type NewsEntry,
 } from '../src/wecom/news';
 
@@ -47,51 +46,37 @@ function entries(count: number): NewsEntry[] {
 
 describe('news 卡片条数', () => {
   it(`一条 news 最多 ${NEWS_MAX_ARTICLES} 篇——第 9 篇会被企微以 45008 拒绝`, () => {
-    expect(buildNewsArticles(entries(10), { baseUrl: 'https://ghtrending.cyou' })).toHaveLength(
-      NEWS_MAX_ARTICLES,
-    );
+    expect(buildNewsArticles(entries(10))).toHaveLength(NEWS_MAX_ARTICLES);
   });
 
   it('不足 8 条时按实际条数发，不补空卡', () => {
-    expect(buildNewsArticles(entries(3), { baseUrl: 'https://ghtrending.cyou' })).toHaveLength(3);
+    expect(buildNewsArticles(entries(3))).toHaveLength(3);
   });
 });
 
 describe('news 卡片图片', () => {
-  it('首篇用 GitHub OG 海报（多篇布局里它是唯一的大图）', () => {
-    const [first] = buildNewsArticles(entries(3), { baseUrl: 'https://ghtrending.cyou' });
+  it('只有第 1 篇带图（GitHub OG 海报）', () => {
+    const [first] = buildNewsArticles(entries(3));
     expect(first.picurl).toBe('https://opengraph.githubassets.com/1/owner0/repo0');
   });
 
-  it('其余用静态语言色块（Vercel 静态 CDN，不经过函数）', () => {
-    const articles = buildNewsArticles(entries(3), { baseUrl: 'https://ghtrending.cyou/' });
-    expect(articles[1].picurl).toBe('https://ghtrending.cyou/tiles/rust.png');
-    expect(articles[2].picurl).toBe('https://ghtrending.cyou/tiles/rust.png');
-  });
-
-  it('语言名映射到静态文件名：C++ → cpp、C# → csharp、Jupyter Notebook → jupyter', () => {
-    expect(tileSlug('C++')).toBe('cpp');
-    expect(tileSlug('c#')).toBe('csharp');
-    expect(tileSlug('Jupyter Notebook')).toBe('jupyter');
-    expect(tileSlug('Rust')).toBe('rust');
-    expect(tileSlug('TypeScript')).toBe('typescript');
-    expect(tileSlug(null)).toBe('default');
-    expect(tileSlug('Brainfuck')).toBe('default');
+  it('其余条目不发图——微信逐张抓图很慢且会随机失败，少图才是快', () => {
+    const articles = buildNewsArticles(entries(3));
+    expect(articles[1].picurl).toBeUndefined();
+    expect(articles[2].picurl).toBeUndefined();
   });
 });
 
 describe('news 卡片标题', () => {
   it('标题不超过企微的 128 字节上限', () => {
-    for (const article of buildNewsArticles(entries(8), { baseUrl: 'https://ghtrending.cyou' })) {
+    for (const article of buildNewsArticles(entries(8))) {
       expect(Buffer.byteLength(article.title, 'utf8')).toBeLessThanOrEqual(128);
     }
   });
 
   it('超长仓库名也能收进 128 字节，且不拆坏多字节字符', () => {
     const longName = `${'a'.repeat(39)}/${'b'.repeat(100)}`;
-    const [article] = buildNewsArticles([entry({ fullName: longName })], {
-      baseUrl: 'https://ghtrending.cyou',
-    });
+    const [article] = buildNewsArticles([entry({ fullName: longName })]);
     expect(Buffer.byteLength(article.title, 'utf8')).toBeLessThanOrEqual(128);
     expect(article.title.endsWith('…')).toBe(true);
   });
@@ -106,7 +91,6 @@ describe('news 卡片标题', () => {
         // 一周涨 6%，也过线。
         entry({ fullName: 'mid/hot', stars: 10000, starsDelta: 600 }),
       ],
-      { baseUrl: 'https://x.test' },
     );
 
     expect(articles[0].title.startsWith('🔥')).toBe(false);
@@ -122,7 +106,6 @@ describe('news 卡片标题', () => {
         entry({ fullName: 'a/two', stars: 1000, starsDelta: 200 }), // 20%
         entry({ fullName: 'a/three', stars: 1000, starsDelta: 100 }), // 10%
       ],
-      { baseUrl: 'https://x.test' },
     );
 
     expect(articles[0].title.startsWith('🔥 ')).toBe(true);
@@ -134,7 +117,6 @@ describe('news 卡片标题', () => {
   it('增量太小（低于绝对下限）时，增长率再高也不给火苗', () => {
     const [article] = buildNewsArticles(
       [entry({ stars: 10, starsDelta: HOT_MIN_DELTA - 1 })],
-      { baseUrl: 'https://x.test' },
     );
     expect(article.title.startsWith('🔥')).toBe(false);
   });
@@ -142,14 +124,13 @@ describe('news 卡片标题', () => {
   it('新上榜用 🆕，不与 🔥 叠加', () => {
     const [article] = buildNewsArticles(
       [entry({ stars: 41200, starsDelta: 320, isNew: true })],
-      { baseUrl: 'https://x.test' },
     );
     expect(article.title.startsWith('🆕 ')).toBe(true);
     expect(article.title).not.toContain('🔥');
   });
 
   it('标题不显示语言标签——把空间留给短简介，仓库名与星标后直接接简介', () => {
-    const title = buildNewsArticles([entry()], { baseUrl: 'https://x.test' })[0].title;
+    const title = buildNewsArticles([entry()])[0].title;
     expect(title).toBe('1. astral-sh/ruff ★41.2k (+320)｜极快 Python linter');
     expect(title).not.toContain('· Rust');
   });
@@ -162,7 +143,6 @@ describe('news 卡片标题', () => {
           summary: '极快的 Python linter，替代 flake8 与 isort',
         }),
       ],
-      { baseUrl: 'https://x.test' },
     );
     expect(article.title).toBe(
       '1. astral-sh/ruff ★41.2k (+320)｜极快的 Python linter',
@@ -177,7 +157,6 @@ describe('news 卡片标题', () => {
           summary: '一段没有标点而且非常非常长的中文简介文字内容',
         }),
       ],
-      { baseUrl: 'https://x.test' },
     );
     expect(article.title).not.toContain('｜');
   });
@@ -185,9 +164,6 @@ describe('news 卡片标题', () => {
   it('没有语言或简介时不留孤零零的分隔符', () => {
     const title = buildNewsArticles(
       [entry({ language: null, summary: undefined, short: undefined })],
-      {
-        baseUrl: 'https://x.test',
-      },
     )[0].title;
     expect(title).toBe('1. astral-sh/ruff ★41.2k (+320)');
   });

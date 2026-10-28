@@ -1,5 +1,4 @@
 import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
-import { env } from '../config.js';
 import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
 import { loadStarredNames } from '../github/starred-names.js';
@@ -358,27 +357,10 @@ export async function buildDigestFromSnapshot(
 }
 
 /**
- * 站点根 URL：news 卡片的图片必须是绝对地址，且必须是我们自己的域名
- * （企微直连第三方图床会随机丢弃，只剩灰头像）。
- *
- * 优先级：`PUBLIC_BASE_URL`（自定义域名，邮件链接也用）→ Vercel 系统域名。
- * 都取不到（本地/测试）返回 null，调用方直接走纯文本——绝不拼相对地址。
- */
-export function siteBaseUrl(): string | null {
-  const explicit = env.PUBLIC_BASE_URL?.replace(/\/+$/, '');
-  if (explicit !== undefined && explicit !== '') return explicit;
-  const system = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
-  if (system !== undefined && system !== '') {
-    return `https://${system.replace(/\/+$/, '')}`;
-  }
-  return null;
-}
-
-/**
  * 从当日快照构建 news 卡片（企微的主格式）：
  * - 选择层与文本/邮件同源（语言过滤 + 关键词排序 + accept），再截到 8 篇；
  * - entries 与卡片顺序逐一对应，`收藏 N` 才能指向用户看到的那一条；
- * - 第 1 篇 OG 海报、其余 `/api/tile` 缩略图的规则在 `wecom/news.ts` 里。
+ * - 第 1 篇 OG 海报、其余条目不发图的规则在 `wecom/news.ts` 里。
  */
 export async function buildDigestNewsFromSnapshot(
   sub: {
@@ -390,9 +372,8 @@ export async function buildDigestNewsFromSnapshot(
   },
   snapshot: DigestSnapshot,
   options: {
-    baseUrl: string;
     accept?: (item: DigestSnapshotItem) => boolean;
-  },
+  } = {},
 ): Promise<{ articles: NewsArticle[]; entries: { fullName: string }[] }> {
   const { languages, keywords, digestCount } = normalizePreferences(sub.preferences);
   const selected = selectEntriesForPreferences(
@@ -414,7 +395,6 @@ export async function buildDigestNewsFromSnapshot(
       short: item.short,
     })),
     {
-      baseUrl: options.baseUrl,
       htmlUrlOf: (entry) => byName.get(entry.fullName)?.htmlUrl,
     },
   );
@@ -729,20 +709,13 @@ export async function pushDigests(
         note('dedup-before', String(snapshot.items.length));
         note('dedup-after', String(pool.length));
         newsSource = { snapshot, pool };
-        const baseUrl = siteBaseUrl();
-        if (baseUrl === null) {
-          const built = await buildDigestFromSnapshot(sub, { ...snapshot, items: pool }, accept);
-          content = built.content;
-          entries = built.entries;
-        } else {
-          const news = await buildDigestNewsFromSnapshot(
-            sub,
-            { ...snapshot, items: pool },
-            { baseUrl, accept },
-          );
-          articles = news.articles;
-          entries = news.entries;
-        }
+        const news = await buildDigestNewsFromSnapshot(
+          sub,
+          { ...snapshot, items: pool },
+          { accept },
+        );
+        articles = news.articles;
+        entries = news.entries;
       } else {
         const built = await buildDigestWithEntries(sub, now, accept);
         content = built.content;

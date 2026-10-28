@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { buildDigestNewsFromSnapshot, siteBaseUrl } from '../src/agent/digest.js';
+import { buildDigestNewsFromSnapshot } from '../src/agent/digest.js';
 import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
 import { db } from '../src/db/client.js';
 import { subscribers } from '../src/db/schema.js';
@@ -68,12 +68,6 @@ export default async function handler(
     return;
   }
 
-  const baseUrl = siteBaseUrl();
-  if (baseUrl === null) {
-    sendJson(res, 500, { error: 'site base url unavailable' });
-    return;
-  }
-
   const rows = await db()
     .select()
     .from(subscribers)
@@ -93,30 +87,30 @@ export default async function handler(
   const { articles, entries } = await buildDigestNewsFromSnapshot(
     { preferences: sub.preferences },
     snapshot,
-    { baseUrl },
   );
 
-  // 服务端预热：确认静态色块可访问。微信是**打开会话时**才去抓图，
-  // 只有静态 CDN 才能保证秒开；这里顺便把状态码回给调用方排查。
+  // 只有第 1 篇带图（GitHub OG）；预热一次确认它可访问。
   const warm = await Promise.all(
-    articles.slice(1).map(async (article) => {
-      try {
-        const response = await fetch(article.picurl, {
-          signal: AbortSignal.timeout(5000),
-        });
-        return {
-          url: article.picurl,
-          status: response.status,
-          type: response.headers.get('content-type'),
-        };
-      } catch (err) {
-        return {
-          url: article.picurl,
-          status: 0,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
-    }),
+    articles
+      .filter((article) => article.picurl !== undefined)
+      .map(async (article) => {
+        try {
+          const response = await fetch(article.picurl as string, {
+            signal: AbortSignal.timeout(8000),
+          });
+          return {
+            url: article.picurl,
+            status: response.status,
+            type: response.headers.get('content-type'),
+          };
+        } catch (err) {
+          return {
+            url: article.picurl,
+            status: 0,
+            error: err instanceof Error ? err.message : String(err),
+          };
+        }
+      }),
   );
 
   await sendWeComNews(userid, articles);

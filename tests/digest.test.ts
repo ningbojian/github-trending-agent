@@ -1,6 +1,6 @@
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import handler, {
   type CronRequest,
   type CronResponse,
@@ -864,7 +864,6 @@ describe('buildDigestNewsFromSnapshot — news 卡片', () => {
     const { articles, entries } = await buildDigestNewsFromSnapshot(
       makeSub({ preferences: { languages: [], keywords: [], digestCount: 20 } }),
       { date: '2026-10-28', dataDate: null, abstract: null, items },
-      { baseUrl: 'https://ghtrending.cyou' },
     );
 
     expect(articles).toHaveLength(8);
@@ -872,7 +871,7 @@ describe('buildDigestNewsFromSnapshot — news 卡片', () => {
       Array.from({ length: 8 }, (_, i) => `s/${i}`),
     );
     expect(articles[0].picurl).toBe('https://opengraph.githubassets.com/1/s/0');
-    expect(articles[1].picurl).toContain('https://ghtrending.cyou/api/tile?repo=s%2F1');
+    expect(articles[1].picurl).toBeUndefined();
   });
 
   it('accept 在截取之前生效：不合格条目不占名额、也不被补位', async () => {
@@ -882,7 +881,6 @@ describe('buildDigestNewsFromSnapshot — news 卡片', () => {
       makeSub(),
       { date: '2026-10-28', dataDate: null, abstract: null, items },
       {
-        baseUrl: 'https://ghtrending.cyou',
         accept: (item) => item.fullName !== 's/0',
       },
     );
@@ -892,16 +890,6 @@ describe('buildDigestNewsFromSnapshot — news 卡片', () => {
 });
 
 describe('pushDigests — news 主格式与纯文本兜底', () => {
-  const previousVercelUrl = process.env.VERCEL_URL;
-
-  afterEach(() => {
-    if (previousVercelUrl === undefined) {
-      delete process.env.VERCEL_URL;
-    } else {
-      process.env.VERCEL_URL = previousVercelUrl;
-    }
-  });
-
   function snapshotWithOne(): void {
     snapshotMock.getDailySnapshot.mockResolvedValueOnce({
       date: '2026-10-28',
@@ -913,8 +901,7 @@ describe('pushDigests — news 主格式与纯文本兜底', () => {
     dbMock.claimResults.push([{ id: 1 }]);
   }
 
-  it('有站点域名时发 news 卡片，不发纯文本', async () => {
-    process.env.VERCEL_URL = 'ghtrending.cyou';
+  it('快照可用时发 news 卡片，不发纯文本', async () => {
     snapshotWithOne();
 
     const result = await pushDigests(new Date('2026-10-28T01:00:00Z'));
@@ -937,7 +924,6 @@ describe('pushDigests — news 主格式与纯文本兜底', () => {
   });
 
   it('news 发送失败 → 回退纯文本，条目仍与消息一致，且只发一次', async () => {
-    process.env.VERCEL_URL = 'ghtrending.cyou';
     snapshotWithOne();
     apiMock.sendWeComNews.mockRejectedValueOnce(new Error('45008'));
 
@@ -955,15 +941,15 @@ describe('pushDigests — news 主格式与纯文本兜底', () => {
     });
   });
 
-  it('没有站点域名（本地/测试）→ 直接纯文本，不构造相对图片 URL', async () => {
+  it('没有站点域名也发 news——图片只依赖 GitHub OG，不需要拼自己的域名', async () => {
     delete process.env.VERCEL_URL;
     snapshotWithOne();
 
     const result = await pushDigests(new Date('2026-10-28T01:00:00Z'));
 
     expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
-    expect(apiMock.sendWeComNews).not.toHaveBeenCalled();
-    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
   });
 });
 
@@ -982,9 +968,14 @@ describe('pushDigests — 快照可用时优先且不查 trending 表', () => {
 
     expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
     expect(dbMock.executeQueries).toHaveLength(0);
-    const content = apiMock.sendWeComText.mock.calls[0][1] as string;
-    expect(content).toContain('快照里的今日概览。');
-    expect(content).toContain('s/one');
+    // 快照路径发 news 卡片；概览不进微信（8 个位置都留给仓库）。
+    const [userid, articles] = apiMock.sendWeComNews.mock.calls[0] as [
+      string,
+      Array<{ title: string }>,
+    ];
+    expect(userid).toBe('alice');
+    expect(articles[0].title).toContain('s/one');
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
     // 简报写入 search_caches 的 entries 与消息展示一致。
     const cached = dbMock.insertCalls.find((call) => call.table === searchCaches);
     expect(cached?.values.results).toEqual([{ fullName: 's/one' }]);

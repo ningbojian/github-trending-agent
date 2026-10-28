@@ -7,12 +7,13 @@ import { displayWidth } from '../text-width.js';
  * - 一条 news 最多 8 篇，第 9 篇会被企微以 `45008 article size out of limit` 拒绝；
  * - 多篇布局里**只有标题可见**，`description` 不显示；
  * - 标题在客户端约 10–12 个汉字处被裁，尾部内容用户永远看不到；
- * - 第 2 篇之后是方形缩略图。企微会**打开会话时**才去抓图，抓图超时就是灰的；
- *   实测动态函数（哪怕预热 CDN）仍会随机失败，所以缩略图必须是**静态文件**，
- *   由 Vercel 静态 CDN 直接返回（`tiles/<language>.png`）。
+ * - 第 1 篇是大图 + 标题；第 2 篇起只有标题。**其余条目刻意不发图**：
+ *   微信是打开会话时才逐张抓 `picurl`，连静态 CDN 的图也会一张一张慢慢出、
+ *   偶尔失败（实测 8 张里 1–3 张长期灰着）。一张 OG 大图既稳定又有视觉锚点，
+ *   七张不稳定的缩略图只会显得破。
  *
  * 标题的信息顺序因此是硬要求：仓库名必须在最前（最先可见），
- * 语言标签与短简介放在尾部（可被裁剪）。
+ * 短简介放在尾部（可被裁剪）。
  *
  * 简介不硬截：短简介由模型单独生成（≤10 个汉字，完整短语）；
  * 拿不到就退回「完整分句」，再拿不到就**干脆不写**——绝不出现半句话加省略号。
@@ -54,12 +55,11 @@ export interface NewsArticle {
   title: string;
   description?: string;
   url: string;
-  picurl: string;
+  /** 只有第 1 篇带图（GitHub OG）；其余条目不发图。 */
+  picurl?: string;
 }
 
 export interface BuildNewsOptions {
-  /** 我们自己的站点根（用于 /api/tile 缩略图），尾斜杠会被剥除。 */
-  baseUrl: string;
   /** 仓库主页；缺省用 GitHub URL。 */
   htmlUrlOf?: (entry: NewsEntry) => string | undefined;
 }
@@ -137,55 +137,6 @@ function buildTitle(index: number, entry: NewsEntry, hot: boolean): string {
   return Buffer.byteLength(full, 'utf8') <= TITLE_MAX_BYTES ? full : head;
 }
 
-/** `tiles/` 下实际存在的色块文件名（生成脚本见 docs/deploy.md）。 */
-const TILE_SLUGS = new Set([
-  'python',
-  'typescript',
-  'javascript',
-  'go',
-  'rust',
-  'java',
-  'c',
-  'cpp',
-  'csharp',
-  'php',
-  'ruby',
-  'swift',
-  'kotlin',
-  'dart',
-  'shell',
-  'html',
-  'css',
-  'vue',
-  'lua',
-  'jupyter',
-  'dockerfile',
-  'makefile',
-  'scss',
-  'powershell',
-  'default',
-]);
-
-/** GitHub 语言名 → 文件名（`C++` 不能直接做文件名）。 */
-const TILE_SLUG_ALIASES: Record<string, string> = {
-  'c++': 'cpp',
-  'c#': 'csharp',
-  'jupyter notebook': 'jupyter',
-};
-
-/** 语言 → 静态色块 slug；未知语言/没有语言一律 default。 */
-export function tileSlug(language: string | null | undefined): string {
-  const key = (language ?? '').trim().toLowerCase();
-  if (key === '') return 'default';
-  const slug = TILE_SLUG_ALIASES[key] ?? key;
-  return TILE_SLUGS.has(slug) ? slug : 'default';
-}
-
-function tileUrl(baseUrl: string, entry: NewsEntry): string {
-  const base = baseUrl.replace(/\/+$/, '');
-  return `${base}/tiles/${tileSlug(entry.language)}.png`;
-}
-
 function ogUrl(fullName: string): string {
   return `https://opengraph.githubassets.com/1/${fullName}`;
 }
@@ -215,7 +166,7 @@ function hotIndexes(entries: NewsEntry[]): Set<number> {
  */
 export function buildNewsArticles(
   entries: NewsEntry[],
-  options: BuildNewsOptions,
+  options: BuildNewsOptions = {},
 ): NewsArticle[] {
   const limited = entries.slice(0, NEWS_MAX_ARTICLES);
   const hot = hotIndexes(limited);
@@ -226,7 +177,8 @@ export function buildNewsArticles(
       // 多篇布局不显示 description；保留完整简介，客户端若显示则更有信息量。
       ...(entry.summary?.trim() ? { description: entry.summary.trim() } : {}),
       url: htmlUrl !== undefined && htmlUrl !== '' ? htmlUrl : `https://github.com/${entry.fullName}`,
-      picurl: index === 0 ? ogUrl(entry.fullName) : tileUrl(options.baseUrl, entry),
+      // 只有第 1 篇带图：多张图会被微信逐张慢慢抓，反而更慢、更破。
+      ...(index === 0 ? { picurl: ogUrl(entry.fullName) } : {}),
     };
   });
 }

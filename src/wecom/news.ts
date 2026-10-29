@@ -7,10 +7,10 @@ import { displayWidth } from '../text-width.js';
  * - 一条 news 最多 8 篇，第 9 篇会被企微以 `45008 article size out of limit` 拒绝；
  * - 多篇布局里**只有标题可见**，`description` 不显示；
  * - 标题在客户端约 10–12 个汉字处被裁，尾部内容用户永远看不到；
- * - 第 1 篇是大图 + 标题；第 2 篇起只有标题。**其余条目刻意不发图**：
- *   微信是打开会话时才逐张抓 `picurl`，连静态 CDN 的图也会一张一张慢慢出、
- *   偶尔失败（实测 8 张里 1–3 张长期灰着）。一张 OG 大图既稳定又有视觉锚点，
- *   七张不稳定的缩略图只会显得破。
+ * - 第 1 篇是仓库 OG 海报（宽图）；第 2 篇起是 owner 头像的方形缩略图。
+ *   两端都发同一份 picurl，避免「手机无图、电脑留占位」的冲突。
+ *   头像经 wsrv 图片 CDN 抓取并裁成方形（微信只访问 CDN）；
+ *   仓库 OG 小图会被裁成文字截图，owner 头像更稳也更像图标。
  *
  * 标题的信息顺序因此是硬要求：仓库名必须在最前（最先可见），
  * 短简介放在尾部（可被裁剪）。
@@ -60,8 +60,6 @@ export interface NewsArticle {
 }
 
 export interface BuildNewsOptions {
-  /** 站点根（用于共享的透明占位图）；缺省时第 2 篇起不带图。 */
-  baseUrl?: string;
   /** 仓库主页；缺省用 GitHub URL。 */
   htmlUrlOf?: (entry: NewsEntry) => string | undefined;
 }
@@ -139,9 +137,7 @@ function buildTitle(index: number, entry: NewsEntry, hot: boolean): string {
   return Buffer.byteLength(full, 'utf8') <= TITLE_MAX_BYTES ? full : head;
 }
 
-function ogUrl(fullName: string): string {
-  return `https://opengraph.githubassets.com/1/${fullName}`;
-}
+function tileUrlPlaceholder(): void {}
 
 /** 一周增长率：新增星标 / 总星标。绝对增量会永远锁死在榜首，增长率不会。 */
 function growthRate(entry: NewsEntry): number {
@@ -160,10 +156,16 @@ function hotIndexes(entries: NewsEntry[]): Set<number> {
   return new Set(ranked.map((item) => item.index));
 }
 
+/** owner 头像：wsrv 抓 GitHub 并裁成 200×200 方形，微信只访问 CDN。 */
+function avatarPic(fullName: string): string {
+  const owner = fullName.split('/')[0] ?? '';
+  return `https://wsrv.nl/?url=${encodeURIComponent(`github.com/${owner}.png`)}&w=200&h=200&fit=cover&output=png`;
+}
+
 /**
  * 把条目渲染成 news 文章列表：
- * - 第 1 篇用 OG 海报（多篇布局里唯一的大图）；
- * - 第 2 篇起用我们域名下的 `/api/tile`（头像 → 失败回退语言色块）；
+ * - 第 1 篇用仓库 OG 海报（宽图）；
+ * - 第 2 篇起用 owner 头像方形缩略图（两端一致，不留桌面占位）；
  * - 超过 8 条截断——企微硬上限，多一条整条消息都会被拒。
  */
 export function buildNewsArticles(
@@ -172,11 +174,6 @@ export function buildNewsArticles(
 ): NewsArticle[] {
   const limited = entries.slice(0, NEWS_MAX_ARTICLES);
   const hot = hotIndexes(limited);
-  const base = options.baseUrl?.replace(/\/+$/, '');
-  // 桌面端会给「无图文章」留一个灰色缩略图占位并挤窄标题。用同一个
-  // 1×1 透明静态图填上：所有行共享一个 URL，微信只需抓一次，不会
-  // 重现「多张图慢慢加载」的问题。
-  const blankPic = base ? `${base}/docs/assets/blank.png` : undefined;
   return limited.map((entry, index) => {
     const htmlUrl = options.htmlUrlOf?.(entry)?.trim();
     // 电脑端新闻卡片的 description 会被右侧缩略图挤占：放短句（≤18 字），
@@ -186,11 +183,11 @@ export function buildNewsArticles(
       title: buildTitle(index, entry, hot.has(index)),
       ...(description ? { description } : {}),
       url: htmlUrl !== undefined && htmlUrl !== '' ? htmlUrl : `https://github.com/${entry.fullName}`,
-      ...(index === 0
-        ? { picurl: ogUrl(entry.fullName) }
-        : blankPic !== undefined
-          ? { picurl: blankPic }
-          : {}),
+      // 第 1 篇 OG 宽图；其余 owner 头像方图；两端一致。
+      picurl:
+        index === 0
+          ? `https://opengraph.githubassets.com/1/${entry.fullName}`
+          : avatarPic(entry.fullName),
     };
   });
 }

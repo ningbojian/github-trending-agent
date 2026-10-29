@@ -62,8 +62,10 @@ describe('news 卡片图片', () => {
 
   it('其余条目不发图——微信逐张抓图很慢且会随机失败，少图才是快', () => {
     const articles = buildNewsArticles(entries(3));
-    expect(articles[1].picurl).toBeUndefined();
-    expect(articles[2].picurl).toBeUndefined();
+    expect(articles[1].picurl).toBe(
+      'https://wsrv.nl/?url=github.com%2Fowner1.png&w=200&h=200&fit=cover&output=png',
+    );
+    expect(articles[2].picurl).toContain('wsrv.nl');
   });
 });
 
@@ -169,12 +171,3 @@ describe('news 卡片标题', () => {
   });
 });
 
-describe('桌面端占位', () => {
-  it('给了站点根时，第 2 篇起用同一个透明静态图填位', () => {
-    const articles = buildNewsArticles(entries(3), {
-      baseUrl: 'https://ghtrending.cyou/',
-    });
-    expect(articles[1].picurl).toBe('https://ghtrending.cyou/docs/assets/blank.png');
-    expect(articles[2].picurl).toBe('https://ghtrending.cyou/docs/assets/blank.png');
-  });
-});

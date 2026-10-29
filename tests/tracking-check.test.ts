@@ -155,3 +155,19 @@ describe('pushTrackedChanges', () => {
     expect(dbMock.updateCalls.some((call) => call.cursor !== undefined)).toBe(false);
   });
 });
+
+describe('预算', () => {
+  it('同一用户 10 个条目并行检查，不会被“每条 6 秒”误杀', async () => {
+    dbMock.selectQueue.push(
+      Array.from({ length: 10 }, (_, i) =>
+        dueRow({ id: i + 1, identifier: `a/r${i}`, cursor: {} }),
+      ),
+    );
+    dbMock.selectQueue.push([]); // marker
+
+    const result = await pushTrackedChanges({ now: NOW, budgetMs: 45_000 });
+
+    expect(result.checked).toBe(10);
+    expect(clientMock.getRepo).toHaveBeenCalledTimes(10);
+  });
+});

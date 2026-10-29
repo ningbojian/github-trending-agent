@@ -25,7 +25,11 @@ import {
 const CHECK_INTERVAL_MS = 20 * 60 * 60 * 1000;
 const MARKER_PREFIX = 'tracked-notice:v1:';
 const MARKER_TTL_MS = 48 * 60 * 60 * 1000;
-const PER_ITEM_BUDGET_MS = 6_000;
+/**
+ * 单个用户的预算估计：同一用户的条目并行检查，最坏是一波 6 秒的请求。
+ * 不要按「每条 6 秒」累加——那样跟踪 8–10 个仓库的人会被整人跳过。
+ */
+const PER_USER_BUDGET_MS = 6_000;
 
 export interface PushTrackedOptions {
   now?: Date;
@@ -129,8 +133,9 @@ export async function pushTrackedChanges(
   const token = env.GITHUB_TOKEN;
 
   for (const [userid, items] of byUser) {
-    // 预算不够覆盖这个人的全部条目：整人跳过，绝不查一半就标记。
-    if (clock() - startedAt + items.length * PER_ITEM_BUDGET_MS > budgetMs) {
+    // 同一用户的条目并行检查，最坏是一波 6 秒；预算不够就整人跳过，
+    // 绝不「查一半就标记」。按每条累加会误杀跟踪很多仓库的用户。
+    if (clock() - startedAt + PER_USER_BUDGET_MS > budgetMs) {
       result.skipped += 1;
       continue;
     }
@@ -140,27 +145,37 @@ export async function pushTrackedChanges(
       continue;
     }
 
-    const changes: TrackedChange[] = [];
+    const checked = await Promise.all(
+      items.map(async (item) => {
+        const [owner, name] = item.identifier.split('/');
+        if (!owner || !name) return null;
+        const [repoResult, releasesResult] = await Promise.all([
+          client.getRepo({ owner, name }, token),
+          client.getReleases({ owner, name }, token),
+        ]);
+        result.checked += 1;
+        if (!repoResult.ok) return null;
+        const snapshot = {
+          repo: repoResult.data,
+          releases: releasesResult.ok ? releasesResult.data : [],
+        };
+        return {
+          item,
+          snapshot,
+          changes: computeTrackedChanges(item.cursor, snapshot, now),
+        };
+      }),
+    );
+
     const checkedSnapshots = new Map<
       number,
       { repo: RepoInfo; releases: ReleaseInfo[] }
     >();
-
-    for (const item of items) {
-      const [owner, name] = item.identifier.split('/');
-      if (!owner || !name) continue;
-      const [repoResult, releasesResult] = await Promise.all([
-        client.getRepo({ owner, name }, token),
-        client.getReleases({ owner, name }, token),
-      ]);
-      result.checked += 1;
-      if (!repoResult.ok) continue;
-      const snapshot = {
-        repo: repoResult.data,
-        releases: releasesResult.ok ? releasesResult.data : [],
-      };
-      checkedSnapshots.set(item.id, snapshot);
-      changes.push(...computeTrackedChanges(item.cursor, snapshot, now));
+    const changes: TrackedChange[] = [];
+    for (const entry of checked) {
+      if (entry === null) continue;
+      checkedSnapshots.set(entry.item.id, entry.snapshot);
+      changes.push(...entry.changes);
     }
 
     if (changes.length === 0) {

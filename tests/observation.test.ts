@@ -529,3 +529,16 @@ describe('LLM 兜底', () => {
     expect(lines.filter((line) => line.kind === 'source-shift')).toHaveLength(1);
   });
 });
+
+describe('LLM 兜底 — 跨源留位', () => {
+  it('跨源候选排在后面也能进前三条', () => {
+    const lines = fallbackObservationLines([
+      candidate({ kind: 'theme-shift', signature: 'theme:a', evidence: ['a'], facts: '主题 a：今天 5 个' }),
+      candidate({ kind: 'theme-shift', signature: 'theme:b', evidence: ['b'], facts: '主题 b：今天 5 个' }),
+      candidate({ kind: 'theme-shift', signature: 'theme:c', evidence: ['c'], facts: '主题 c：今天 5 个' }),
+      candidate({ kind: 'source-shift', signature: 'src:hf', evidence: ['Qwen/Qwen3'], facts: '[HF 模型] Qwen/Qwen3：likes 100' }),
+    ]);
+    expect(lines).toHaveLength(3);
+    expect(lines.some((line) => line.kind === 'source-shift')).toBe(true);
+  });
+});

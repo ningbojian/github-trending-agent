@@ -472,9 +472,19 @@ export function composeSourceFactsSql(dataDate: string): SQL {
 export function fallbackObservationLines(
   candidates: ObservationCandidate[],
 ): ObservationLine[] {
+  const repos = candidates.filter((candidate) => candidate.kind !== 'source-shift');
+  const source = candidates.find((candidate) => candidate.kind === 'source-shift');
+  // 跨源条目通常排在主题/仓库候选后面；兜底时给它留一个位置，
+  // 否则多源永远看不到（前三名会被主题观察占满）。
+  const ordered = [
+    ...repos.slice(0, 2),
+    ...(source !== undefined ? [source] : []),
+    ...repos.slice(2),
+  ];
+
   const lines: ObservationLine[] = [];
   let sourceLines = 0;
-  for (const candidate of candidates) {
+  for (const candidate of ordered) {
     if (candidate.kind === 'source-shift') {
       if (sourceLines >= 1) continue;
       sourceLines += 1;

@@ -5,6 +5,7 @@ import {
   buildObservationCandidates,
   buildObservationPrompt,
   buildSourceCandidates,
+  fallbackObservationLines,
   buildThemeStats,
   composeObservationFactsSql,
   passesNoveltyGate,
@@ -514,5 +515,17 @@ describe('多源候选', () => {
     );
     expect(lines).toHaveLength(1);
     expect(diagnostics.sourceShiftCapped).toBe(1);
+  });
+});
+
+describe('LLM 兜底', () => {
+  it('模型失败时用候选事实生成 2 条，多源最多 1 条', () => {
+    const lines = fallbackObservationLines([
+      candidate({ kind: 'new-entrant', signature: 'repo:a', evidence: ['a'], facts: '新上榜：a 今天 +500' }),
+      candidate({ kind: 'source-shift', signature: 'src:hf', evidence: ['x'], facts: '[HF 模型] x：likes 100' }),
+      candidate({ kind: 'source-shift', signature: 'src:gh', evidence: ['y'], facts: '[GitHub 新仓库] y：★500' }),
+    ]);
+    expect(lines).toHaveLength(2);
+    expect(lines.filter((line) => line.kind === 'source-shift')).toHaveLength(1);
   });
 });

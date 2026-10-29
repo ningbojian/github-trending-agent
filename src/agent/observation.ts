@@ -465,6 +465,32 @@ export function composeSourceFactsSql(dataDate: string): SQL {
   `;
 }
 
+/**
+ * LLM 失败时的确定性兜底：直接拿候选事实当观察句子。
+ * 句子不如模型润色，但保证网关挂掉时观察不消失；仍走去重与渲染。
+ */
+export function fallbackObservationLines(
+  candidates: ObservationCandidate[],
+): ObservationLine[] {
+  const lines: ObservationLine[] = [];
+  let sourceLines = 0;
+  for (const candidate of candidates) {
+    if (candidate.kind === 'source-shift') {
+      if (sourceLines >= 1) continue;
+      sourceLines += 1;
+    }
+    lines.push({
+      kind: candidate.kind,
+      signature: candidate.signature,
+      claim: candidate.facts,
+      evidence: candidate.evidence,
+      ...(candidate.theme !== undefined ? { theme: candidate.theme } : {}),
+    });
+    if (lines.length >= OBSERVATION_MAX_LINES) break;
+  }
+  return lines;
+}
+
 /** 观察提示词：只给候选事实与证据仓库的功能短句，要求先判断、数字作证据。 */
 export function buildObservationPrompt(
   candidates: ObservationCandidate[],
@@ -958,11 +984,14 @@ export async function getDailyObservations(
     ).catch(() => null);
     const validation = blankDiagnostics();
     const validated = validateObservationOutput(out, candidates, validation);
-    lines = validated.filter((line) => passesNoveltyGate(line, history));
+    // 网关超时/失败时用确定性事实兜底；模型正常但输出被校验丢弃时不兜底
+    // （那说明模型在编造，宁可当天不发）。
+    const base = out === null ? fallbackObservationLines(candidates) : validated;
+    lines = base.filter((line) => passesNoveltyGate(line, history));
     debug = {
-      llm: out === null ? 'null' : 'ok',
+      llm: out === null ? 'fallback' : 'ok',
       validation,
-      noveltyDropped: validated.length - lines.length,
+      noveltyDropped: base.length - lines.length,
       raw: out?.observations?.slice(0, 5).map((item) => item.claim) ?? [],
     };
   }

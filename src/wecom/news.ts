@@ -172,10 +172,12 @@ export function buildNewsArticles(
   const hot = hotIndexes(limited);
   return limited.map((entry, index) => {
     const htmlUrl = options.htmlUrlOf?.(entry)?.trim();
+    // 电脑端新闻卡片的 description 会被右侧缩略图挤占：放短句（≤18 字），
+    // 完整上下文在「今日观察」里；放 28 字完整简介会被截断。
+    const description = entry.short?.trim() || entry.summary?.trim();
     return {
       title: buildTitle(index, entry, hot.has(index)),
-      // 多篇布局不显示 description；保留完整简介，客户端若显示则更有信息量。
-      ...(entry.summary?.trim() ? { description: entry.summary.trim() } : {}),
+      ...(description ? { description } : {}),
       url: htmlUrl !== undefined && htmlUrl !== '' ? htmlUrl : `https://github.com/${entry.fullName}`,
       // 只有第 1 篇带图：多张图会被微信逐张慢慢抓，反而更慢、更破。
       ...(index === 0 ? { picurl: ogUrl(entry.fullName) } : {}),

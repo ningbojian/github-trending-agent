@@ -2,21 +2,12 @@ import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
 import { loadStarredNames } from '../github/starred-names.js';
-import { productionBaseUrl } from '../http/base-url.js';
-import { buildPanelUrl } from '../panel/link.js';
-import { buildObservationArticle } from '../wecom/observation-card.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
 import { sendWeComNews, sendWeComText } from '../wecom/api.js';
 import { NEWS_MAX_ARTICLES, buildNewsArticles, type NewsArticle } from '../wecom/news.js';
 import { formatEntryLine } from '../wecom/text.js';
 import { loadAbstractSafe } from './abstract.js';
 import { applyHardFilters, passesGrowth } from './digest-filter.js';
-import {
-  getDailyObservations,
-  markObservationSent,
-  wasObservationSent,
-  type DailyObservations,
-} from './observation.js';
 import {
   getDailySnapshot,
   selectEntriesForPreferences,
@@ -484,11 +475,6 @@ export interface PushDigestsOptions {
   budgetMs?: number;
   /** 注入时钟（单测用）。 */
   clock?: () => number;
-  /**
-   * 当天观察；未传则在本轮开始时生成一次（全局共享）。
-   * `null` 表示当天不发观察（无新主题/历史读取失败/模型失败）。
-   */
-  observations?: DailyObservations | null;
 }
 
 /** 默认 240 秒：给 maxDuration=300 留 60 秒余量。 */
@@ -616,18 +602,6 @@ export async function pushDigests(
 
   // 当日快照只构建/读取一次，两个渠道共用；失败返回 null → 逐订阅者回退。
   const snapshot = await getDailySnapshot(now);
-  // 今日观察全局共享一次；失败绝不影响简报。
-  let observations: DailyObservations | null = null;
-  if (options.observations !== undefined) {
-    observations = options.observations;
-  } else {
-    try {
-      observations = await getDailyObservations(snapshot, now);
-    } catch (err) {
-      console.error('[digest] observations failed:', err instanceof Error ? err.message : err);
-      observations = null;
-    }
-  }
 
   const nowMinutes = shanghaiMinutes(now);
   const today = shanghaiToday(now);
@@ -775,49 +749,8 @@ export async function pushDigests(
         return;
       }
 
-      // 今日观察：独立一条文本，先于简报；每人每天至多一次。
-      // 标记在发送前写入（at-most-once）：发送失败宁可丢这一次，也绝不重复。
-      if (observations?.message && entries.length > 0) {
-        try {
-          const already = await wasObservationSent(
-            sub.wecomUserid,
-            observations.date,
-            now,
-          );
-          if (!already) {
-            await markObservationSent(sub.wecomUserid, observations.date, now);
-            const base = productionBaseUrl();
-            try {
-              if (base !== null) {
-                // 点卡片直接打开该用户的面板：这是微信里唯一可靠的「点击」入口。
-                const panelUrl = await buildPanelUrl(sub.wecomUserid, base).catch(
-                  () => null,
-                );
-                await sendWeComNews(sub.wecomUserid, [
-                  buildObservationArticle(observations, base, panelUrl ?? undefined),
-                ]);
-                note('observation-send', 'news');
-              } else {
-                await sendWeComText(sub.wecomUserid, observations.message);
-                note('observation-send', 'text');
-              }
-            } catch (err) {
-              // 卡片失败回退文本；两条路径都失败才让外层 catch 记录。
-              note(
-                'observation-send',
-                `news-fallback: ${err instanceof Error ? err.message : String(err)}`,
-              );
-              await sendWeComText(sub.wecomUserid, observations.message);
-            }
-          }
-        } catch (err) {
-          note(
-            'observation-send',
-            `failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          // 吞掉：观察失败绝不影响简报。
-        }
-      }
+      // 微信只发每日简报一条；「今日观察」不再单独推送，
+      // 只生成并写入 archive，供面板历史回看。
 
       if (articles !== null && newsSource !== null) {
         note('format', `news ${articles.length} 篇`);

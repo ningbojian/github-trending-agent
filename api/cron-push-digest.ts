@@ -66,20 +66,17 @@ export default async function handler(
     await refreshWeComMemberCount();
     // 当天快照只构建一次：企微与邮件两个渠道共用同一轮模型产出。
     const snapshot = await getDailySnapshot();
-    // 观察：快照之后生成一次（全局共享）。快照已经耗掉太多时间就跳过，
-    // 保证简报一定有预算；观察失败绝不影响简报。
-    let observations: Awaited<ReturnType<typeof getDailyObservations>> = null;
+    // 观察：仍生成并写入 archive（面板历史用），但**不再推送到微信**；
+    // 快照已经耗掉太多时间就跳过，保证简报预算。
     if (Date.now() - startedAt < 30_000) {
       try {
-        observations = await getDailyObservations(snapshot);
+        await getDailyObservations(snapshot);
       } catch (err) {
         console.error('[cron] observations failed:', err);
-        observations = null;
       }
     }
     const remaining = 285_000 - (Date.now() - startedAt);
     const wecom = await pushDigests(undefined, {
-      observations,
       budgetMs: Math.max(30_000, Math.min(PUSH_BUDGET_MS, remaining)),
     });
     // 跟踪检查：只处理 20 小时未检查的项；失败只记日志，不影响每日推送。

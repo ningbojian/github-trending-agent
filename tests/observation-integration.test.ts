@@ -46,8 +46,6 @@ vi.mock('../src/agent/llm', () => ({
 
 import {
   getDailyObservations,
-  markObservationSent,
-  wasObservationSent,
 } from '../src/agent/observation';
 
 const NOW = new Date('2026-10-29T01:00:00Z'); // 北京 09:00
@@ -216,36 +214,5 @@ describe('getDailyObservations — 正常生成', () => {
     expect(dbMock.insertCalls.some((call) => call.key === `archive:v1:${DATA_DATE}`)).toBe(
       true,
     );
-  });
-});
-
-describe('每人每日标记', () => {
-  it('markObservationSent 写入 48h 标记；wasObservationSent 尊重过期', async () => {
-    dbMock.selectQueue.push([
-      {
-        key: `observation-sent:v1:${DATA_DATE}:alice`,
-        value: { sent: true },
-        expiresAt: new Date(NOW.getTime() + 1000),
-      },
-    ]);
-    expect(await wasObservationSent('alice', DATA_DATE, NOW)).toBe(true);
-
-    dbMock.selectQueue.push([
-      {
-        key: `observation-sent:v1:${DATA_DATE}:alice`,
-        value: { sent: true },
-        expiresAt: new Date(NOW.getTime() - 1000),
-      },
-    ]);
-    expect(await wasObservationSent('alice', DATA_DATE, NOW)).toBe(false);
-
-    await markObservationSent('alice', DATA_DATE, NOW);
-    const written = dbMock.insertCalls.find(
-      (call) => call.key === `observation-sent:v1:${DATA_DATE}:alice`,
-    );
-    expect(written).toBeDefined();
-    const ttl = (written?.expiresAt as Date).getTime() - NOW.getTime();
-    expect(ttl).toBeGreaterThan(47 * 3600 * 1000);
-    expect(ttl).toBeLessThanOrEqual(48 * 3600 * 1000);
   });
 });

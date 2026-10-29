@@ -774,10 +774,8 @@ export function composeThemeCountsSql(dataDate: string): SQL {
 // ---------------------------------------------------------------------------
 
 const OBSERVATION_CACHE_PREFIX = 'observation:v1:';
-const OBSERVATION_SENT_PREFIX = 'observation-sent:v1:';
 const ARCHIVE_PREFIX = 'archive:v1:';
 const OBSERVATION_TTL_MS = 8 * 24 * 60 * 60 * 1000;
-const SENT_TTL_MS = 48 * 60 * 60 * 1000;
 const ARCHIVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /**
  * 观察的 LLM 超时：候选包含仓库 10 个 + 跨源最多 3 个，15 秒在实测中会
@@ -1042,41 +1040,6 @@ async function writeArchive(
       value: { date: result.date, dataDate: result.dataDate, message: result.message, items },
       expiresAt,
     })
-    .onConflictDoUpdate({
-      target: kvCache.key,
-      set: { value: sql`excluded.value`, expiresAt: sql`excluded.expires_at` },
-    });
-}
-
-function sentKey(date: string, userid: string): string {
-  return `${OBSERVATION_SENT_PREFIX}${date}:${userid}`;
-}
-
-/** 该用户今天是否已经收到过观察（marker 在发送前写入，at-most-once）。 */
-export async function wasObservationSent(
-  userid: string,
-  date: string,
-  now: Date = new Date(),
-): Promise<boolean> {
-  const rows = await db()
-    .select()
-    .from(kvCache)
-    .where(sql`${kvCache.key} = ${sentKey(date, userid)}`);
-  const row = rows[0];
-  if (!row) return false;
-  return new Date(row.expiresAt).getTime() > now.getTime();
-}
-
-/** 写入 48h 标记；调用方应在发送前写，宁可少发一次也不重复。 */
-export async function markObservationSent(
-  userid: string,
-  date: string,
-  now: Date = new Date(),
-): Promise<void> {
-  const expiresAt = new Date(now.getTime() + SENT_TTL_MS);
-  await db()
-    .insert(kvCache)
-    .values({ key: sentKey(date, userid), value: { sent: true }, expiresAt })
     .onConflictDoUpdate({
       target: kvCache.key,
       set: { value: sql`excluded.value`, expiresAt: sql`excluded.expires_at` },

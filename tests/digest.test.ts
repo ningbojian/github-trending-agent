@@ -18,14 +18,10 @@ const apiMock = vi.hoisted(() => ({
 
 const observationMock = vi.hoisted(() => ({
   getDailyObservations: vi.fn(async () => null as Record<string, unknown> | null),
-  wasObservationSent: vi.fn(async () => false),
-  markObservationSent: vi.fn(async () => undefined),
 }));
 
 vi.mock('../src/agent/observation', () => ({
   getDailyObservations: observationMock.getDailyObservations,
-  wasObservationSent: observationMock.wasObservationSent,
-  markObservationSent: observationMock.markObservationSent,
 }));
 
 const summaryMock = vi.hoisted(() => ({
@@ -210,10 +206,6 @@ vi.mock('../src/agent/tracking-check', () => ({
   pushTrackedChanges: trackingMock.pushTrackedChanges,
 }));
 
-vi.mock('../src/panel/link', () => ({
-  buildPanelUrl: async () => 'https://ghtrending.cyou/api/panel?t=tok',
-}));
-
 /**
  * 口味画像与推送历史：默认「空画像 / 无历史」，既有用例行为不变。
  * 只替换 I/O 两个函数，纯函数（rankByTaste / pushedRecently / emptySignals）保持真实实现。
@@ -346,7 +338,6 @@ beforeEach(() => {
   summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
   abstractMock.loadAbstractSafe.mockResolvedValue(null);
   observationMock.getDailyObservations.mockResolvedValue(null);
-  observationMock.wasObservationSent.mockResolvedValue(false);
   apiMock.sendWeComText.mockResolvedValue(undefined);
   // 默认空画像 + 无历史：既有用例只看「不过滤」的行为。
   tasteMock.loadUserSignals.mockResolvedValue(emptySignals());
@@ -981,140 +972,6 @@ describe('pushDigests — news 主格式与纯文本兜底', () => {
     expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
     expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
     expect(apiMock.sendWeComText).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 今日观察：独立一条文本，先于 news；每人每天至多一次
-// ---------------------------------------------------------------------------
-describe('pushDigests — 今日观察', () => {
-  const OBS = {
-    date: '2026-10-28',
-    dataDate: '2026-10-28',
-    lines: [
-      { kind: 'acceleration' as const, signature: 'repo:a/one', claim: 'a/one 加速', evidence: ['a/one', 'a/two'] },
-      { kind: 'streak' as const, signature: 'repo:b/one', claim: 'b/one 连续在榜', evidence: ['b/one', 'b/two'] },
-    ],
-    message: '今日观察（10-28）\n1. a/one 加速\n2. b/one 连续在榜',
-  };
-
-  function snapshotOnce(): void {
-    snapshotMock.getDailySnapshot.mockResolvedValueOnce({
-      date: '2026-10-28',
-      dataDate: '2026-10-28',
-      abstract: null,
-      items: [makeSnapshotItem('s/one', { starsDelta: 240 })],
-    });
-  }
-
-  function subOnce(): void {
-    dbMock.selectRows.push(makeSub());
-    dbMock.claimResults.push([{ id: 1 }]);
-  }
-
-  function oneSnapshot(): void {
-    snapshotOnce();
-    subOnce();
-  }
-
-  it('先发观察文本，再发 news 卡片', async () => {
-    observationMock.getDailyObservations.mockResolvedValue(OBS);
-    oneSnapshot();
-
-    await pushDigests(new Date('2026-10-28T01:00:00Z'));
-
-    expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', OBS.message);
-    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
-    expect(observationMock.markObservationSent).toHaveBeenCalledWith(
-      'alice',
-      '2026-10-28',
-      expect.any(Date),
-    );
-    const textOrder = apiMock.sendWeComText.mock.invocationCallOrder[0] as number;
-    const newsOrder = apiMock.sendWeComNews.mock.invocationCallOrder[0] as number;
-    expect(textOrder).toBeLessThan(newsOrder);
-  });
-
-  it('有站点根时，观察先以 news 卡片发送（封面 + 判断）', async () => {
-    const previous = process.env.VERCEL_PROJECT_PRODUCTION_URL;
-    process.env.VERCEL_PROJECT_PRODUCTION_URL = 'ghtrending.cyou';
-    try {
-      observationMock.getDailyObservations.mockResolvedValue(OBS);
-      oneSnapshot();
-
-      await pushDigests(new Date('2026-10-28T01:00:00Z'));
-
-      expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(2);
-      expect(apiMock.sendWeComText).not.toHaveBeenCalled();
-      const [, articles] = apiMock.sendWeComNews.mock.calls[0] as [
-        string,
-        Array<{ title: string; picurl?: string; url: string }>,
-      ];
-      expect(articles[0].title).toContain('今日观察');
-      expect(articles[0].picurl).toContain('/docs/assets/observation-cover.png');
-      expect(articles[0].url).toBe('https://ghtrending.cyou/api/panel?t=tok');
-    } finally {
-      if (previous === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
-      else process.env.VERCEL_PROJECT_PRODUCTION_URL = previous;
-    }
-  });
-
-  it('观察卡片发送失败 → 回退文本，简报仍发', async () => {
-    const previous = process.env.VERCEL_PROJECT_PRODUCTION_URL;
-    process.env.VERCEL_PROJECT_PRODUCTION_URL = 'ghtrending.cyou';
-    try {
-      observationMock.getDailyObservations.mockResolvedValue(OBS);
-      apiMock.sendWeComNews.mockRejectedValueOnce(new Error('card failed'));
-      oneSnapshot();
-
-      const result = await pushDigests(new Date('2026-10-28T01:00:00Z'));
-
-      expect(result.sent).toBe(1);
-      expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', OBS.message);
-      expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(2);
-    } finally {
-      if (previous === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
-      else process.env.VERCEL_PROJECT_PRODUCTION_URL = previous;
-    }
-  });
-
-  it('已经发过观察（marker 命中）→ 只发简报', async () => {
-    observationMock.getDailyObservations.mockResolvedValue(OBS);
-    observationMock.wasObservationSent.mockResolvedValue(true);
-    oneSnapshot();
-
-    await pushDigests(new Date('2026-10-28T01:00:00Z'));
-
-    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
-    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
-    expect(observationMock.markObservationSent).not.toHaveBeenCalled();
-  });
-
-  it('观察发送失败 → 吞掉错误，简报仍然发出', async () => {
-    observationMock.getDailyObservations.mockResolvedValue(OBS);
-    apiMock.sendWeComText.mockRejectedValueOnce(new Error('text failed'));
-    oneSnapshot();
-
-    const result = await pushDigests(new Date('2026-10-28T01:00:00Z'));
-
-    expect(result.sent).toBe(1);
-    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
-  });
-
-  it('同一天两次 tick：第二次不会重复观察', async () => {
-    observationMock.getDailyObservations.mockResolvedValue(OBS);
-    oneSnapshot();
-
-    await pushDigests(new Date('2026-10-28T01:00:00Z'));
-    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
-
-    observationMock.wasObservationSent.mockResolvedValue(true);
-    snapshotOnce();
-    dbMock.claimResults.push([{ id: 1 }]);
-    await pushDigests(new Date('2026-10-28T02:00:00Z'));
-
-    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
-    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(2);
   });
 });
 

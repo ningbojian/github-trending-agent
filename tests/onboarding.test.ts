@@ -699,6 +699,26 @@ describe('handleDigestCount（条数 N → 简报条数自定义）', () => {
     );
   });
 
+  it('「条数 五」→ 中文数字同样接受，写 digestCount=5', async () => {
+    dbMock.selectQueue.push([
+      {
+        wecomUserid: 'alice',
+        active: true,
+        preferences: { languages: [], keywords: [], digestCount: 8 },
+      },
+    ]);
+
+    await handleDigestCount(makeMsg({ content: '条数 五' }));
+
+    expect(dbMock.updateCalls[0]?.values).toMatchObject({
+      preferences: { languages: [], keywords: [], digestCount: 5 },
+    });
+    expect(apiMock.sendWeComText).toHaveBeenCalledWith(
+      'alice',
+      '✅ 每日简报条数已设为 5（1–8）',
+    );
+  });
+
   it('「条数 0」「条数 9」「条数 99」「条数 abc」→ 用法提示，不写库', async () => {
     await handleDigestCount(makeMsg({ content: '条数 0' }));
     await handleDigestCount(makeMsg({ content: '条数 9' }));

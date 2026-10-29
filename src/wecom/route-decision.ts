@@ -113,8 +113,8 @@ const PUSH_INTERVAL_PATTERN = new RegExp(
 
 /** 跟踪：`取消追踪` 先于 `追踪`；`关注` 必须带空白，避免吞掉「关注度高的项目」。 */
 const MY_TRACKING_PATTERN = /^(我的追踪|追踪列表|跟踪列表)$/;
-/** 允许「取消追踪1」（无空格），数字紧跟也能分发到 handler。 */
-const UNTRACK_PATTERN = /^取消(追踪|跟踪|关注)(?:\s|$|\d)/;
+/** 允许「取消追踪1」「取消追踪一」（无空格），数字紧跟也能分发到 handler。 */
+const UNTRACK_PATTERN = /^取消(追踪|跟踪|关注)(?:\s|$|[0-9一二三四五六七八九十两])/;
 const TRACK_PATTERN = /^(追踪|跟踪|关注)\s+/;
 
 /** 尾部中英文标点（精确/前缀分发与疑似命令判定前统一剥除，「帮助。」也能命中）。 */

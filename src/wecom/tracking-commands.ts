@@ -1,4 +1,5 @@
 import { parseTrackRequest } from '../agent/tracking.js';
+import { parseCnNumber } from './cn-number.js';
 import {
   addTrackedRepo,
   listTracked,
@@ -87,10 +88,11 @@ export async function handleUntrack(msg: InboundMessage): Promise<void> {
     let identifier: string | null = null;
     let displayName: string | null = null;
 
-    if (/^\d+$/.test(arg)) {
+    const index = parseCnNumber(arg, { max: 10 });
+    if (index !== null) {
       // 直接查库，不依赖先发「我的追踪」写缓存；列表顺序与面板一致。
       const rows = await listTracked(msg.fromUserName);
-      const item = rows[Number(arg) - 1];
+      const item = rows[index - 1];
       if (!item) {
         await sendWeComText(msg.fromUserName, UNTRACK_USAGE_REPLY);
         return;

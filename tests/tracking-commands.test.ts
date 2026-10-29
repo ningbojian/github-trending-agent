@@ -189,6 +189,18 @@ describe('handleUntrack', () => {
     expect(decideTextRoute('取消追踪1')).toEqual({ kind: 'handler', handler: 'untrack' });
   });
 
+  it('「取消追踪一」（中文数字）同样能取消', async () => {
+    dbMock.selectQueue.push([
+      { identifier: 'acme/rocket', displayName: 'acme/rocket' },
+    ]);
+
+    await handleUntrack(msg('取消追踪一'));
+
+    expect(dbMock.updateCalls[0]).toMatchObject({ active: false });
+    expect(apiMock.sendWeComText.mock.calls[0]?.[1]).toContain('acme/rocket');
+    expect(decideTextRoute('取消追踪一')).toEqual({ kind: 'handler', handler: 'untrack' });
+  });
+
   it('无法解析的目标 → 用法提示，不写库', async () => {
     await handleUntrack(msg('取消追踪'));
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);

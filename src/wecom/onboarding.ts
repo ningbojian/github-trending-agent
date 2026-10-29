@@ -280,17 +280,19 @@ const DIGEST_COUNT_PREFIX = '条数';
 
 /**
  * 「条数 N」handler（router 按「条数」前缀分发）：
- * - 解析「条数 N」：N 必须是 1–8 整数；裸「条数」/非数字/越界 → 用法提示，不写库
- *   （越界 REJECTED 而非静默 clamp：用户显式输入了数字，静默改值会误导）
+ * - 解析「条数 N」：N 必须是 1–8 整数（阿拉伯/中文数字都接受）；裸「条数」/
+ *   非数字/越界 → 用法提示，不写库（越界 REJECTED 而非静默 clamp）
  * - 读-合并-写：只更新 preferences.digestCount，保留原 languages/keywords
  * - digest.ts 消费端再做 clamp 1–8 + 默认 8 兜底（脏数据防御双保险）
  */
 export async function handleDigestCount(msg: InboundMessage): Promise<void> {
   try {
     const content = msg.content.trim();
-    const match = new RegExp(`^${DIGEST_COUNT_PREFIX}\\s*(\\d+)$`).exec(content);
-    const n = match === null ? Number.NaN : Number.parseInt(match[1] ?? '', 10);
-    if (!Number.isInteger(n) || n < 1 || n > 8) {
+    const match = new RegExp(
+      `^${DIGEST_COUNT_PREFIX}\\s*([0-9一二三四五六七八九十两]+)$`,
+    ).exec(content);
+    const n = match === null ? null : parseCnNumber(match[1] ?? '', { max: 8 });
+    if (n === null) {
       await sendWeComText(msg.fromUserName, DIGEST_COUNT_USAGE_REPLY);
       return;
     }

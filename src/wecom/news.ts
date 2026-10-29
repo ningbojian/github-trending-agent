@@ -1,9 +1,5 @@
-import avatarManifest from '../../docs/avatars/manifest.json';
+import { KNOWN_AVATAR_OWNERS } from './avatars.js';
 import { displayWidth } from '../text-width.js';
-
-const KNOWN_AVATARS = new Set(
-  (avatarManifest as { owners?: string[] }).owners ?? [],
-);
 
 /**
  * 企微 news 卡片的渲染规则（纯函数，无网络/DB）。
@@ -166,7 +162,7 @@ function hotIndexes(entries: NewsEntry[]): Set<number> {
 /** owner 头像（自托管）；manifest 里没有时回退品牌图标。 */
 function avatarPic(fullName: string, base: string): string {
   const owner = (fullName.split('/')[0] ?? '').toLowerCase();
-  if (/^[a-z0-9-]+$/.test(owner) && KNOWN_AVATARS.has(owner)) {
+  if (/^[a-z0-9-]+$/.test(owner) && KNOWN_AVATAR_OWNERS.has(owner)) {
     return `${base}/docs/avatars/${owner}.png`;
   }
   return `${base}/docs/assets/icon-750.png`;

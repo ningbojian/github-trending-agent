@@ -37,12 +37,12 @@ beforeEach(() => {
 });
 
 describe('buildAbstractPrompt', () => {
-  it('要求 2–3 句、120 字以内，并带上仓库名与中文简介', () => {
+  it('要求 3–5 句、320 字以内，并带上仓库名与中文简介', () => {
     const prompt = buildAbstractPrompt(
       [item('a/one'), item('b/two')],
       new Map([['a/one', '一个 AI 工具']]),
     );
-    expect(prompt).toContain('2 到 3 句');
+    expect(prompt).toContain('3 到 5 句');
     expect(prompt).toContain(String(ABSTRACT_MAX_CHARS));
     expect(prompt).toContain('a/one：一个 AI 工具');
     // 没有简介的仓库仍然出现在列表里（只是没有冒号后段）。
@@ -65,8 +65,8 @@ describe('truncateChars', () => {
 });
 
 describe('loadAbstractSafe', () => {
-  it('返回模型给出的概览，并按 120 码点截断', async () => {
-    llmState.result = { abstract: '今'.repeat(200) };
+  it('返回模型给出的概览，并按 320 码点截断', async () => {
+    llmState.result = { abstract: '今'.repeat(500) };
     const out = await loadAbstractSafe([item('a/one')], new Map());
     expect(Array.from(out ?? '')).toHaveLength(ABSTRACT_MAX_CHARS);
   });

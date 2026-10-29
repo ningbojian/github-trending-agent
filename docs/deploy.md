@@ -287,7 +287,7 @@ curl -i https://<domain>/api/oauth-github
   1. 「每日热榜管线」抓取 / 补全两步全绿；「简报小时触发」的触发步骤 curl 返回 `{"sent":N,"skipped":M,"failed":0}`（`failed` 必须为 0；`skipped` 是未到推送时间 / 当日已发 / 未满间隔的正常跳过）。
   2. Neon：`select count(*) from trending_entries where date = current_date;` 大于 0（20 个榜单：总榜 + `SCRAPER_LANGUAGES` 的 19 个语言榜）；`repos.topics` 有非空数组（enrich 生效）。
   3. 微信：`active = true` 的订阅者收到**每日简报 news 卡片**（最多 8 篇；仅首篇 OG 大图、其余不发图；标题为 `🔥/🆕 序号. owner/repo ★星标 (+增量)｜≤18 字短简介`，🔥 按增长率（+增量/总星标 ≥5%）给最快的 1–2 条；条数按「条数 N」设置、默认 8；不存在半句简介——短句由模型单独生成，拿不到就省略。news 发送失败时自动回退原纯文本简报，不会重复发送）。
-  4. 今日观察：如果当天有通过 7 天去重的新主题，简报**之前**会先收到一条「今日观察（MM-DD）」短文本（2–3 行，每行带 2–3 个仓库证据）；没有新主题则只有简报。Neon 可查 `select key from kv_cache where key like 'observation:v1:%' order by key desc limit 3;`；同一天重复触发不会重复发（标记 `observation-sent:v1:<date>:<userid>`）。观察生成/发送失败只记 trace，不影响简报。
+  4. 今日观察：如果当天有通过 7 天去重的新主题，简报**之前**会先收到一张「👀 今日观察 · MM-DD」单篇卡片（品牌封面 + 2–3 条判断），点开进入你的面板；没有新主题则只有简报。卡片发送失败会自动回退纯文本。Neon 可查 `select key from kv_cache where key like 'observation:v1:%' order by key desc limit 3;`；同一天重复触发不会重复发（标记 `observation-sent:v1:<date>:<userid>`）。观察生成/发送失败只记 trace，不影响简报。
   5. Vercel Logs：手动触发的 `/api/cron-push-digest` 一次 200 记录。
   6. **daily 兜底触发返回 524 不是故障**：Cloudflare 对源站等待约 100 秒，快照重建/观察生成超时会回 524，但 Vercel 函数通常仍在后台跑完（实测快照已写入、多源已入库）。daily workflow 对 524 只记 warning；权威触发是 09:00 的 Vercel Cron。
   6. Neon：`select source, captured_date, count(*) from source_items group by 1,2 order by 2 desc;` —— GitHub 新仓库 / HN / Lobsters 有当日行；HN/Lobsters 只入库、暂不进观察。Hugging Face 在 Actions runner 上应有 `hf_models` / `hf_spaces`（本机网络可能连不上，属正常）。
@@ -456,9 +456,11 @@ curl -i https://<domain>/api/oauth-github
 
 ## 10. 行为说明：每日概览 / 意图边界 / 自备模型 Key
 
-### 10.1 每日简报开头的「今日概览」
+### 10.1 邮件简报开头的「今日概览」与企微的「今日观察」
 
-简报（企微与邮件）在标题之后、条目之前会有一段 2–3 句中文概览，概括当天这批项目的共同方向，由运营方 LLM 在**构建当日快照时生成一次**并写入 `kv_cache` 的 `digest-snapshot:<日期>`（字段 `abstract`，≤120 字）。之后所有推送（含新用户礼包）都读快照，**不再调用模型**。
+**邮件简报**在标题之后、条目之前会有一段 3–5 句中文概览，概括当天这批项目的共同方向，由运营方 LLM 在**构建当日快照时生成一次**并写入 `kv_cache` 的 `digest-snapshot:<日期>`（字段 `abstract`，≤320 字）。之后所有邮件推送（含新用户礼包）都读快照，**不再调用模型**。
+
+**企微**没有这段概览（为了不占简报的 8 个卡片位），而是单独一张「👀 今日观察」单篇 news 卡片：品牌封面 + 2–3 条判断，点开进入用户面板；卡片发送失败时回退纯文本。
 
 - 概览生成失败 / LLM 挂掉 → 只是少这一段，简报照常发（绝不因为概览失败而不发）。
 - 当天榜单为空 → 不调用模型，也不编造概览。

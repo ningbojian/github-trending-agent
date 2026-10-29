@@ -331,12 +331,12 @@ describe('getDailySnapshot', () => {
     expect(snapshot?.abstract).toBe(llmState.abstract);
   });
 
-  it('truncates the abstract to 120 code points', async () => {
+  it('truncates the abstract to ABSTRACT_MAX_CHARS code points', async () => {
     dbState.executeRows = [row('a/one')];
-    llmState.abstract = '今'.repeat(200);
+    llmState.abstract = '今'.repeat(500);
 
     const snapshot = await getDailySnapshot(NOW);
-    expect(Array.from(snapshot?.abstract ?? '')).toHaveLength(120);
+    expect(Array.from(snapshot?.abstract ?? '')).toHaveLength(320);
   });
 });
 

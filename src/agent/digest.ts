@@ -2,6 +2,9 @@ import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
 import { loadStarredNames } from '../github/starred-names.js';
+import { productionBaseUrl } from '../http/base-url.js';
+import { buildPanelUrl } from '../panel/link.js';
+import { buildObservationArticle } from '../wecom/observation-card.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
 import { sendWeComNews, sendWeComText } from '../wecom/api.js';
 import { NEWS_MAX_ARTICLES, buildNewsArticles, type NewsArticle } from '../wecom/news.js';
@@ -783,8 +786,29 @@ export async function pushDigests(
           );
           if (!already) {
             await markObservationSent(sub.wecomUserid, observations.date, now);
-            await sendWeComText(sub.wecomUserid, observations.message);
-            note('observation-send', 'ok');
+            const base = productionBaseUrl();
+            try {
+              if (base !== null) {
+                // 点卡片直接打开该用户的面板：这是微信里唯一可靠的「点击」入口。
+                const panelUrl = await buildPanelUrl(sub.wecomUserid, base).catch(
+                  () => null,
+                );
+                await sendWeComNews(sub.wecomUserid, [
+                  buildObservationArticle(observations, base, panelUrl ?? undefined),
+                ]);
+                note('observation-send', 'news');
+              } else {
+                await sendWeComText(sub.wecomUserid, observations.message);
+                note('observation-send', 'text');
+              }
+            } catch (err) {
+              // 卡片失败回退文本；两条路径都失败才让外层 catch 记录。
+              note(
+                'observation-send',
+                `news-fallback: ${err instanceof Error ? err.message : String(err)}`,
+              );
+              await sendWeComText(sub.wecomUserid, observations.message);
+            }
           }
         } catch (err) {
           note(

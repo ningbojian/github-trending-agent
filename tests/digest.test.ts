@@ -210,6 +210,10 @@ vi.mock('../src/agent/tracking-check', () => ({
   pushTrackedChanges: trackingMock.pushTrackedChanges,
 }));
 
+vi.mock('../src/panel/link', () => ({
+  buildPanelUrl: async () => 'https://ghtrending.cyou/api/panel?t=tok',
+}));
+
 /**
  * 口味画像与推送历史：默认「空画像 / 无历史」，既有用例行为不变。
  * 只替换 I/O 两个函数，纯函数（rankByTaste / pushedRecently / emptySignals）保持真实实现。
@@ -1029,6 +1033,49 @@ describe('pushDigests — 今日观察', () => {
     const textOrder = apiMock.sendWeComText.mock.invocationCallOrder[0] as number;
     const newsOrder = apiMock.sendWeComNews.mock.invocationCallOrder[0] as number;
     expect(textOrder).toBeLessThan(newsOrder);
+  });
+
+  it('有站点根时，观察先以 news 卡片发送（封面 + 判断）', async () => {
+    const previous = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = 'ghtrending.cyou';
+    try {
+      observationMock.getDailyObservations.mockResolvedValue(OBS);
+      oneSnapshot();
+
+      await pushDigests(new Date('2026-10-28T01:00:00Z'));
+
+      expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(2);
+      expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+      const [, articles] = apiMock.sendWeComNews.mock.calls[0] as [
+        string,
+        Array<{ title: string; picurl?: string; url: string }>,
+      ];
+      expect(articles[0].title).toContain('今日观察');
+      expect(articles[0].picurl).toContain('/docs/assets/observation-cover.png');
+      expect(articles[0].url).toBe('https://ghtrending.cyou/api/panel?t=tok');
+    } finally {
+      if (previous === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+      else process.env.VERCEL_PROJECT_PRODUCTION_URL = previous;
+    }
+  });
+
+  it('观察卡片发送失败 → 回退文本，简报仍发', async () => {
+    const previous = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = 'ghtrending.cyou';
+    try {
+      observationMock.getDailyObservations.mockResolvedValue(OBS);
+      apiMock.sendWeComNews.mockRejectedValueOnce(new Error('card failed'));
+      oneSnapshot();
+
+      const result = await pushDigests(new Date('2026-10-28T01:00:00Z'));
+
+      expect(result.sent).toBe(1);
+      expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', OBS.message);
+      expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(2);
+    } finally {
+      if (previous === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+      else process.env.VERCEL_PROJECT_PRODUCTION_URL = previous;
+    }
   });
 
   it('已经发过观察（marker 命中）→ 只发简报', async () => {

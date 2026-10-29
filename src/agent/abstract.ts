@@ -10,8 +10,8 @@ import { generateObjectSafe } from './llm.js';
  * - 上限按**码点**截断，不按字节：企微的 2048 字节限制由 assemble 统一兜底。
  */
 
-/** Abstract 上限（按码点）。 */
-export const ABSTRACT_MAX_CHARS = 120;
+/** Abstract 上限（按码点）。邮件版没有行数/字节硬限制，320 字约 4–5 行。 */
+export const ABSTRACT_MAX_CHARS = 320;
 
 const abstractSchema = z.object({ abstract: z.string() });
 
@@ -39,10 +39,11 @@ export function buildAbstractPrompt(
     return `- ${item.fullName}${zh ? `：${zh}` : ''}`;
   });
   return [
-    `下面是今天 GitHub 热榜的仓库列表。请写 2 到 3 句话、不超过 ${ABSTRACT_MAX_CHARS} 个汉字的今日概览：`,
-    '1. 只概括共同主题或方向，不逐个列举仓库，不编造列表之外的事实；',
-    '2. 语气客观中性，不用营销词、不用 emoji；',
-    '3. 以 JSON 输出：{"abstract":"..."}。',
+    `下面是今天 GitHub 热榜的仓库列表。请写 3 到 5 句话、不超过 ${ABSTRACT_MAX_CHARS} 个汉字的今日概览：`,
+    '1. 概括共同主题或方向，可以点名 2–3 个代表仓库作为证据，但不要逐个列举；',
+    '2. 说清楚这些项目在集中解决什么问题，以及和前几天相比有什么变化；',
+    '3. 只使用列表里的事实，不编造；语气客观中性，不用营销词、不用 emoji；',
+    '4. 以 JSON 输出：{"abstract":"..."}。',
     '',
     '仓库列表：',
     ...lines,

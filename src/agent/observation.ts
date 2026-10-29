@@ -344,7 +344,7 @@ export function buildObservationCandidates(
       signature: `theme:${stat.kind}:${stat.theme}`,
       mainRepo: null,
       evidence,
-      facts: `主题 ${stat.theme}（${stat.kind}）：今天 ${stat.today} 个，近 7 天平均 ${stat.trailingAvg.toFixed(1)} 个`,
+      facts: `主题 ${stat.theme}（${stat.kind}）：今天 ${stat.today} 个，近 7 天平均 ${stat.trailingAvg.toFixed(1)} 个（${evidence.slice(0, 2).join('、')} 等）`,
       score: stat.today * 100 + Math.round(stat.ratio * 10),
       theme: stat.theme,
     });
@@ -673,7 +673,8 @@ export function passesNoveltyGate(
 
 /**
  * 渲染文本：`今日观察（MM-DD）` + 编号行。
- * claim 里没提到的证据仓库补在行尾；超预算从后往前删，少于 2 条返回 null。
+ * 不再堆证据仓库列表：claim 没点名任何仓库时只补一个锚点。
+ * 超预算从后往前删，少于 2 条返回 null。
  */
 export function renderObservationMessage(
   lines: ObservationLine[],
@@ -684,9 +685,13 @@ export function renderObservationMessage(
   const header = `今日观察（${date.slice(5)}）`;
   const rendered: string[] = [];
   for (const [index, line] of lines.entries()) {
-    const missing = line.evidence.filter((name) => !line.claim.includes(name));
-    const suffix = missing.length > 0 ? `｜${missing.join('、')}` : '';
-    rendered.push(`${index + 1}. ${line.claim}${suffix}`);
+    const mentions = line.evidence.some((name) => {
+      if (line.claim.includes(name)) return true;
+      const shortName = name.split('/')[1];
+      return shortName !== undefined && shortName !== '' && line.claim.includes(shortName);
+    });
+    const anchor = !mentions && line.evidence[0] ? `｜${line.evidence[0]}` : '';
+    rendered.push(`${index + 1}. ${line.claim}${anchor}`);
   }
 
   while (rendered.length >= OBSERVATION_MIN_LINES) {

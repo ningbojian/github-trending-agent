@@ -362,11 +362,11 @@ describe('渲染', () => {
     },
   ];
 
-  it('输出两行观察；claim 里没提到的证据仓库补在行尾', () => {
+  it('输出两行观察；claim 没点名时只补一个锚点仓库，不再堆列表', () => {
     const text = renderObservationMessage(lines, '2026-10-29');
     expect(text).toContain('今日观察（10-29）');
     expect(text).toContain('1. a/one 与 a/two 同时加速');
-    expect(text).toContain('2. Rust 工具今天集中上榜｜b/one、b/two、b/three');
+    expect(text).toContain('2. Rust 工具今天集中上榜｜b/one');
   });
 
   it('少于 2 条不发', () => {

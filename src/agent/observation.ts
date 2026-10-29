@@ -206,7 +206,7 @@ function peersFor(
 /** 大数字压成人能感知的量级：18653 → 1.9 万；1200 保持原样。 */
 function shortCount(value: number): string {
   if (value >= 10000) {
-    return `${(value / 10000).toFixed(1)} 万`;
+    return `${(value / 10000).toFixed(1)}万`;
   }
   return String(Math.round(value));
 }
@@ -426,8 +426,8 @@ export function buildSourceCandidates(
       // 只讲一个用户能感知的数字；likes 优先，没有赞才提下载。
       facts =
         likes > 0
-          ? `Hugging Face 上 ${row.title} 一天拿到 ${shortCount(likes)} 个赞`
-          : `Hugging Face 上 ${row.title} 一天被下载 ${shortCount(downloads)} 次`;
+          ? `Hugging Face 上 ${row.title} 一天拿到 ${shortCount(likes)}个赞`
+          : `Hugging Face 上 ${row.title} 一天被下载 ${shortCount(downloads)}次`;
       score = likes * 100 + Math.round(downloads / 100);
     }
     if (score <= 0) continue;

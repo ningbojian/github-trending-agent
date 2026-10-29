@@ -168,3 +168,13 @@ describe('news 卡片标题', () => {
     expect(title).toBe('1. astral-sh/ruff ★41.2k (+320)');
   });
 });
+
+describe('桌面端占位', () => {
+  it('给了站点根时，第 2 篇起用同一个透明静态图填位', () => {
+    const articles = buildNewsArticles(entries(3), {
+      baseUrl: 'https://ghtrending.cyou/',
+    });
+    expect(articles[1].picurl).toBe('https://ghtrending.cyou/docs/assets/blank.png');
+    expect(articles[2].picurl).toBe('https://ghtrending.cyou/docs/assets/blank.png');
+  });
+});

@@ -60,6 +60,8 @@ export interface NewsArticle {
 }
 
 export interface BuildNewsOptions {
+  /** 站点根（用于共享的透明占位图）；缺省时第 2 篇起不带图。 */
+  baseUrl?: string;
   /** 仓库主页；缺省用 GitHub URL。 */
   htmlUrlOf?: (entry: NewsEntry) => string | undefined;
 }
@@ -170,6 +172,11 @@ export function buildNewsArticles(
 ): NewsArticle[] {
   const limited = entries.slice(0, NEWS_MAX_ARTICLES);
   const hot = hotIndexes(limited);
+  const base = options.baseUrl?.replace(/\/+$/, '');
+  // 桌面端会给「无图文章」留一个灰色缩略图占位并挤窄标题。用同一个
+  // 1×1 透明静态图填上：所有行共享一个 URL，微信只需抓一次，不会
+  // 重现「多张图慢慢加载」的问题。
+  const blankPic = base ? `${base}/docs/assets/blank.png` : undefined;
   return limited.map((entry, index) => {
     const htmlUrl = options.htmlUrlOf?.(entry)?.trim();
     // 电脑端新闻卡片的 description 会被右侧缩略图挤占：放短句（≤18 字），
@@ -179,8 +186,11 @@ export function buildNewsArticles(
       title: buildTitle(index, entry, hot.has(index)),
       ...(description ? { description } : {}),
       url: htmlUrl !== undefined && htmlUrl !== '' ? htmlUrl : `https://github.com/${entry.fullName}`,
-      // 只有第 1 篇带图：多张图会被微信逐张慢慢抓，反而更慢、更破。
-      ...(index === 0 ? { picurl: ogUrl(entry.fullName) } : {}),
+      ...(index === 0
+        ? { picurl: ogUrl(entry.fullName) }
+        : blankPic !== undefined
+          ? { picurl: blankPic }
+          : {}),
     };
   });
 }

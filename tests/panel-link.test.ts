@@ -5,6 +5,7 @@ const state = vi.hoisted(() => ({
   sent: [] as Array<[string, string]>,
 }));
 
+vi.mock('../src/config', () => ({ env: { PUBLIC_BASE_URL: undefined } }));
 vi.mock('../src/panel/version', () => ({ getPanelVersion: async () => 1 }));
 vi.mock('../src/panel/token', () => ({ signPanelToken: () => 'tok123' }));
 vi.mock('../src/email/tokens', () => ({ resolveBaseUrl: () => state.base }));

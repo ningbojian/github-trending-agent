@@ -43,6 +43,7 @@ import {
   handleMySubscription,
 } from './subscription.js';
 import { sendWelcomeFlow } from './welcome.js';
+import { handleMyPanel } from './panel-link.js';
 import {
   MY_TRACKING_EMPTY_REPLY,
   TRACK_USAGE_REPLY,
@@ -95,6 +96,8 @@ export interface Handlers {
   track: MessageHandler;
   untrack: MessageHandler;
   myTracking: MessageHandler;
+  /** 「我的面板」——发一条 7 天有效的控制面板链接。 */
+  panel: MessageHandler;
 }
 
 /** 未注册时的静默 stub。 */
@@ -123,6 +126,7 @@ let handlers: Handlers = {
   track: stub,
   untrack: stub,
   myTracking: stub,
+  panel: stub,
 };
 
 /**
@@ -158,6 +162,7 @@ export function resetHandlers(): void {
     track: stub,
     untrack: stub,
     myTracking: stub,
+    panel: stub,
   };
 }
 
@@ -386,4 +391,5 @@ registerHandlers({
   track: handleTrack,
   untrack: handleUntrack,
   myTracking: handleMyTracking,
+  panel: handleMyPanel,
 });

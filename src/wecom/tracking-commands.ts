@@ -1,9 +1,11 @@
-import { and, eq } from 'drizzle-orm';
-import { env } from '../config.js';
-import { db } from '../db/client.js';
-import { kvCache, trackedItems } from '../db/schema.js';
-import { createGithubClient } from '../github/client.js';
-import { nextCursor, parseTrackRequest } from '../agent/tracking.js';
+import { parseTrackRequest } from '../agent/tracking.js';
+import {
+  addTrackedRepo,
+  listTracked,
+  readTrackList,
+  removeTracked,
+  writeTrackList,
+} from '../agent/tracking-service.js';
 import { sendWeComText } from './api.js';
 import type { InboundMessage } from './router.js';
 
@@ -12,21 +14,18 @@ import type { InboundMessage } from './router.js';
  *
  * 与 GitHub Watch 的差异：这里只登记「要关注什么」，真正的变化判定
  * 在每日检查里做（新 release / star 加速 / 归档），且第一次检查只建基线。
+ * 落库逻辑在 tracking-service（面板也共用）。
  */
-
-export const MAX_TRACKED_ITEMS = 10;
 
 export const TRACK_USAGE_REPLY =
   '用法：「追踪 owner/repo」或「追踪 https://github.com/owner/repo」，例如：追踪 astral-sh/ruff';
-export const TRACK_LIMIT_REPLY = `最多同时跟踪 ${MAX_TRACKED_ITEMS} 个仓库；先发「我的追踪」取消一个。`;
+export const TRACK_LIMIT_REPLY =
+  '最多同时跟踪 10 个仓库；先发「我的追踪」取消一个。';
 export const TRACK_FAILURE_REPLY = '暂时读不到这个仓库，稍后再试。';
 export const UNTRACK_USAGE_REPLY =
   '用法：「取消追踪 2」按序号取消，或「取消追踪 owner/repo」。';
 export const MY_TRACKING_EMPTY_REPLY =
   '你还没有跟踪任何仓库。发「追踪 owner/repo」试试，例如：追踪 astral-sh/ruff';
-
-const LIST_CACHE_PREFIX = 'tracking-list:v1:';
-const LIST_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function trackArg(content: string): string {
   return content.trim().replace(/^(追踪|跟踪|关注)\s*/, '').trim();
@@ -36,118 +35,22 @@ function untrackArg(content: string): string {
   return content.trim().replace(/^取消(追踪|跟踪|关注)\s*/, '').trim();
 }
 
-/** 「我的追踪」写入的编号列表，供「取消追踪 N」解析。 */
-async function writeTrackList(
-  userid: string,
-  items: Array<{ identifier: string; displayName: string }>,
-): Promise<void> {
-  const expiresAt = new Date(Date.now() + LIST_CACHE_TTL_MS);
-  await db()
-    .insert(kvCache)
-    .values({
-      key: `${LIST_CACHE_PREFIX}${userid}`,
-      value: { items },
-      expiresAt,
-    })
-    .onConflictDoUpdate({
-      target: kvCache.key,
-      set: { value: { items }, expiresAt },
-    });
-}
-
-async function readTrackList(
-  userid: string,
-): Promise<Array<{ identifier: string; displayName: string }> | null> {
-  const rows = await db()
-    .select()
-    .from(kvCache)
-    .where(eq(kvCache.key, `${LIST_CACHE_PREFIX}${userid}`));
-  const row = rows[0];
-  if (!row) return null;
-  if (new Date(row.expiresAt).getTime() <= Date.now()) return null;
-  const value = row.value as { items?: unknown } | null;
-  if (!value || !Array.isArray(value.items)) return null;
-  return value.items as Array<{ identifier: string; displayName: string }>;
-}
-
 /** 「追踪 <GitHub 仓库>」：校验仓库、用当前状态建基线、落库。 */
 export async function handleTrack(msg: InboundMessage): Promise<void> {
-  const target = parseTrackRequest(trackArg(msg.content));
-  if (target === null) {
-    await sendWeComText(msg.fromUserName, TRACK_USAGE_REPLY);
+  const result = await addTrackedRepo(msg.fromUserName, trackArg(msg.content));
+  if (result.ok) {
+    await sendWeComText(
+      msg.fromUserName,
+      `✅ 已跟踪 ${result.displayName}（当前 ★${result.stars}）。有新 release 或 star 加速时，我会在每天的「跟踪变化」里告诉你。`,
+    );
     return;
   }
 
-  try {
-    const existing = (await db()
-      .select()
-      .from(trackedItems)
-      .where(
-        and(
-          eq(trackedItems.wecomUserid, msg.fromUserName),
-          eq(trackedItems.active, true),
-        ),
-      )) as Array<{ identifier: string }>;
-
-    if (existing.length >= MAX_TRACKED_ITEMS) {
-      await sendWeComText(msg.fromUserName, TRACK_LIMIT_REPLY);
-      return;
-    }
-
-    const token = env.GITHUB_TOKEN ?? null;
-    const client = createGithubClient();
-    const [repoResult, releasesResult] = await Promise.all([
-      client.getRepo({ owner: target.owner, name: target.name }, token),
-      client.getReleases({ owner: target.owner, name: target.name }, token),
-    ]);
-    if (!repoResult.ok) {
-      await sendWeComText(msg.fromUserName, TRACK_FAILURE_REPLY);
-      return;
-    }
-
-    const now = new Date();
-    const cursor = nextCursor(
-      {},
-      {
-        repo: repoResult.data,
-        releases: releasesResult.ok ? releasesResult.data : [],
-      },
-      now,
-    );
-
-    await db()
-      .insert(trackedItems)
-      .values({
-        wecomUserid: msg.fromUserName,
-        source: 'github',
-        kind: 'repo',
-        identifier: target.identifier,
-        displayName: target.displayName,
-        cursor,
-        active: true,
-        lastCheckedAt: now,
-      })
-      .onConflictDoUpdate({
-        target: [
-          trackedItems.wecomUserid,
-          trackedItems.source,
-          trackedItems.kind,
-          trackedItems.identifier,
-        ],
-        set: {
-          displayName: target.displayName,
-          cursor,
-          active: true,
-          lastCheckedAt: now,
-        },
-      });
-
-    await sendWeComText(
-      msg.fromUserName,
-      `✅ 已跟踪 ${target.displayName}（当前 ★${repoResult.data.stars}）。有新 release 或 star 加速时，我会在每天的「跟踪变化」里告诉你。`,
-    );
-  } catch (err) {
-    console.error('handleTrack failed:', err);
+  if (result.reason === 'usage') {
+    await sendWeComText(msg.fromUserName, TRACK_USAGE_REPLY);
+  } else if (result.reason === 'limit') {
+    await sendWeComText(msg.fromUserName, TRACK_LIMIT_REPLY);
+  } else {
     await sendWeComText(msg.fromUserName, TRACK_FAILURE_REPLY);
   }
 }
@@ -155,16 +58,7 @@ export async function handleTrack(msg: InboundMessage): Promise<void> {
 /** 「我的追踪」：列出编号，并缓存列表供按序号取消。 */
 export async function handleMyTracking(msg: InboundMessage): Promise<void> {
   try {
-    const rows = (await db()
-      .select()
-      .from(trackedItems)
-      .where(
-        and(
-          eq(trackedItems.wecomUserid, msg.fromUserName),
-          eq(trackedItems.active, true),
-        ),
-      )) as Array<{ identifier: string; displayName: string }>;
-
+    const rows = await listTracked(msg.fromUserName);
     if (rows.length === 0) {
       await sendWeComText(msg.fromUserName, MY_TRACKING_EMPTY_REPLY);
       return;
@@ -214,22 +108,7 @@ export async function handleUntrack(msg: InboundMessage): Promise<void> {
       displayName = target.displayName;
     }
 
-    await db()
-      .update(trackedItems)
-      .set({ active: false })
-      .where(
-        and(
-          eq(trackedItems.wecomUserid, msg.fromUserName),
-          eq(trackedItems.identifier, identifier),
-        ),
-      );
-
-    // 列表缓存作废：用户下次发「我的追踪」会重建。
-    await db()
-      .update(kvCache)
-      .set({ value: { items: [] }, expiresAt: new Date(0) })
-      .where(eq(kvCache.key, `${LIST_CACHE_PREFIX}${msg.fromUserName}`));
-
+    await removeTracked(msg.fromUserName, identifier);
     await sendWeComText(msg.fromUserName, `✅ 已取消跟踪 ${displayName}。`);
   } catch (err) {
     console.error('handleUntrack failed:', err);

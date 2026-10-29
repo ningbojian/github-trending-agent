@@ -13,3 +13,4 @@
 | [0007](0007-wecom-news-digest.md) | 简报用 news 卡片 | 一条 8 篇封顶，首篇 OG、其余文字卡片，纯文本只做兜底 |
 | [0008](0008-daily-observations.md) | 今日观察 | 事实由 SQL 算，7 天去重，没有新主题就不发 |
 | [0009](0009-tracked-changes.md) | 跟踪只报值得看的变化 | 不做第二个 Watch：新 release/star 加速/归档才说话 |
+| [0010](0010-thin-panel.md) | 薄 H5 控制面板 | 聊天做不了的事才上面板：跟踪、历史、收藏、设置 |

@@ -34,6 +34,7 @@ export type HandlerKey =
   | 'track'
   | 'untrack'
   | 'myTracking'
+  | 'panel'
   | 'search';
 
 /** 疑似命令的用法提示键（文案由 router 映射）。 */
@@ -204,6 +205,9 @@ export function decideTextRoute(content: string): RouteDecision {
   }
   if (text === '我的记忆') {
     return { kind: 'handler', handler: 'memory' };
+  }
+  if (text === '我的面板' || text === '面板') {
+    return { kind: 'handler', handler: 'panel' };
   }
   if (MY_TRACKING_PATTERN.test(text)) {
     return { kind: 'handler', handler: 'myTracking' };

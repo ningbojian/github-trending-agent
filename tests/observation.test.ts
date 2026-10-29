@@ -5,7 +5,6 @@ import {
   buildObservationCandidates,
   buildObservationPrompt,
   buildSourceCandidates,
-  fallbackObservationLines,
   buildThemeStats,
   composeObservationFactsSql,
   passesNoveltyGate,
@@ -515,30 +514,5 @@ describe('多源候选', () => {
     );
     expect(lines).toHaveLength(1);
     expect(diagnostics.sourceShiftCapped).toBe(1);
-  });
-});
-
-describe('LLM 兜底', () => {
-  it('模型失败时用候选事实生成 2 条，多源最多 1 条', () => {
-    const lines = fallbackObservationLines([
-      candidate({ kind: 'new-entrant', signature: 'repo:a', evidence: ['a'], facts: '新上榜：a 今天 +500' }),
-      candidate({ kind: 'source-shift', signature: 'src:hf', evidence: ['x'], facts: '[HF 模型] x：likes 100' }),
-      candidate({ kind: 'source-shift', signature: 'src:gh', evidence: ['y'], facts: '[GitHub 新仓库] y：★500' }),
-    ]);
-    expect(lines).toHaveLength(2);
-    expect(lines.filter((line) => line.kind === 'source-shift')).toHaveLength(1);
-  });
-});
-
-describe('LLM 兜底 — 跨源留位', () => {
-  it('跨源候选排在后面也能进前三条', () => {
-    const lines = fallbackObservationLines([
-      candidate({ kind: 'theme-shift', signature: 'theme:a', evidence: ['a'], facts: '主题 a：今天 5 个' }),
-      candidate({ kind: 'theme-shift', signature: 'theme:b', evidence: ['b'], facts: '主题 b：今天 5 个' }),
-      candidate({ kind: 'theme-shift', signature: 'theme:c', evidence: ['c'], facts: '主题 c：今天 5 个' }),
-      candidate({ kind: 'source-shift', signature: 'src:hf', evidence: ['Qwen/Qwen3'], facts: '[HF 模型] Qwen/Qwen3：likes 100' }),
-    ]);
-    expect(lines).toHaveLength(3);
-    expect(lines.some((line) => line.kind === 'source-shift')).toBe(true);
   });
 });

@@ -488,49 +488,6 @@ export function composeSourceFactsSql(dataDate: string): SQL {
   `;
 }
 
-/**
- * LLM 失败时的确定性兜底：直接拿候选事实当观察句子。
- * 句子不如模型润色，但保证网关挂掉时观察不消失；仍走去重与渲染。
- */
-export function fallbackObservationLines(
-  candidates: ObservationCandidate[],
-): ObservationLine[] {
-  const repoLevel = candidates.filter(
-    (candidate) => candidate.kind !== 'theme-shift' && candidate.kind !== 'source-shift',
-  );
-  const theme = candidates.find((candidate) => candidate.kind === 'theme-shift');
-  const source = candidates.find((candidate) => candidate.kind === 'source-shift');
-  // 兜底优先「具体仓库发生了什么」，再补一条主题与一条跨源；
-  // 主题计数堆在最前面正是用户说的「一堆没用的数据」。
-  const ordered = [
-    ...repoLevel.slice(0, 1),
-    ...(theme !== undefined ? [theme] : []),
-    ...(source !== undefined ? [source] : []),
-    ...repoLevel.slice(1),
-    ...candidates.filter(
-      (candidate) => candidate.kind === 'theme-shift' && candidate !== theme,
-    ),
-  ];
-
-  const lines: ObservationLine[] = [];
-  let sourceLines = 0;
-  for (const candidate of ordered) {
-    if (candidate.kind === 'source-shift') {
-      if (sourceLines >= 1) continue;
-      sourceLines += 1;
-    }
-    lines.push({
-      kind: candidate.kind,
-      signature: candidate.signature,
-      claim: candidate.facts,
-      evidence: candidate.evidence,
-      ...(candidate.theme !== undefined ? { theme: candidate.theme } : {}),
-    });
-    if (lines.length >= OBSERVATION_MAX_LINES) break;
-  }
-  return lines;
-}
-
 /** 观察提示词：只给候选事实与证据仓库的功能短句，要求先判断、数字作证据。 */
 export function buildObservationPrompt(
   candidates: ObservationCandidate[],
@@ -1029,12 +986,12 @@ export async function getDailyObservations(
     ).catch(() => null);
     const validation = blankDiagnostics();
     const validated = validateObservationOutput(out, candidates, validation);
-    // 网关超时/失败时用确定性事实兜底；模型正常但输出被校验丢弃时不兜底
-    // （那说明模型在编造，宁可当天不发）。
-    const base = out === null ? fallbackObservationLines(candidates) : validated;
+    // 模型失败或输出被校验丢弃时都当天不发：宁可安静，也不发只有数字的
+    // 「事实堆叠」——用户已经明确说过那是低信息熵的噪音。
+    const base = out === null ? [] : validated;
     lines = base.filter((line) => passesNoveltyGate(line, history));
     debug = {
-      llm: out === null ? 'fallback' : 'ok',
+      llm: out === null ? 'null' : 'ok',
       validation,
       noveltyDropped: base.length - lines.length,
       raw: out?.observations?.slice(0, 5).map((item) => item.claim) ?? [],

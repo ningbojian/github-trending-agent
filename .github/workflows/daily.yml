@@ -76,11 +76,18 @@ jobs:
       - name: 兜底触发一次简报推送
         if: env.VERCEL_URL != '' && env.CRON_SECRET != ''
         run: |
-          CODE=$(curl -sS -o digest-resp.json -w "%{http_code}" -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
+          # Cloudflare 对源站有约 100 秒超时：快照重建 + 观察生成较慢时会返回 524，
+          # 但 Vercel 函数通常仍在后台跑完（本次实测快照已写入、HF 已入库）。
+          # 524 只记 warning，不让整条管线变红；401/500 等仍按失败处理。
+          CODE=$(curl -sS --max-time 180 -o digest-resp.json -w "%{http_code}" -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
             -H "Authorization: Bearer ${CRON_SECRET}")
           echo "HTTP ${CODE}"
-          cat digest-resp.json; echo
-          [ "${CODE}" = 200 ]
+          cat digest-resp.json 2>/dev/null || true; echo
+          if [ "${CODE}" = "524" ]; then
+            echo "::warning::简报触发返回 524（Cloudflare 源站超时），函数可能仍在后台执行；09:00 的 Vercel Cron 会兜底"
+            exit 0
+          fi
+          [ "${CODE}" = "200" ]
 
       - name: 失败告警到企业微信管理员
         if: failure() && env.WECOM_ADMIN_USERID != ''

@@ -122,10 +122,15 @@ async function renderOverview(userid: string, token: string): Promise<string> {
     .from(subscribers)
     .where(eq(subscribers.wecomUserid, userid));
   const sub = rows[0];
-  const summary =
+  // 摘要里含用户自己填的语言/关键词：逐行转义后再换行，绝不直接拼 HTML。
+  const summary = (
     sub === undefined
       ? '没有找到订阅记录。'
-      : formatSubscriptionSummary(sub.preferences, sub.active).replace(/\n/g, '<br>');
+      : formatSubscriptionSummary(sub.preferences, sub.active)
+  )
+    .split('\n')
+    .map(escapeHtml)
+    .join('<br>');
   const tracked = await listTracked(userid);
   const archives = await readArchives(1);
 

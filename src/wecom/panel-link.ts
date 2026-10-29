@@ -13,9 +13,24 @@ import type { InboundMessage } from './router.js';
 
 export const PANEL_UNAVAILABLE_REPLY = '面板链接暂时不可用，请稍后再试。';
 
+/**
+ * 面板链接必须用**正式生产域名**：`VERCEL_URL` 是每次部署的
+ * `*-hash.vercel.app`，可能被微信拦截或需要 Vercel 认证；优先取
+ * `VERCEL_PROJECT_PRODUCTION_URL`（项目绑定的生产域名）。
+ */
+function panelBaseUrl(): string {
+  const production = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  if (production) {
+    return `https://${production
+      .replace(/^https?:\/\//i, '')
+      .replace(/\/+$/, '')}`;
+  }
+  return resolveBaseUrl();
+}
+
 export async function handleMyPanel(msg: InboundMessage): Promise<void> {
   try {
-    const base = resolveBaseUrl();
+    const base = panelBaseUrl();
     // 本地/测试环境没有公网域名：不发点不开的 localhost 链接。
     if (/localhost|127\.0\.0\.1/.test(base)) {
       await sendWeComText(msg.fromUserName, PANEL_UNAVAILABLE_REPLY);

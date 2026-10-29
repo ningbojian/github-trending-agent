@@ -45,3 +45,19 @@ describe('handleMyPanel', () => {
     expect(state.sent[0]?.[1]).toBe(PANEL_UNAVAILABLE_REPLY);
   });
 });
+
+describe('panel base url', () => {
+  it('优先使用 VERCEL_PROJECT_PRODUCTION_URL，而不是部署域名', async () => {
+    const previous = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = 'ghtrending.cyou';
+    state.base = 'https://github-trending-agent-abc.vercel.app';
+    state.sent.length = 0;
+    try {
+      await handleMyPanel(msg());
+      expect(state.sent[0]?.[1]).toContain('https://ghtrending.cyou/api/panel?t=tok123');
+    } finally {
+      if (previous === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+      else process.env.VERCEL_PROJECT_PRODUCTION_URL = previous;
+    }
+  });
+});

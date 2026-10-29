@@ -17,7 +17,12 @@ import { shanghaiToday } from './time.js';
  * `trending_entries` 才是可靠的 7 天历史。
  */
 
-export type ObservationKind = 'new-entrant' | 'acceleration' | 'streak' | 'theme-shift';
+export type ObservationKind =
+  | 'new-entrant'
+  | 'acceleration'
+  | 'streak'
+  | 'theme-shift'
+  | 'source-shift';
 
 export interface ObservationFactRow {
   fullName: string;
@@ -74,6 +79,21 @@ export interface ObservationHistoryEntry {
   evidence: string[];
 }
 
+/** 多源事实行（HF 模型/Space、GitHub 搜索新仓库）。 */
+export interface SourceFactRow {
+  source: string;
+  sourceId: string;
+  title: string;
+  url: string;
+  itemType: string;
+  metrics: Record<string, number>;
+  capturedDate: string;
+  firstSeenDate: string;
+  historyDepth: number;
+  /** 该源在窗口内出现过的不同日期数；<2 时禁用「新收录」。 */
+  sourceDepth: number;
+}
+
 export interface DailyObservations {
   /** 北京日期（发送日）。 */
   date: string;
@@ -95,6 +115,8 @@ export interface ValidationDiagnostics {
   badNumber: number;
   duplicate: number;
   kept: number;
+  /** 多源观察超过 1 条被丢掉的次数。 */
+  sourceShiftCapped?: number;
 }
 
 /** 观察消息的字节上限（企微 text 2048，留足余量）。 */
@@ -350,6 +372,99 @@ export function buildObservationCandidates(
     .slice(0, MAX_CANDIDATES);
 }
 
+/** 参与观察的「结构化」多源；HN/Lobsters 先只入库，不进观察。 */
+export const OBSERVATION_SOURCES = ['hf_models', 'hf_spaces', 'github_search'] as const;
+const MAX_SOURCE_CANDIDATES = 3;
+
+/**
+ * 多源候选：只取「今天首次收录、且该源已有历史深度」的条目。
+ * GitHub 搜索与 Trending 的重叠按 fullName 去掉；HF 用 likes/downloads 打分。
+ */
+export function buildSourceCandidates(
+  rows: SourceFactRow[],
+  options: { dataDate: string; repoFullNames: Set<string> },
+): ObservationCandidate[] {
+  const out: ObservationCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const row of rows) {
+    if (row.capturedDate !== options.dataDate) continue;
+    if (row.sourceDepth < 2 || row.firstSeenDate !== options.dataDate) continue;
+
+    const key = row.title.trim().toLowerCase();
+    if (key === '' || options.repoFullNames.has(key) || seen.has(key)) continue;
+
+    let facts: string;
+    let score: number;
+    if (row.source === 'github_search') {
+      const stars = row.metrics.stars ?? 0;
+      facts = `[GitHub 新仓库] ${row.title}：★${stars}（本周新建，首次收录）`;
+      score = stars;
+    } else {
+      const likes = row.metrics.likes ?? 0;
+      const downloads = row.metrics.downloads ?? 0;
+      const label = row.source === 'hf_spaces' ? '[HF Space]' : '[HF 模型]';
+      facts = `${label} ${row.title}：likes ${likes} · downloads ${downloads}（今日 trending，首次收录）`;
+      score = likes * 100 + Math.round(downloads / 100);
+    }
+    if (score <= 0) continue;
+
+    seen.add(key);
+    out.push({
+      kind: 'source-shift',
+      signature: `src:${row.source}:${row.sourceId.toLowerCase()}`,
+      mainRepo: null,
+      evidence: [row.title],
+      facts,
+      score,
+    });
+  }
+
+  return out.sort((a, b) => b.score - a.score).slice(0, MAX_SOURCE_CANDIDATES);
+}
+
+/** 多源事实：窗口内每个条目的最新捕获 + 首次收录日期 + 源历史深度。 */
+export function composeSourceFactsSql(dataDate: string): SQL {
+  return sql`
+    with filtered as (
+      select source, source_id, title, url, item_type, metrics, captured_date
+      from source_items
+      where source in ('hf_models', 'hf_spaces', 'github_search')
+        and captured_date between (${dataDate}::date - 7) and ${dataDate}::date
+    ),
+    agg as (
+      select
+        source,
+        source_id,
+        min(captured_date) as first_seen_date,
+        count(distinct captured_date)::int as history_depth
+      from filtered
+      group by source, source_id
+    ),
+    depth as (
+      select source, count(distinct captured_date)::int as source_depth
+      from filtered
+      group by source
+    )
+    select
+      f.source,
+      f.source_id as "sourceId",
+      f.title,
+      f.url,
+      f.item_type as "itemType",
+      f.metrics,
+      f.captured_date::text as "capturedDate",
+      a.first_seen_date::text as "firstSeenDate",
+      a.history_depth as "historyDepth",
+      d.source_depth as "sourceDepth"
+    from filtered f
+    join agg a on a.source = f.source and a.source_id = f.source_id
+    join depth d on d.source = f.source
+    where f.captured_date = ${dataDate}::date
+    order by f.source, f.source_id
+  `;
+}
+
 /** 观察提示词：只给候选事实与证据仓库的功能短句，要求先判断、数字作证据。 */
 export function buildObservationPrompt(
   candidates: ObservationCandidate[],
@@ -372,7 +487,8 @@ export function buildObservationPrompt(
     '3. 只能引用候选里出现的仓库名和数字，不要编造任何列表之外的事实；',
     '4. 不要用「可能 / 也许 / 值得关注」这类空话，不要 emoji、不要链接；',
     '5. 每条对应一个候选编号；',
-    '6. 以 JSON 输出：{"observations":[{"candidate":1,"claim":"一句话"}]}。',
+    '6. 多源条目（[GitHub 新仓库] / [HF …]）最多用一条，优先与仓库事实合并叙述；',
+    '7. 以 JSON 输出：{"observations":[{"candidate":1,"claim":"一句话"}]}。',
     '',
     '示例风格（不是今天的事实）：设计工具集中上榜：ruff 与 hallmark 同时在解决「AI 生成的页面一眼假」的问题。',
     '',
@@ -426,6 +542,7 @@ export function validateObservationOutput(
 
   const lines: ObservationLine[] = [];
   const seen = new Set<string>();
+  let sourceShiftLines = 0;
 
   for (const item of raw) {
     if (!item || typeof item !== 'object') {
@@ -478,6 +595,13 @@ export function validateObservationOutput(
     if (seen.has(candidate.signature)) {
       diagnostics.duplicate += 1;
       continue;
+    }
+    if (candidate.kind === 'source-shift') {
+      if (sourceShiftLines >= 1) {
+        diagnostics.sourceShiftCapped = (diagnostics.sourceShiftCapped ?? 0) + 1;
+        continue;
+      }
+      sourceShiftLines += 1;
     }
     seen.add(candidate.signature);
     lines.push({
@@ -733,6 +857,25 @@ async function queryThemes(dataDate: string): Promise<ThemeCountRow[]> {
   }));
 }
 
+async function querySourceFacts(dataDate: string): Promise<SourceFactRow[]> {
+  const { rows } = await db().execute(composeSourceFactsSql(dataDate));
+  return rows.map((row) => ({
+    source: String(row.source),
+    sourceId: String(row.sourceId),
+    title: String(row.title),
+    url: String(row.url),
+    itemType: String(row.itemType),
+    metrics:
+      row.metrics && typeof row.metrics === 'object'
+        ? (row.metrics as Record<string, number>)
+        : {},
+    capturedDate: String(row.capturedDate).slice(0, 10),
+    firstSeenDate: String(row.firstSeenDate).slice(0, 10),
+    historyDepth: Number(row.historyDepth ?? 0),
+    sourceDepth: Number(row.sourceDepth ?? 0),
+  }));
+}
+
 /**
  * 生成当天观察（全局共享一次）。
  * - 无快照/无 dataDate/无候选 → 空结果（缓存，避免每小时重跑）；
@@ -778,10 +921,24 @@ export async function getDailyObservations(
   }
 
   const historyDepth = facts.length > 0 ? Number(facts[0].historyDepth ?? 0) : 0;
-  const candidates = buildObservationCandidates(facts, themes, {
+  const repoCandidates = buildObservationCandidates(facts, themes, {
     dataDate,
     historyDepth,
   });
+
+  let sourceRows: SourceFactRow[] = [];
+  try {
+    sourceRows = await querySourceFacts(dataDate);
+  } catch {
+    // 多源缺失/表未建：仓库观察照常，不因跨源失败丢掉整个观察。
+    sourceRows = [];
+  }
+  const repoFullNames = new Set(facts.map((row) => row.fullName.toLowerCase()));
+  const sourceCandidates = buildSourceCandidates(sourceRows, {
+    dataDate,
+    repoFullNames,
+  });
+  const candidates = [...repoCandidates, ...sourceCandidates];
 
   let lines: ObservationLine[] = [];
   let debug: unknown = { candidates: candidates.length };

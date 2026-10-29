@@ -14,3 +14,4 @@
 | [0008](0008-daily-observations.md) | 今日观察 | 事实由 SQL 算，7 天去重，没有新主题就不发 |
 | [0009](0009-tracked-changes.md) | 跟踪只报值得看的变化 | 不做第二个 Watch：新 release/star 加速/归档才说话 |
 | [0010](0010-thin-panel.md) | 薄 H5 控制面板 | 聊天做不了的事才上面板：跟踪、历史、收藏、设置 |
+| [0011](0011-multi-source.md) | 多源内容 | 四个适配器都入库，观察先只吃 HF 与 GitHub 搜索 |

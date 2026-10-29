@@ -43,6 +43,13 @@
       "when": 1793205725786,
       "tag": "0005_curly_dracula",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1793251858492,
+      "tag": "0006_handy_giant_man",
+      "breakpoints": true
     }
   ]
 }

@@ -67,6 +67,12 @@ jobs:
       - name: 补全仓库 topics（GitHub API）
         run: npx tsx src/github/run-enrich.ts
 
+      - name: 抓取多源榜单（HF / GitHub Search / HN / Lobsters）
+        # 单个源失败不拖垮抓取/补全主链路；run-sources 内部已逐源隔离，
+        # 只有全部源都失败或总条数为 0 才退出 1。
+        continue-on-error: true
+        run: npx tsx src/sources/run-sources.ts
+
       - name: 兜底触发一次简报推送
         if: env.VERCEL_URL != '' && env.CRON_SECRET != ''
         run: |

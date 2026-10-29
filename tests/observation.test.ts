@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildObservationCandidates,
   buildObservationPrompt,
+  buildSourceCandidates,
   buildThemeStats,
   composeObservationFactsSql,
   passesNoveltyGate,
@@ -227,6 +228,7 @@ describe('输出校验 — 数字与仓库白名单', () => {
       badNumber: 0,
       duplicate: 0,
       kept: 0,
+      sourceShiftCapped: 0,
     };
     const lines = validateObservationOutput(
       { observations: [{ candidate: 1, claim: '一项目今天涨了 3 倍' }] },
@@ -264,6 +266,7 @@ describe('输出校验 — 数字与仓库白名单', () => {
       badNumber: 0,
       duplicate: 0,
       kept: 0,
+      sourceShiftCapped: 0,
     };
     validateObservationOutput(
       {
@@ -406,5 +409,110 @@ describe('提示词', () => {
     expect(prompt).toContain('先给判断');
     expect(prompt).toContain('不要用「今日 N 个」');
     expect(prompt).toContain('设计工具集中上榜');
+  });
+});
+
+describe('多源候选', () => {
+  const DATA = '2026-10-29';
+  const base = {
+    source: 'github_search',
+    sourceId: 'acme/rocket',
+    title: 'acme/rocket',
+    url: 'https://github.com/acme/rocket',
+    itemType: 'repo',
+    metrics: { stars: 1200 },
+    capturedDate: DATA,
+    firstSeenDate: DATA,
+    historyDepth: 1,
+    sourceDepth: 3,
+  };
+
+  it('首次收录的 GitHub 新仓库 → source-shift 候选', () => {
+    const candidates = buildSourceCandidates(
+      [{ ...base } as never],
+      { dataDate: DATA, repoFullNames: new Set() },
+    );
+    expect(candidates[0]).toMatchObject({
+      kind: 'source-shift',
+      signature: 'src:github_search:acme/rocket',
+    });
+    expect(candidates[0].facts).toContain('GitHub 新仓库');
+    expect(candidates[0].facts).toContain('1200');
+  });
+
+  it('与 Trending 重名的仓库不重复进观察', () => {
+    expect(
+      buildSourceCandidates([{ ...base } as never], {
+        dataDate: DATA,
+        repoFullNames: new Set(['acme/rocket']),
+      }),
+    ).toEqual([]);
+  });
+
+  it('不是首次收录 / 源历史不足 2 天 → 不进观察', () => {
+    expect(
+      buildSourceCandidates(
+        [{ ...base, firstSeenDate: '2026-10-28' } as never],
+        { dataDate: DATA, repoFullNames: new Set() },
+      ),
+    ).toEqual([]);
+    expect(
+      buildSourceCandidates(
+        [{ ...base, sourceDepth: 1 } as never],
+        { dataDate: DATA, repoFullNames: new Set() },
+      ),
+    ).toEqual([]);
+  });
+
+  it('HF 模型用 likes/downloads 打分', () => {
+    const candidates = buildSourceCandidates(
+      [
+        {
+          ...base,
+          source: 'hf_models',
+          sourceId: 'Qwen/Qwen3-8B',
+          title: 'Qwen/Qwen3-8B',
+          itemType: 'model',
+          metrics: { likes: 900, downloads: 120000 },
+        } as never,
+      ],
+      { dataDate: DATA, repoFullNames: new Set() },
+    );
+    expect(candidates[0].facts).toContain('[HF 模型]');
+    expect(candidates[0].signature).toBe('src:hf_models:qwen/qwen3-8b');
+  });
+
+  it('多源观察最多保留 1 条', () => {
+    const mk = (signature: string, repo: string) =>
+      candidate({
+        kind: 'source-shift',
+        signature,
+        mainRepo: null,
+        evidence: [repo],
+        facts: `[HF 模型] ${repo}：likes 1 · downloads 2`,
+      });
+    const diagnostics = {
+      total: 0,
+      invalidCandidate: 0,
+      emptyClaim: 0,
+      tooLong: 0,
+      missingRepo: 0,
+      badNumber: 0,
+      duplicate: 0,
+      kept: 0,
+      sourceShiftCapped: 0,
+    };
+    const lines = validateObservationOutput(
+      {
+        observations: [
+          { candidate: 1, claim: 'x likes 1' },
+          { candidate: 2, claim: 'y likes 1' },
+        ],
+      },
+      [mk('src:a', 'x'), mk('src:b', 'y')],
+      diagnostics,
+    );
+    expect(lines).toHaveLength(1);
+    expect(diagnostics.sourceShiftCapped).toBe(1);
   });
 });

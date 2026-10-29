@@ -200,6 +200,47 @@ export const trackedItems = pgTable(
 );
 
 /**
+ * 多源条目（Hugging Face / GitHub Search / HN / Lobsters）。
+ *
+ * 只存公开数据，不含 userid；唯一键 (source, source_id, captured_date)
+ * 让同一天重复抓取幂等。观察层按 source 取最近若干天的指标变化。
+ */
+export const sourceItems = pgTable(
+  'source_items',
+  {
+    id: serial('id').primaryKey(),
+    source: text('source').notNull(),
+    sourceId: text('source_id').notNull(),
+    itemType: text('item_type').notNull(),
+    title: text('title').notNull(),
+    url: text('url').notNull(),
+    author: text('author'),
+    description: text('description'),
+    topics: jsonb('topics').$type<string[]>().notNull().default(sql`'[]'`),
+    metrics: jsonb('metrics')
+      .$type<Record<string, number>>()
+      .notNull()
+      .default(sql`'{}'`),
+    raw: jsonb('raw'),
+    capturedDate: date('captured_date').notNull(),
+    capturedAt: timestamp('captured_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('source_items_source_id_date_unique').on(
+      t.source,
+      t.sourceId,
+      t.capturedDate,
+    ),
+    index('source_items_source_date_idx').on(t.source, t.capturedDate),
+    index('source_items_source_item_date_idx').on(
+      t.source,
+      t.sourceId,
+      t.capturedDate,
+    ),
+  ],
+);
+
+/**
  * 最近一次检索结果缓存，供"收藏 N"按序号引用。
  */
 export const searchCaches = pgTable('search_caches', {

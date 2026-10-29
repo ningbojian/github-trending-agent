@@ -55,17 +55,28 @@ describe('news 卡片条数', () => {
 });
 
 describe('news 卡片图片', () => {
-  it('只有第 1 篇带图（GitHub OG 海报）', () => {
+  it('第 1 篇用 GitHub OG 宽图', () => {
     const [first] = buildNewsArticles(entries(3));
     expect(first.picurl).toBe('https://opengraph.githubassets.com/1/owner0/repo0');
   });
 
-  it('其余条目不发图——微信逐张抓图很慢且会随机失败，少图才是快', () => {
-    const articles = buildNewsArticles(entries(3));
-    expect(articles[1].picurl).toBe(
-      'https://wsrv.nl/?url=github.com%2Fowner1.png&w=200&h=200&fit=cover&output=png',
+  it('给了站点根时，第 2 篇起用自托管 owner 头像；未知 owner 回退品牌图标', () => {
+    const articles = buildNewsArticles(
+      [
+        entry({ fullName: 'astral-sh/ruff' }),
+        entry({ fullName: 'hmjz100/LinkSwift' }),
+        entry({ fullName: 'unknown-owner/repo' }),
+      ],
+      { baseUrl: 'https://ghtrending.cyou' },
     );
-    expect(articles[2].picurl).toContain('wsrv.nl');
+    expect(articles[1].picurl).toBe('https://ghtrending.cyou/docs/avatars/hmjz100.png');
+    expect(articles[2].picurl).toBe('https://ghtrending.cyou/docs/assets/icon-750.png');
+  });
+
+  it('没有站点根时不发图（测试/本地）', () => {
+    const articles = buildNewsArticles(entries(3));
+    expect(articles[1].picurl).toBeUndefined();
+    expect(articles[2].picurl).toBeUndefined();
   });
 });
 

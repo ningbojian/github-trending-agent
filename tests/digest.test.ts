@@ -898,7 +898,7 @@ describe('buildDigestNewsFromSnapshot — news 卡片', () => {
       Array.from({ length: 8 }, (_, i) => `s/${i}`),
     );
     expect(articles[0].picurl).toBe('https://opengraph.githubassets.com/1/s/0');
-    expect(articles[1].picurl).toContain('wsrv.nl');
+    expect(articles[1].picurl).toBeUndefined();
   });
 
   it('accept 在截取之前生效：不合格条目不占名额、也不被补位', async () => {

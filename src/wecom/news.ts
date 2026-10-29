@@ -1,4 +1,9 @@
+import avatarManifest from '../../docs/avatars/manifest.json';
 import { displayWidth } from '../text-width.js';
+
+const KNOWN_AVATARS = new Set(
+  (avatarManifest as { owners?: string[] }).owners ?? [],
+);
 
 /**
  * 企微 news 卡片的渲染规则（纯函数，无网络/DB）。
@@ -9,8 +14,8 @@ import { displayWidth } from '../text-width.js';
  * - 标题在客户端约 10–12 个汉字处被裁，尾部内容用户永远看不到；
  * - 第 1 篇是仓库 OG 海报（宽图）；第 2 篇起是 owner 头像的方形缩略图。
  *   两端都发同一份 picurl，避免「手机无图、电脑留占位」的冲突。
- *   头像经 wsrv 图片 CDN 抓取并裁成方形（微信只访问 CDN）；
- *   仓库 OG 小图会被裁成文字截图，owner 头像更稳也更像图标。
+ *   头像自托管在 `docs/avatars/`（静态 CDN，不经第三方）；manifest 里
+ *   没有的 owner 回退到品牌图标，保证每行都有图。
  *
  * 标题的信息顺序因此是硬要求：仓库名必须在最前（最先可见），
  * 短简介放在尾部（可被裁剪）。
@@ -60,6 +65,8 @@ export interface NewsArticle {
 }
 
 export interface BuildNewsOptions {
+  /** 站点根（自托管头像/品牌图）；缺省时不发图（测试/本地）。 */
+  baseUrl?: string;
   /** 仓库主页；缺省用 GitHub URL。 */
   htmlUrlOf?: (entry: NewsEntry) => string | undefined;
 }
@@ -156,10 +163,13 @@ function hotIndexes(entries: NewsEntry[]): Set<number> {
   return new Set(ranked.map((item) => item.index));
 }
 
-/** owner 头像：wsrv 抓 GitHub 并裁成 200×200 方形，微信只访问 CDN。 */
-function avatarPic(fullName: string): string {
-  const owner = fullName.split('/')[0] ?? '';
-  return `https://wsrv.nl/?url=${encodeURIComponent(`github.com/${owner}.png`)}&w=200&h=200&fit=cover&output=png`;
+/** owner 头像（自托管）；manifest 里没有时回退品牌图标。 */
+function avatarPic(fullName: string, base: string): string {
+  const owner = (fullName.split('/')[0] ?? '').toLowerCase();
+  if (/^[a-z0-9-]+$/.test(owner) && KNOWN_AVATARS.has(owner)) {
+    return `${base}/docs/avatars/${owner}.png`;
+  }
+  return `${base}/docs/assets/icon-750.png`;
 }
 
 /**
@@ -174,20 +184,23 @@ export function buildNewsArticles(
 ): NewsArticle[] {
   const limited = entries.slice(0, NEWS_MAX_ARTICLES);
   const hot = hotIndexes(limited);
+  const base = options.baseUrl?.replace(/\/+$/, '');
   return limited.map((entry, index) => {
     const htmlUrl = options.htmlUrlOf?.(entry)?.trim();
     // 电脑端新闻卡片的 description 会被右侧缩略图挤占：放短句（≤18 字），
     // 完整上下文在「今日观察」里；放 28 字完整简介会被截断。
     const description = entry.short?.trim() || entry.summary?.trim();
+    const picurl =
+      index === 0
+        ? `https://opengraph.githubassets.com/1/${entry.fullName}`
+        : base !== undefined
+          ? avatarPic(entry.fullName, base)
+          : undefined;
     return {
       title: buildTitle(index, entry, hot.has(index)),
       ...(description ? { description } : {}),
       url: htmlUrl !== undefined && htmlUrl !== '' ? htmlUrl : `https://github.com/${entry.fullName}`,
-      // 第 1 篇 OG 宽图；其余 owner 头像方图；两端一致。
-      picurl:
-        index === 0
-          ? `https://opengraph.githubassets.com/1/${entry.fullName}`
-          : avatarPic(entry.fullName),
+      ...(picurl !== undefined ? { picurl } : {}),
     };
   });
 }

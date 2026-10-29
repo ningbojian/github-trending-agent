@@ -4,6 +4,5 @@
       "path": "/api/cron-push-digest",
       "schedule": "0 1 * * *"
     }
-  ],
-  "regions": ["hkg1"]
+  ]
 }

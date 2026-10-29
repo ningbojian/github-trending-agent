@@ -203,6 +203,18 @@ function peersFor(
     .map((other) => other.fullName);
 }
 
+/** 主题名转成人话：ai → AI、claude-code → Claude Code、rust → Rust。 */
+function themeLabel(theme: string, kind: 'language' | 'topic'): string {
+  const cleaned = theme.trim();
+  if (cleaned === '') return kind === 'language' ? '这门语言' : '这个话题';
+  if (cleaned.toLowerCase() === 'ai') return 'AI';
+  return cleaned
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 function repoCandidate(
   kind: Exclude<ObservationKind, 'theme-shift'>,
   row: ObservationFactRow,
@@ -276,7 +288,7 @@ export function buildObservationCandidates(
         repoCandidate(
           'new-entrant',
           row,
-          `新上榜：首次出现 ${row.firstSeenDate}，今天 +${row.deltaToday}，stars ${row.stars}`,
+          `${row.fullName} 今天首次上榜，单日 +${row.deltaToday} 星（总 ${row.stars} 星）`,
           row.deltaToday,
           rows,
         ),
@@ -304,8 +316,8 @@ export function buildObservationCandidates(
           : null;
       const facts =
         ratio !== null
-          ? `加速：今天 +${row.deltaToday}，前一数据日 +${row.deltaPrev}（${ratio} 倍），stars ${row.stars}`
-          : `加速：排名从 ${row.prevRank} 升到 ${row.rankToday}，今天 +${row.deltaToday}，stars ${row.stars}`;
+          ? `${row.fullName} 单日 +${row.deltaToday} 星，是前一日的 ${ratio} 倍`
+          : `${row.fullName} 排名从 ${row.prevRank} 升到 ${row.rankToday}，单日 +${row.deltaToday} 星`;
       candidates.push(
         repoCandidate('acceleration', row, facts, row.deltaToday, rows),
       );
@@ -316,7 +328,7 @@ export function buildObservationCandidates(
         repoCandidate(
           'streak',
           row,
-          `连续在榜 ${row.daysOnList} 天，今天 +${row.deltaToday}，stars ${row.stars}`,
+          `${row.fullName} 已连续 ${row.daysOnList} 天在榜，今天再涨 ${row.deltaToday} 星`,
           row.daysOnList * 100,
           rows,
         ),
@@ -339,12 +351,13 @@ export function buildObservationCandidates(
       .map((row) => row.fullName);
     if (evidence.length < 2) continue;
 
+    const extra = Math.round(stat.today - stat.trailingAvg);
     candidates.push({
       kind: 'theme-shift',
       signature: `theme:${stat.kind}:${stat.theme}`,
       mainRepo: null,
       evidence,
-      facts: `主题 ${stat.theme}（${stat.kind}）：今天 ${stat.today} 个，近 7 天平均 ${stat.trailingAvg.toFixed(1)} 个（${evidence.slice(0, 2).join('、')} 等）`,
+      facts: `${themeLabel(stat.theme, stat.kind)} 今天有 ${stat.today} 个项目上榜，比过去一周平均多 ${extra} 个（${evidence.slice(0, 2).join('、')} 等）`,
       score: stat.today * 100 + Math.round(stat.ratio * 10),
       theme: stat.theme,
     });
@@ -398,13 +411,16 @@ export function buildSourceCandidates(
     let score: number;
     if (row.source === 'github_search') {
       const stars = row.metrics.stars ?? 0;
-      facts = `[GitHub 新仓库] ${row.title}：★${stars}（本周新建，首次收录）`;
+      facts = `GitHub 本周新建项目里，${row.title} 已拿到 ${stars} 星`;
       score = stars;
     } else {
       const likes = row.metrics.likes ?? 0;
       const downloads = row.metrics.downloads ?? 0;
-      const label = row.source === 'hf_spaces' ? '[HF Space]' : '[HF 模型]';
-      facts = `${label} ${row.title}：likes ${likes} · downloads ${downloads}（今日 trending，首次收录）`;
+      const parts = [
+        likes > 0 ? `${likes} 个赞` : '',
+        downloads > 0 ? `${downloads} 次下载` : '',
+      ].filter(Boolean);
+      facts = `Hugging Face 上 ${row.title} 今天获得 ${parts.join('、')}`;
       score = likes * 100 + Math.round(downloads / 100);
     }
     if (score <= 0) continue;
@@ -472,14 +488,21 @@ export function composeSourceFactsSql(dataDate: string): SQL {
 export function fallbackObservationLines(
   candidates: ObservationCandidate[],
 ): ObservationLine[] {
-  const repos = candidates.filter((candidate) => candidate.kind !== 'source-shift');
+  const repoLevel = candidates.filter(
+    (candidate) => candidate.kind !== 'theme-shift' && candidate.kind !== 'source-shift',
+  );
+  const theme = candidates.find((candidate) => candidate.kind === 'theme-shift');
   const source = candidates.find((candidate) => candidate.kind === 'source-shift');
-  // 跨源条目通常排在主题/仓库候选后面；兜底时给它留一个位置，
-  // 否则多源永远看不到（前三名会被主题观察占满）。
+  // 兜底优先「具体仓库发生了什么」，再补一条主题与一条跨源；
+  // 主题计数堆在最前面正是用户说的「一堆没用的数据」。
   const ordered = [
-    ...repos.slice(0, 2),
+    ...repoLevel.slice(0, 1),
+    ...(theme !== undefined ? [theme] : []),
     ...(source !== undefined ? [source] : []),
-    ...repos.slice(2),
+    ...repoLevel.slice(1),
+    ...candidates.filter(
+      (candidate) => candidate.kind === 'theme-shift' && candidate !== theme,
+    ),
   ];
 
   const lines: ObservationLine[] = [];
@@ -519,11 +542,11 @@ export function buildObservationPrompt(
   return [
     '下面是今天 GitHub 热榜中「和过去 7 天不同」的事实候选。请写 2 到 3 条今日观察：',
     `1. 每条一句话、不超过 ${OBSERVATION_CLAIM_MAX_CHARS} 个汉字，先给判断、再说证据，回答「社区在集中解决什么问题」；`,
-    '2. 不要用「今日 N 个」「平均 N 个」开头，也不要只复述数量；数字只作为句子里的证据；',
+    '2. 不要用「今日 N 个」「平均 N 个」开头，也不要只复述数量；数字只作为句子里的证据，每条最多一个数字；不要出现 topic/likes/downloads/stars 等字段名；',
     '3. 只能引用候选里出现的仓库名和数字，不要编造任何列表之外的事实；',
     '4. 不要用「可能 / 也许 / 值得关注」这类空话，不要 emoji、不要链接；',
     '5. 每条对应一个候选编号；',
-    '6. 多源条目（[GitHub 新仓库] / [HF …]）最多用一条，优先与仓库事实合并叙述；',
+    '6. 多源条目最多用一条，优先与仓库事实合并叙述；',
     '7. 以 JSON 输出：{"observations":[{"candidate":1,"claim":"一句话"}]}。',
     '',
     '示例风格（不是今天的事实）：设计工具集中上榜：ruff 与 hallmark 同时在解决「AI 生成的页面一眼假」的问题。',

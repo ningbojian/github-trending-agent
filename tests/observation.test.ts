@@ -437,7 +437,7 @@ describe('多源候选', () => {
       kind: 'source-shift',
       signature: 'src:github_search:acme/rocket',
     });
-    expect(candidates[0].facts).toContain('GitHub 新仓库');
+    expect(candidates[0].facts).toContain('GitHub 本周新建项目');
     expect(candidates[0].facts).toContain('1200');
   });
 
@@ -479,7 +479,7 @@ describe('多源候选', () => {
       ],
       { dataDate: DATA, repoFullNames: new Set() },
     );
-    expect(candidates[0].facts).toContain('[HF 模型]');
+    expect(candidates[0].facts).toContain('Hugging Face');
     expect(candidates[0].signature).toBe('src:hf_models:qwen/qwen3-8b');
   });
 

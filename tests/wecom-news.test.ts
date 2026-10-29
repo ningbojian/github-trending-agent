@@ -60,20 +60,7 @@ describe('news 卡片图片', () => {
     expect(first.picurl).toBe('https://opengraph.githubassets.com/1/owner0/repo0');
   });
 
-  it('给了站点根时，第 2 篇起用自托管 owner 头像；未知 owner 回退品牌图标', () => {
-    const articles = buildNewsArticles(
-      [
-        entry({ fullName: 'astral-sh/ruff' }),
-        entry({ fullName: 'hmjz100/LinkSwift' }),
-        entry({ fullName: 'unknown-owner/repo' }),
-      ],
-      { baseUrl: 'https://ghtrending.cyou' },
-    );
-    expect(articles[1].picurl).toBe('https://ghtrending.cyou/docs/avatars/hmjz100.png');
-    expect(articles[2].picurl).toBe('https://ghtrending.cyou/docs/assets/icon-750.png');
-  });
-
-  it('没有站点根时不发图（测试/本地）', () => {
+  it('第 2 篇起不发图（文字优先）', () => {
     const articles = buildNewsArticles(entries(3));
     expect(articles[1].picurl).toBeUndefined();
     expect(articles[2].picurl).toBeUndefined();

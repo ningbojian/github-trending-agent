@@ -1,4 +1,3 @@
-import { KNOWN_AVATAR_OWNERS } from './avatars.js';
 import { displayWidth } from '../text-width.js';
 
 /**
@@ -8,10 +7,10 @@ import { displayWidth } from '../text-width.js';
  * - 一条 news 最多 8 篇，第 9 篇会被企微以 `45008 article size out of limit` 拒绝；
  * - 多篇布局里**只有标题可见**，`description` 不显示；
  * - 标题在客户端约 10–12 个汉字处被裁，尾部内容用户永远看不到；
- * - 第 1 篇是仓库 OG 海报（宽图）；第 2 篇起是 owner 头像的方形缩略图。
- *   两端都发同一份 picurl，避免「手机无图、电脑留占位」的冲突。
- *   头像自托管在 `docs/avatars/`（静态 CDN，不经第三方）；manifest 里
- *   没有的 owner 回退到品牌图标，保证每行都有图。
+ * - 第 1 篇是仓库 OG 海报（宽图）；**第 2 篇起一律不发图**。
+ *   行内图会压缩 Abstract / 简介的显示空间，文字优先；桌面端的灰色
+ *   缩略图位是客户端行为，接受它，不为了填位而发图（发图会让手机端
+ *   也渲染行内图，两端反而冲突）。
  *
  * 标题的信息顺序因此是硬要求：仓库名必须在最前（最先可见），
  * 短简介放在尾部（可被裁剪）。
@@ -61,8 +60,6 @@ export interface NewsArticle {
 }
 
 export interface BuildNewsOptions {
-  /** 站点根（自托管头像/品牌图）；缺省时不发图（测试/本地）。 */
-  baseUrl?: string;
   /** 仓库主页；缺省用 GitHub URL。 */
   htmlUrlOf?: (entry: NewsEntry) => string | undefined;
 }
@@ -159,19 +156,10 @@ function hotIndexes(entries: NewsEntry[]): Set<number> {
   return new Set(ranked.map((item) => item.index));
 }
 
-/** owner 头像（自托管）；manifest 里没有时回退品牌图标。 */
-function avatarPic(fullName: string, base: string): string {
-  const owner = (fullName.split('/')[0] ?? '').toLowerCase();
-  if (/^[a-z0-9-]+$/.test(owner) && KNOWN_AVATAR_OWNERS.has(owner)) {
-    return `${base}/docs/avatars/${owner}.png`;
-  }
-  return `${base}/docs/assets/icon-750.png`;
-}
-
 /**
  * 把条目渲染成 news 文章列表：
  * - 第 1 篇用仓库 OG 海报（宽图）；
- * - 第 2 篇起用 owner 头像方形缩略图（两端一致，不留桌面占位）；
+ * - 第 2 篇起不发图（文字优先，图片会压缩简介空间）；
  * - 超过 8 条截断——企微硬上限，多一条整条消息都会被拒。
  */
 export function buildNewsArticles(
@@ -180,23 +168,18 @@ export function buildNewsArticles(
 ): NewsArticle[] {
   const limited = entries.slice(0, NEWS_MAX_ARTICLES);
   const hot = hotIndexes(limited);
-  const base = options.baseUrl?.replace(/\/+$/, '');
   return limited.map((entry, index) => {
     const htmlUrl = options.htmlUrlOf?.(entry)?.trim();
     // 电脑端新闻卡片的 description 会被右侧缩略图挤占：放短句（≤18 字），
     // 完整上下文在「今日观察」里；放 28 字完整简介会被截断。
     const description = entry.short?.trim() || entry.summary?.trim();
-    const picurl =
-      index === 0
-        ? `https://opengraph.githubassets.com/1/${entry.fullName}`
-        : base !== undefined
-          ? avatarPic(entry.fullName, base)
-          : undefined;
     return {
       title: buildTitle(index, entry, hot.has(index)),
       ...(description ? { description } : {}),
       url: htmlUrl !== undefined && htmlUrl !== '' ? htmlUrl : `https://github.com/${entry.fullName}`,
-      ...(picurl !== undefined ? { picurl } : {}),
+      ...(index === 0
+        ? { picurl: `https://opengraph.githubassets.com/1/${entry.fullName}` }
+        : {}),
     };
   });
 }

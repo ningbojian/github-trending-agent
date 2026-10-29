@@ -2,7 +2,6 @@ import { and, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
 import { loadStarredNames } from '../github/starred-names.js';
-import { productionBaseUrl } from '../http/base-url.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
 import { sendWeComNews, sendWeComText } from '../wecom/api.js';
 import { NEWS_MAX_ARTICLES, buildNewsArticles, type NewsArticle } from '../wecom/news.js';
@@ -402,7 +401,6 @@ export async function buildDigestNewsFromSnapshot(
       short: item.short,
     })),
     {
-      baseUrl: productionBaseUrl() ?? undefined,
       htmlUrlOf: (entry) => byName.get(entry.fullName)?.htmlUrl,
     },
   );

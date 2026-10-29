@@ -113,7 +113,8 @@ const PUSH_INTERVAL_PATTERN = new RegExp(
 
 /** 跟踪：`取消追踪` 先于 `追踪`；`关注` 必须带空白，避免吞掉「关注度高的项目」。 */
 const MY_TRACKING_PATTERN = /^(我的追踪|追踪列表|跟踪列表)$/;
-const UNTRACK_PATTERN = /^取消(追踪|跟踪|关注)(?:\s|$)/;
+/** 允许「取消追踪1」（无空格），数字紧跟也能分发到 handler。 */
+const UNTRACK_PATTERN = /^取消(追踪|跟踪|关注)(?:\s|$|\d)/;
 const TRACK_PATTERN = /^(追踪|跟踪|关注)\s+/;
 
 /** 尾部中英文标点（精确/前缀分发与疑似命令判定前统一剥除，「帮助。」也能命中）。 */
@@ -188,7 +189,7 @@ export function suspectedCommandUsage(content: string): UsageKey | null {
  */
 export function decideTextRoute(content: string): RouteDecision {
   const text = normalizeCommandText(content);
-  if (text === '帮助') {
+  if (text === '帮助' || text === '帮助 全部' || text === '帮助全部') {
     return { kind: 'handler', handler: 'help' };
   }
   if (UNFAVORITE_PATTERN.test(text)) {

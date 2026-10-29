@@ -175,7 +175,7 @@ curl -i https://<domain>/api/oauth-github
 2. 「应用管理 → 自建 → 创建应用」：填名称、logo、可见范围（先覆盖测试成员）。创建后记录 **AgentId** 与 **Secret** → 分别存入 `WECOM_AGENT_ID`（纯数字字符串）、`WECOM_SECRET`。
    - **logo 直接用** [docs/assets/icon-750.png](assets/icon-750.png)（750×750 PNG，原创图标，可商用）。
    - **应用介绍**（4–120 字）：`每天一份中文 GitHub 热榜简报，直接在微信里收、在微信里问。`（33 字）
-   - **功能介绍**（4–120 字）：`每天抓取 GitHub Trending 并写成中文简介，按你设定的时间和间隔推送。会话里可直接提问找项目，例如「本周 rust 的 ai 项目」；发「帮助」查看全部指令。绑定 GitHub 后可收藏仓库并同步 star。`（111 字）
+   - **功能介绍**（4–120 字）：`每天抓取 GitHub Trending 并写成中文简介，按你设定的时间和间隔推送。会话里可直接提问找项目，例如「本周 rust 的 ai 项目」；发「帮助」查看常用指令。绑定 GitHub 后可收藏仓库并同步 star。`（111 字）
    - 两段都只讲「能干什么」，不写安装步骤——「无需下载企业微信」那类话属于落地页 `/api/join`。
 3. 应用详情 →「接收消息 → 接收消息服务器配置 → 设置 API 接收」：
    - **URL**：`https://<domain>/api/wecom-callback`

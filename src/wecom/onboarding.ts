@@ -87,7 +87,7 @@ export const INTERVAL_FAILURE_REPLY = '推送间隔设置失败，请稍后再�
 export const ABOUT_REPLY = [
   '我是 GitHub 热榜助手：每天把你关注方向里增长最快的开源项目整理成简报推给你，也可以直接向我提问。',
   '可以这样问：「本周 python 的 ai 项目」「star 增长最快的 rust 项目」「前 5 个新项目」。',
-  '发「帮助」查看全部指令。',
+  '发「帮助」看常用指令、「帮助 全部」看完整清单。',
 ].join('\n');
 
 /**
@@ -97,7 +97,7 @@ export const ABOUT_REPLY = [
 export const OFF_TOPIC_REPLY = [
   '这个问题我答不了——我只负责 GitHub 热门项目。',
   '可以这样问：「本周 python 的 ai 项目」「star 增长最快的 rust 项目」「前 5 个新项目」。',
-  '发「帮助」查看全部指令。',
+  '发「帮助」看常用指令、「帮助 全部」看完整清单。',
 ].join('\n');
 
 // ---------------------------------------------------------------------------
@@ -123,13 +123,26 @@ export const HELP_MESSAGE = [
   '· 设置模型：回「设置模型」填自己的 AI Key；「我的模型」查看、「清除模型」删除。',
 ].join('\n');
 
+/** 「帮助」短菜单：只放最常用的入口，完整清单用「帮助 全部」。 */
+export const HELP_SHORT_MESSAGE = [
+  '📊 GitHub 热榜助手',
+  '每天 09:00 推热榜 + 今日观察；只推有增长的项目。',
+  '',
+  '🔍 找项目：直接说需求，如「本周 python 的 ai 项目」',
+  '⭐ 收藏：回「收藏 3」；「我的收藏」看全部',
+  '📌 跟踪：回「追踪 owner/repo」；「我的追踪」管理',
+  '⚙️ 设置：回「我的订阅」；「我的面板」改时间/条数',
+  '',
+  '回复「帮助 全部」看完整指令。',
+].join('\n');
+
 /**
- * 「帮助」handler（router 精确匹配「帮助」后分发）：
- * 发送完整用法说明；不读不写 DB。发送失败以 rejected promise 传播，
- * 由 router 的 dispatchSafely 捕获并回发兜底文案。
+ * 「帮助」handler：默认发短菜单，避免密密麻麻；用户明确要「全部」时才发
+ * 完整清单。不读不写 DB。发送失败以 rejected promise 传播，由 router 兜底。
  */
 export async function handleHelp(msg: InboundMessage): Promise<void> {
-  await sendWeComText(msg.fromUserName, HELP_MESSAGE);
+  const full = msg.content.includes('全部');
+  await sendWeComText(msg.fromUserName, full ? HELP_MESSAGE : HELP_SHORT_MESSAGE);
 }
 
 // ---------------------------------------------------------------------------

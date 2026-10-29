@@ -2,7 +2,6 @@ import { parseTrackRequest } from '../agent/tracking.js';
 import {
   addTrackedRepo,
   listTracked,
-  readTrackList,
   removeTracked,
   writeTrackList,
 } from '../agent/tracking-service.js';
@@ -89,9 +88,9 @@ export async function handleUntrack(msg: InboundMessage): Promise<void> {
     let displayName: string | null = null;
 
     if (/^\d+$/.test(arg)) {
-      const list = await readTrackList(msg.fromUserName);
-      const index = Number(arg) - 1;
-      const item = list?.[index];
+      // 直接查库，不依赖先发「我的追踪」写缓存；列表顺序与面板一致。
+      const rows = await listTracked(msg.fromUserName);
+      const item = rows[Number(arg) - 1];
       if (!item) {
         await sendWeComText(msg.fromUserName, UNTRACK_USAGE_REPLY);
         return;

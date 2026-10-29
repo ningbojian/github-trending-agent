@@ -138,6 +138,7 @@ import {
   handleSubscribe,
   handleUnsubscribe,
   HELP_MESSAGE,
+  HELP_SHORT_MESSAGE,
   WELCOME_MESSAGE,
 } from '../src/wecom/onboarding';
 import {
@@ -620,22 +621,14 @@ describe('handleHelp（帮助 → 完整用法说明）', () => {
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [to, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     expect(to).toBe('alice');
-    expect(content).toBe(HELP_MESSAGE);
-    // 帮助文案为全中文，覆盖全部用户指令。
-    expect(content).toContain('自然语言搜索');
-    expect(content).toContain('本周 python 的 ai 项目');
-    expect(content).toContain('收藏 N');
-    expect(content).toContain('取消收藏 N');
-    expect(content).toContain('我的收藏');
+    expect(content).toBe(HELP_SHORT_MESSAGE);
+    // 短菜单只放常用入口，完整清单用「帮助 全部」。
+    expect(content).toContain('帮助 全部');
+    expect(content).toContain('追踪');
+    expect(content).toContain('我的面板');
+    expect(content).toContain('收藏 3');
     expect(content).toContain('我的订阅');
-    expect(content).toContain('绑定');
-    expect(content).toContain('订阅 <偏好>');
-    expect(content).toContain('取消订阅 <关键词>');
-    expect(content).toContain('退订');
-    expect(content).toContain('条数 N');
-    // 口味反馈的两种粒度都要在帮助里出现：整批 + 精确到一条。
-    expect(content).toContain('不感兴趣 3');
-    expect(content).toContain('owner/repo');
+    expect(Buffer.byteLength(content, 'utf8')).toBeLessThan(600);
     // 帮助菜单不带搜索结果页脚（避免噪音——它本身就是指令目录）。
     expect(content).not.toContain('💡');
 
@@ -653,6 +646,20 @@ describe('handleHelp（帮助 → 完整用法说明）', () => {
     expect(searchHandler).not.toHaveBeenCalled();
     expect(subscribeHandler).not.toHaveBeenCalled();
     expect(unsubscribeHandler).not.toHaveBeenCalled();
+  });
+
+  it('「帮助 全部」→ 完整指令清单', async () => {
+    dbMock.selectQueue.push([existingSub()]);
+    registerHandlers({ help: handleHelp });
+
+    await routeMessage(makeMsg({ content: '帮助 全部' }));
+
+    const content = apiMock.sendWeComText.mock.calls[0]?.[1] as string;
+    expect(content).toBe(HELP_MESSAGE);
+    expect(content).toContain('收藏 N');
+    expect(content).toContain('订阅 <偏好>');
+    expect(content).toContain('条数 N');
+    expect(content).toContain('不感兴趣 3');
   });
 
   it('「帮助」为精确匹配：「帮助中心」「帮」不触发 help，落入 search 兜底', async () => {

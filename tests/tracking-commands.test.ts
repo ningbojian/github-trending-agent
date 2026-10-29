@@ -62,6 +62,7 @@ import {
   handleTrack,
   handleUntrack,
 } from '../src/wecom/tracking-commands';
+import { decideTextRoute } from '../src/wecom/route-decision';
 import type { InboundMessage } from '../src/wecom/router';
 
 function msg(content: string): InboundMessage {
@@ -171,9 +172,9 @@ describe('handleMyTracking', () => {
 });
 
 describe('handleUntrack', () => {
-  it('按序号取消：从 kv 列表取 identifier，置 active=false', async () => {
+  it('按序号取消：直接查库取 identifier，置 active=false（不依赖先发「我的追踪」）', async () => {
     dbMock.selectQueue.push([
-      { value: { items: [{ identifier: 'acme/rocket', displayName: 'acme/rocket' }] } },
+      { identifier: 'acme/rocket', displayName: 'acme/rocket' },
     ]);
 
     await handleUntrack(msg('取消追踪 1'));
@@ -182,6 +183,10 @@ describe('handleUntrack', () => {
     const reply = apiMock.sendWeComText.mock.calls[0]?.[1] as string;
     expect(reply).toContain('已取消');
     expect(reply).toContain('acme/rocket');
+  });
+
+  it('「取消追踪1」（无空格）也走同一路径', async () => {
+    expect(decideTextRoute('取消追踪1')).toEqual({ kind: 'handler', handler: 'untrack' });
   });
 
   it('无法解析的目标 → 用法提示，不写库', async () => {

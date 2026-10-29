@@ -751,7 +751,11 @@ const ARCHIVE_PREFIX = 'archive:v1:';
 const OBSERVATION_TTL_MS = 8 * 24 * 60 * 60 * 1000;
 const SENT_TTL_MS = 48 * 60 * 60 * 1000;
 const ARCHIVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const LLM_TIMEOUT_MS = 15_000;
+/**
+ * 观察的 LLM 超时：候选包含仓库 10 个 + 跨源最多 3 个，15 秒在实测中会
+ * abort（llm:last-error 记录 timeout）；30 秒与 generateObjectSafe 默认一致。
+ */
+const LLM_TIMEOUT_MS = 30_000;
 
 interface StoredObservations extends DailyObservations {
   generatedAt?: string;

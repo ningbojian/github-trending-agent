@@ -203,6 +203,14 @@ function peersFor(
     .map((other) => other.fullName);
 }
 
+/** 大数字压成人能感知的量级：18653 → 1.9 万；1200 保持原样。 */
+function shortCount(value: number): string {
+  if (value >= 10000) {
+    return `${(value / 10000).toFixed(1)} 万`;
+  }
+  return String(Math.round(value));
+}
+
 /** 主题名转成人话：ai → AI、claude-code → Claude Code、rust → Rust。 */
 function themeLabel(theme: string, kind: 'language' | 'topic'): string {
   const cleaned = theme.trim();
@@ -288,7 +296,7 @@ export function buildObservationCandidates(
         repoCandidate(
           'new-entrant',
           row,
-          `${row.fullName} 今天首次上榜，单日 +${row.deltaToday} 星（总 ${row.stars} 星）`,
+          `${row.fullName} 今天首次上榜，单日 +${shortCount(row.deltaToday)} 星`,
           row.deltaToday,
           rows,
         ),
@@ -316,8 +324,8 @@ export function buildObservationCandidates(
           : null;
       const facts =
         ratio !== null
-          ? `${row.fullName} 单日 +${row.deltaToday} 星，是前一日的 ${ratio} 倍`
-          : `${row.fullName} 排名从 ${row.prevRank} 升到 ${row.rankToday}，单日 +${row.deltaToday} 星`;
+          ? `${row.fullName} 单日 +${shortCount(row.deltaToday)} 星，是前一日的 ${ratio} 倍`
+          : `${row.fullName} 排名从 ${row.prevRank} 升到 ${row.rankToday}，单日 +${shortCount(row.deltaToday)} 星`;
       candidates.push(
         repoCandidate('acceleration', row, facts, row.deltaToday, rows),
       );
@@ -328,7 +336,7 @@ export function buildObservationCandidates(
         repoCandidate(
           'streak',
           row,
-          `${row.fullName} 已连续 ${row.daysOnList} 天在榜，今天再涨 ${row.deltaToday} 星`,
+          `${row.fullName} 已连续 ${row.daysOnList} 天在榜，今天再涨 ${shortCount(row.deltaToday)} 星`,
           row.daysOnList * 100,
           rows,
         ),
@@ -351,13 +359,12 @@ export function buildObservationCandidates(
       .map((row) => row.fullName);
     if (evidence.length < 2) continue;
 
-    const extra = Math.round(stat.today - stat.trailingAvg);
     candidates.push({
       kind: 'theme-shift',
       signature: `theme:${stat.kind}:${stat.theme}`,
       mainRepo: null,
       evidence,
-      facts: `${themeLabel(stat.theme, stat.kind)} 今天有 ${stat.today} 个项目上榜，比过去一周平均多 ${extra} 个（${evidence.slice(0, 2).join('、')} 等）`,
+      facts: `${themeLabel(stat.theme, stat.kind)} 项目明显变多：${stat.today} 个上榜（${evidence.slice(0, 2).join('、')} 等）`,
       score: stat.today * 100 + Math.round(stat.ratio * 10),
       theme: stat.theme,
     });
@@ -411,16 +418,16 @@ export function buildSourceCandidates(
     let score: number;
     if (row.source === 'github_search') {
       const stars = row.metrics.stars ?? 0;
-      facts = `GitHub 本周新建项目里，${row.title} 已拿到 ${stars} 星`;
+      facts = `GitHub 本周新建项目里，${row.title} 已拿到 ${shortCount(stars)} 星`;
       score = stars;
     } else {
       const likes = row.metrics.likes ?? 0;
       const downloads = row.metrics.downloads ?? 0;
-      const parts = [
-        likes > 0 ? `${likes} 个赞` : '',
-        downloads > 0 ? `${downloads} 次下载` : '',
-      ].filter(Boolean);
-      facts = `Hugging Face 上 ${row.title} 今天获得 ${parts.join('、')}`;
+      // 只讲一个用户能感知的数字；likes 优先，没有赞才提下载。
+      facts =
+        likes > 0
+          ? `Hugging Face 上 ${row.title} 一天拿到 ${shortCount(likes)} 个赞`
+          : `Hugging Face 上 ${row.title} 一天被下载 ${shortCount(downloads)} 次`;
       score = likes * 100 + Math.round(downloads / 100);
     }
     if (score <= 0) continue;

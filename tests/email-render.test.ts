@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DigestSnapshotItem } from '../src/agent/digest-snapshot';
 import { BRAND } from '../src/brand';
-import { emailSubject, renderDigestEmail } from '../src/email/render';
+import { emailSubject, renderConfirmEmail, renderDigestEmail, renderManageEmail } from '../src/email/render';
 
 function item(overrides: Partial<DigestSnapshotItem> = {}): DigestSnapshotItem {
   return {
@@ -191,5 +191,34 @@ describe('renderDigestEmail — plain text', () => {
     expect(text).toContain('你好，这是今天的 GitHub 热榜简报（2026-10-25）。');
     // 序号单元格形如「>#1<」；不能直接断言 '#1'，品牌色 #1f2328 里也含该子串。
     expect(html).not.toContain('>#1<');
+  });
+});
+
+describe('确认信 / 管理信', () => {
+  it('确认信使用 table 布局，不带 style 标签和外链图片', () => {
+    const html = renderConfirmEmail({
+      subject: '确认订阅 GitHub 热榜简报',
+      lead: '你好，点击下面的按钮确认订阅 GitHub 热榜简报。',
+      confirmUrl: 'https://agent.example.com/api/email-confirm?t=a%2Fb',
+      actionLabel: '确认订阅',
+    });
+
+    expect(html).toContain('<table role="presentation"');
+    expect(html).not.toContain('<style');
+    expect(html).not.toMatch(/<img/i);
+    expect(html).toContain('https://agent.example.com/api/email-confirm?t=a%2Fb');
+    expect(html).toContain('48 小时');
+  });
+
+  it('管理信包含设置与退订链接，并转义 & 符号', () => {
+    const html = renderManageEmail({
+      settingsUrl: 'https://agent.example.com/api/email-settings?t=a&b',
+      unsubscribeUrl: 'https://agent.example.com/api/email-unsubscribe?t=a&b',
+    });
+
+    expect(html).toContain('role="presentation"');
+    expect(html).toContain('调整推送时间 / 频率');
+    expect(html).toContain('退订');
+    expect(html).toContain('t=a&amp;b');
   });
 });

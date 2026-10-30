@@ -162,3 +162,110 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
 
   return { subject, text: textLines.join('\n'), html };
 }
+
+// ---------------------------------------------------------------------------
+// 确认信 / 管理信：同一套 table + 内联样式纪律，不套网页页壳
+// ---------------------------------------------------------------------------
+
+/** 邮件里的主按钮：用 table 单元格包 <a>，Outlook 才不丢 padding。 */
+function emailButton(href: string, label: string): string {
+  const c = BRAND.colors;
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0 0;">
+  <tr>
+    <td style="background:${c.accent};border-radius:8px;">
+      <a href="${escapeHtml(href)}" style="display:inline-block;padding:12px 24px;font-size:15px;font-weight:600;color:${c.onHeader};text-decoration:none;">${escapeHtml(label)}</a>
+    </td>
+  </tr>
+</table>`;
+}
+
+/** 邮件骨架：隐藏 preheader + table 布局 + 品牌头 + 页脚。 */
+function renderEmailDocument(input: {
+  title: string;
+  preheader: string;
+  subtitle: string;
+  bodyHtml: string;
+  footerHtml?: string;
+}): string {
+  const c = BRAND.colors;
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(input.title)}</title>
+</head>
+<body style="margin:0;padding:0;background:${c.pageBg};color:${c.text};font-family:${BRAND.fontFamily};-webkit-text-size-adjust:100%;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">${escapeHtml(input.preheader)}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${c.pageBg};padding:24px 12px;">
+  <tr>
+    <td align="center">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:${BRAND.maxWidth}px;background:${c.cardBg};border:1px solid ${c.cardBorder};border-radius:12px;">
+        <tr>
+          <td style="background:${c.header};color:${c.onHeader};padding:20px 24px;border-radius:12px 12px 0 0;">
+            <div style="font-size:20px;font-weight:700;">${BRAND.name}</div>
+            <div style="font-size:13px;color:${c.headerMuted};margin-top:2px;">${escapeHtml(input.subtitle)}</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:24px 24px 8px;">${input.bodyHtml}</td>
+        </tr>
+        <tr>
+          <td style="padding:8px 24px 24px;color:${c.muted};font-size:12px;line-height:1.7;">
+            ${input.footerHtml ?? ''}
+            <div style="margin-top:8px;">${BRAND.name} · 非 GitHub 官方产品</div>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>`;
+}
+
+/** 确认订阅 / 恢复订阅邮件。 */
+export function renderConfirmEmail(input: {
+  subject: string;
+  lead: string;
+  confirmUrl: string;
+  actionLabel: string;
+}): string {
+  const body = `<div style="font-size:15px;line-height:1.7;">${escapeHtml(input.lead)}链接 48 小时内有效。</div>
+${emailButton(input.confirmUrl, input.actionLabel)}
+<div style="margin-top:16px;font-size:12px;color:${BRAND.colors.muted};line-height:1.6;">如果这不是你本人操作，忽略本邮件即可。</div>`;
+  return renderEmailDocument({
+    title: input.subject,
+    preheader: input.subject,
+    subtitle: '邮箱订阅',
+    bodyHtml: body,
+  });
+}
+
+/** 管理邮件：设置 / 退订链接（长期 token，只走邮件）。 */
+export function renderManageEmail(input: {
+  settingsUrl: string;
+  unsubscribeUrl: string;
+}): string {
+  const c = BRAND.colors;
+  const body = `<div style="font-size:15px;line-height:1.7;">你好，这是你的 GitHub 热榜简报订阅管理链接。</div>
+<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:18px;">
+  <tr>
+    <td style="padding:0 0 10px;font-size:14px;">
+      <a href="${escapeHtml(input.settingsUrl)}" style="color:${c.link};text-decoration:none;">调整推送时间 / 频率</a>
+    </td>
+  </tr>
+  <tr>
+    <td style="font-size:14px;">
+      <a href="${escapeHtml(input.unsubscribeUrl)}" style="color:${c.muted};text-decoration:none;">退订</a>
+    </td>
+  </tr>
+</table>
+<div style="margin-top:16px;font-size:12px;color:${c.muted};line-height:1.6;">如果这不是你本人操作，忽略本邮件即可。</div>`;
+  return renderEmailDocument({
+    title: '订阅管理',
+    preheader: '订阅管理链接',
+    subtitle: '邮箱订阅',
+    bodyHtml: body,
+  });
+}

@@ -142,6 +142,19 @@ vi.mock('../src/weather/service', () => ({
   getWeatherForRequest: weatherMock.getWeatherForRequest,
 }));
 
+// 面板天气在 handler 里统一取一次；测试固定返回晴天，避免额外的 DB 读取。
+const panelWeatherMock = vi.hoisted(() => ({
+  weatherForPanel: vi.fn(async () => ({
+    condition: 'sun' as const,
+    temperature: 26,
+    city: '北京',
+  })),
+}));
+
+vi.mock('../src/panel/weather', () => ({
+  weatherForPanel: panelWeatherMock.weatherForPanel,
+}));
+
 import handler from '../api/panel';
 import { signPanelToken } from '../src/panel/token';
 import { decideTextRoute } from '../src/wecom/route-decision';
@@ -308,6 +321,8 @@ describe('api/panel 视图', () => {
       expect(state.body).toContain('data-mood');
       // 机器人脚本必须每个视图都注入：没有它，两颗贴纸会叠在中心点上。
       expect(state.body).toContain('var orbs = [];');
+      // 天气在 handler 里统一取一次，子页沿用同一结果（不退化成云）。
+      expect(state.body).toContain('天气：北京');
     }
   });
 

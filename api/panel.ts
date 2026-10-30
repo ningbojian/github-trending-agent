@@ -44,8 +44,9 @@ import {
 import { POINTER_SCRIPT } from '../src/ui/pointer.js';
 import { APP_FOOTER, APP_TEXT } from '../src/ui/tokens.js';
 import { renderRobotMascot, ROBOT_ATTRIBUTION, ROBOT_SCRIPT, type RobotMood } from '../src/panel/robot.js';
+import { weatherForPanel } from '../src/panel/weather.js';
 import { AUTO_CITY, cityBySlug, WEATHER_CITIES } from '../src/weather/cities.js';
-import { getWeatherForRequest, type Weather } from '../src/weather/service.js';
+import type { Weather } from '../src/weather/service.js';
 import { bumpPanelVersion, getPanelVersion } from '../src/panel/version.js';
 import { signPanelToken, verifyPanelToken } from '../src/panel/token.js';
 
@@ -295,16 +296,15 @@ function subscriptionToggle(
 async function renderOverview(
   userid: string,
   token: string,
-  headers: PanelRequest['headers'],
+  weather: Weather | null,
   notice?: string,
   error?: string,
 ): Promise<string> {
   const sub = await readSubscriber(userid);
   const prefs = normalizePreferences(sub?.preferences ?? {});
   const active = sub?.active ?? false;
-  const citySlug = (sub?.preferences as { weatherCity?: unknown } | undefined)?.weatherCity;
-  // 五个查询互不依赖：并行跑，别让「天气慢」把一个 DB 往返叠成五个。
-  const [tracked, archives, memoryCount, week, weather] = await Promise.all([
+  // 四个查询互不依赖：并行跑，别把 DB 往返叠成四个。
+  const [tracked, archives, memoryCount, week] = await Promise.all([
     listTracked(userid),
     readArchives(1),
     readProfile(userid)
@@ -312,10 +312,6 @@ async function renderOverview(
       .catch(() => 0),
     readWeekStats(userid).catch((err: unknown) => {
       console.error('panel weekly stats failed:', err);
-      return null;
-    }),
-    getWeatherForRequest(headers, citySlug, new Date()).catch((err: unknown) => {
-      console.error('panel weather failed:', err);
       return null;
     }),
   ]);
@@ -990,6 +986,8 @@ export default async function handler(
 
   const userid = parsed.userid;
   const view = queryParam(req, 'view') || 'overview';
+  // 每次请求只取一次天气（服务层按城市缓存 3 小时），所有视图共用。
+  const weather = await weatherForPanel(userid, req.headers);
   const fields = method === 'POST' ? readBodyFields(req.body) : {};
   let notice: string | undefined;
   let error: string | undefined;
@@ -1048,27 +1046,26 @@ export default async function handler(
     error = outcome.error;
   }
 
-  // 子视图不再为了天气球额外打一次 Open-Meteo：机器人照常显示，天气球退化成云。
-  // 总览仍按用户城市取（那里本来就要读订阅行）。
+  // 所有视图共用同一个天气结果（服务层 3 小时缓存），不再退化成云。
   if (view === 'tracking') {
-    sendHtml(res, 200, await renderTracking(userid, token, null, notice, error));
+    sendHtml(res, 200, await renderTracking(userid, token, weather, notice, error));
     return;
   }
   if (view === 'history') {
-    sendHtml(res, 200, await renderHistory(userid, token, queryParam(req, 'date'), null));
+    sendHtml(res, 200, await renderHistory(userid, token, queryParam(req, 'date'), weather));
     return;
   }
   if (view === 'favorites') {
-    sendHtml(res, 200, await renderFavorites(userid, token, queryParam(req, 'q'), null, notice, error));
+    sendHtml(res, 200, await renderFavorites(userid, token, queryParam(req, 'q'), weather, notice, error));
     return;
   }
   if (view === 'memory') {
-    sendHtml(res, 200, await renderMemory(userid, token, null, notice, error));
+    sendHtml(res, 200, await renderMemory(userid, token, weather, notice, error));
     return;
   }
   if (view === 'settings') {
-    sendHtml(res, 200, await renderSettings(userid, token, null, notice, error));
+    sendHtml(res, 200, await renderSettings(userid, token, weather, notice, error));
     return;
   }
-  sendHtml(res, 200, await renderOverview(userid, token, req.headers, notice, error));
+  sendHtml(res, 200, await renderOverview(userid, token, weather, notice, error));
 }

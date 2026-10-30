@@ -57,6 +57,7 @@ import {
   describeUserLlm,
   loadUserLlm,
   maskKey,
+  normalizeBaseUrl,
   pingLlm,
   PRESETS,
   saveUserLlm,
@@ -121,6 +122,49 @@ describe('validateUserLlmInput', () => {
     const noKey = validateUserLlmInput({ ...CONFIG, apiKey: '' });
     expect(noModel.ok).toBe(false);
     expect(noKey.ok).toBe(false);
+  });
+
+  it('填了官网地址 → 自动改成对应 API 地址', () => {
+    const result = validateUserLlmInput({
+      ...CONFIG,
+      baseUrl: 'https://platform.deepseek.com',
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.baseUrl).toBe('https://api.deepseek.com/v1');
+    }
+  });
+});
+
+describe('normalizeBaseUrl', () => {
+  it('官网/控制台地址 → 对应 API 地址', () => {
+    expect(normalizeBaseUrl('https://platform.deepseek.com')).toBe(
+      'https://api.deepseek.com/v1',
+    );
+    expect(normalizeBaseUrl('https://www.deepseek.com/')).toBe(
+      'https://api.deepseek.com/v1',
+    );
+    expect(normalizeBaseUrl('https://opencode.ai/go')).toBe(
+      'https://opencode.ai/inference/go/openai/v1',
+    );
+  });
+
+  it('已经是 API 地址的不改', () => {
+    expect(normalizeBaseUrl('https://api.deepseek.com/v1/')).toBe(
+      'https://api.deepseek.com/v1',
+    );
+    expect(
+      normalizeBaseUrl('https://opencode.ai/inference/go/openai/v1'),
+    ).toBe('https://opencode.ai/inference/go/openai/v1');
+    expect(normalizeBaseUrl('https://api.moonshot.cn/v1')).toBe(
+      'https://api.moonshot.cn/v1',
+    );
+  });
+
+  it('误粘完整请求地址 → 去掉 /chat/completions', () => {
+    expect(
+      normalizeBaseUrl('https://api.deepseek.com/v1/chat/completions'),
+    ).toBe('https://api.deepseek.com/v1');
   });
 });
 
@@ -257,6 +301,25 @@ describe('pingLlm', () => {
     if (!result.ok) {
       expect(result.error).toContain('401');
       expect(result.error).not.toContain(CONFIG.apiKey);
+    }
+    vi.unstubAllGlobals();
+  });
+
+  it('404 且返回 HTML → 明确提示「填成了官网」并给出正确地址', async () => {
+    stubFetch(
+      async () =>
+        new Response('<!DOCTYPE html><html><body>Not Found</body></html>', {
+          status: 404,
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        }),
+    );
+
+    const result = await pingLlm(CONFIG);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('网页');
+      expect(result.error).toContain('https://api.deepseek.com/v1');
     }
     vi.unstubAllGlobals();
   });

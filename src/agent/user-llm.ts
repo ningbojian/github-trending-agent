@@ -76,7 +76,58 @@ export type LlmInputResult =
   | { ok: false; error: string };
 
 /**
- * 校验网页表单输入：去空白、去掉 Base URL 尾斜杠。
+ * 已知「官网 ≠ API」的域名映射。
+ *
+ * 用户最常见的错误是把控制台/产品页当 Base URL 填进来：请求打到网页上，
+ * 得到 404 加一整段 HTML，试连失败还看不出原因。这里把明显的官网地址
+ * 直接映射到同一家的 API 地址；路径已经在 API 前缀下的不重复改。
+ */
+const WEBSITE_TO_API: Array<{
+  hosts: string[];
+  /** 路径以此开头时认为已经是 API 地址，不再映射。 */
+  apiPathPrefix?: string;
+  api: string;
+}> = [
+  {
+    hosts: ['deepseek.com', 'www.deepseek.com', 'platform.deepseek.com', 'chat.deepseek.com'],
+    apiPathPrefix: '/v1',
+    api: 'https://api.deepseek.com/v1',
+  },
+  {
+    hosts: ['opencode.ai', 'www.opencode.ai'],
+    apiPathPrefix: '/inference/',
+    api: 'https://opencode.ai/inference/go/openai/v1',
+  },
+];
+
+/**
+ * 规范化用户填的 Base URL：
+ * - 去空白、去掉尾斜杠；
+ * - 已经是 API 地址的保持不变；
+ * - 明显的官网地址映射到对应 API 地址；
+ * - 误把完整 `/chat/completions` 粘进来的，去掉该后缀。
+ */
+export function normalizeBaseUrl(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, '');
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return trimmed;
+  }
+  const host = url.hostname.toLowerCase();
+  for (const rule of WEBSITE_TO_API) {
+    if (!rule.hosts.includes(host)) continue;
+    if (rule.apiPathPrefix && url.pathname.startsWith(rule.apiPathPrefix)) {
+      return trimmed;
+    }
+    return rule.api;
+  }
+  return trimmed.replace(/\/chat\/completions$/, '');
+}
+
+/**
+ * 校验网页表单输入：去空白、归一化 Base URL。
  * 只接受 https:// —— Key 会随请求发往该地址，明文走 http 等于公开。
  */
 export function validateUserLlmInput(input: {
@@ -84,7 +135,7 @@ export function validateUserLlmInput(input: {
   model?: string;
   apiKey?: string;
 }): LlmInputResult {
-  const baseUrl = (input.baseUrl ?? '').trim().replace(/\/+$/, '');
+  const baseUrl = normalizeBaseUrl(input.baseUrl ?? '');
   const model = (input.model ?? '').trim();
   const apiKey = (input.apiKey ?? '').trim();
   if (!baseUrl) {
@@ -145,6 +196,16 @@ export async function pingLlm(
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) {
+      // 返回 HTML 基本只有一种可能：填成了官网/控制台地址，而不是 API。
+      const contentType = res.headers.get('content-type') ?? '';
+      if (contentType.includes('text/html')) {
+        return {
+          ok: false,
+          error:
+            `接口返回 ${res.status}：这个地址返回的是网页，不是 API。` +
+            '请确认 Base URL：DeepSeek 用 https://api.deepseek.com/v1；OpenCode Go 用 https://opencode.ai/inference/go/openai/v1',
+        };
+      }
       const detail = await res.text().catch(() => '');
       return {
         ok: false,

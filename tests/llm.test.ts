@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import { DEFAULT_TIMEOUT_MS, generateObjectSafe, llm, llmFor } from '../src/agent/llm';
+import { DEFAULT_TIMEOUT_MS, generateObjectSafe, llm, llmFor, extraLlmHeaders } from '../src/agent/llm';
 
 /**
  * env 惰性单例策略（同 callback.test.ts）：用 vi.mock 固定 src/config，
@@ -275,6 +275,21 @@ describe('generateObjectSafe — 用户自备 Key（override）', () => {
     apiKey: 'sk-user-own-key-123456',
   };
 
+  it('OpenCode Go 地址 → 构造模型时带 x-opencode-session', async () => {
+    mocks.generateObject.mockResolvedValue({ object: { ok: true } });
+
+    await generateObjectSafe(schema, 'p', {
+      ...OVERRIDE,
+      baseUrl: 'https://opencode.ai/inference/go/openai/v1',
+    });
+
+    expect(mocks.createOpenAICompatible).toHaveBeenCalledWith(
+      expect.objectContaining({
+        headers: { 'x-opencode-session': expect.any(String) },
+      }),
+    );
+  });
+
   it('走 createOpenAICompatible + chatModel（与 opencode 同一个理由：最朴素的 chat/completions）', async () => {
     mocks.generateObject.mockResolvedValue({ object: { ok: true } });
 
@@ -284,6 +299,7 @@ describe('generateObjectSafe — 用户自备 Key（override）', () => {
       name: 'user',
       baseURL: OVERRIDE.baseUrl,
       apiKey: OVERRIDE.apiKey,
+      headers: {},
     });
     expect(mocks.generateObject).toHaveBeenCalledWith({
       model: { provider: 'opencode-chat', modelId: OVERRIDE.model },
@@ -342,6 +358,18 @@ describe('generateObjectSafe — 用户自备 Key（override）', () => {
     } finally {
       if (descriptor) Object.defineProperty(mocks.env, 'LLM_PROVIDER', descriptor);
     }
+  });
+});
+
+describe('extraLlmHeaders', () => {
+  it('opencode.ai → 带 x-opencode-session，否则网关 400 MissingSessionID', () => {
+    const headers = extraLlmHeaders('https://opencode.ai/inference/go/openai/v1');
+    expect(headers['x-opencode-session']).toBeTruthy();
+  });
+
+  it('其他厂商 → 不加额外头', () => {
+    expect(extraLlmHeaders('https://api.deepseek.com/v1')).toEqual({});
+    expect(extraLlmHeaders('not a url')).toEqual({});
   });
 });
 

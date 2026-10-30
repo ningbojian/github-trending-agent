@@ -119,6 +119,25 @@ export function llm(): LanguageModel {
   );
 }
 
+/**
+ * 个别网关要求的额外请求头。
+ *
+ * OpenCode Go 没有 `x-opencode-session` 会直接 400 MissingSessionID——
+ * 运营方分支早就加了，但用户自备 Key 的路径（试连 + 互动）漏了。
+ * 只对 opencode.ai 加，避免把未知头塞给别的厂商。
+ */
+export function extraLlmHeaders(baseUrl: string): Record<string, string> {
+  try {
+    const host = new URL(baseUrl).hostname.toLowerCase();
+    if (host === 'opencode.ai' || host.endsWith('.opencode.ai')) {
+      return { 'x-opencode-session': 'ghtrending-user' };
+    }
+  } catch {
+    // 非法 URL 交给校验层报错，这里不抛。
+  }
+  return {};
+}
+
 /** 用户自备 Key 的配置（与 agent/user-llm 的 UserLlmConfig 结构一致）。 */
 export interface LlmOverride {
   baseUrl: string;
@@ -150,6 +169,7 @@ export function llmFor(config: LlmOverride): LanguageModel {
     name: 'user',
     baseURL: config.baseUrl.trim(),
     apiKey: config.apiKey,
+    headers: extraLlmHeaders(config.baseUrl),
   }).chatModel(config.model);
 }
 

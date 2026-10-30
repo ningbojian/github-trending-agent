@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { decryptSecret, encryptSecret } from '../crypto/secret.js';
 import { db } from '../db/client.js';
 import { subscribers } from '../db/schema.js';
-import { redactKey } from './llm.js';
+import { redactKey, extraLlmHeaders } from './llm.js';
 
 /**
  * 用户自备的 LLM 配置（subscribers.llm_base_url / llm_model / llm_key_enc）。
@@ -187,6 +187,8 @@ export async function pingLlm(
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${config.apiKey}`,
+        // OpenCode Go 之类要求会话头，否则 400 MissingSessionID。
+        ...extraLlmHeaders(config.baseUrl),
       },
       body: JSON.stringify({
         model: config.model,

@@ -305,6 +305,29 @@ describe('pingLlm', () => {
     vi.unstubAllGlobals();
   });
 
+  it('OpenCode Go 地址 → 带 x-opencode-session 头（否则 400 MissingSessionID）', async () => {
+    const calls = stubFetch(async () => new Response('{}', { status: 200 }));
+
+    await pingLlm({
+      ...CONFIG,
+      baseUrl: 'https://opencode.ai/inference/go/openai/v1',
+    });
+
+    const headers = calls[0]?.init?.headers as Record<string, string>;
+    expect(headers['x-opencode-session']).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it('其他厂商不加会话头', async () => {
+    const calls = stubFetch(async () => new Response('{}', { status: 200 }));
+
+    await pingLlm(CONFIG);
+
+    const headers = calls[0]?.init?.headers as Record<string, string>;
+    expect(headers['x-opencode-session']).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
   it('404 且返回 HTML → 明确提示「填成了官网」并给出正确地址', async () => {
     stubFetch(
       async () =>

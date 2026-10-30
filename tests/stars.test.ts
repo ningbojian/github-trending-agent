@@ -155,6 +155,7 @@ import {
   routeMessage,
   type InboundMessage,
 } from '../src/wecom/router';
+import { allowAllQuota } from './helpers/quota';
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -258,6 +259,7 @@ function seedSearchCache(items: SearchResultItem[]): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  allowAllQuota();
   dbMock.selectQueue.length = 0;
   dbMock.selectCalls.length = 0;
   dbMock.orderByCalls.length = 0;

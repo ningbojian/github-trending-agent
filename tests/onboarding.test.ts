@@ -147,6 +147,7 @@ import {
   routeMessage,
   type InboundMessage,
 } from '../src/wecom/router';
+import { allowAllQuota } from './helpers/quota';
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -188,6 +189,7 @@ const unsubscribeHandler = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  allowAllQuota();
   dbMock.selectQueue.length = 0;
   dbMock.selectCalls.length = 0;
   dbMock.insertCalls.length = 0;

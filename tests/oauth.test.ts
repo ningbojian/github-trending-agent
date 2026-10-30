@@ -100,6 +100,7 @@ import {
   safeReturnPath,
 } from '../src/github/oauth';
 import { registerHandlers, routeMessage, type InboundMessage } from '../src/wecom/router';
+import { allowAllQuota } from './helpers/quota';
 
 // ---------------------------------------------------------------------------
 // fetch 桩：绝不触网。
@@ -289,6 +290,7 @@ const searchHandlerMock = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  allowAllQuota();
   dbState.kvSelectRows.length = 0;
   dbState.kvSelectCalls.length = 0;
   dbState.kvInsertCalls.length = 0;

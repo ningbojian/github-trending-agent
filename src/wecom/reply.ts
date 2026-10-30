@@ -1,5 +1,6 @@
 import { classifyByRules, type Intent } from '../agent/intent.js';
 import { recordIntentMiss, shouldLogMiss } from '../agent/intent-log.js';
+import { takeKeyHint } from '../agent/key-hint.js';
 import type { LlmChoice } from '../agent/llm.js';
 import { parseSearchQuery } from '../agent/parse-query.js';
 import { loadRepoSummaries } from '../agent/repo-summary.js';
@@ -8,6 +9,7 @@ import { loadUserLlm } from '../agent/user-llm.js';
 import { note, traceError } from '../obs/trace.js';
 import { tryAgentReply } from './agent-route.js';
 import { sendWeComText } from './api.js';
+import { buildSetKeyLink } from './llm-settings.js';
 import { ABOUT_REPLY, OFF_TOPIC_REPLY } from './onboarding.js';
 import { routeToTools } from './tool-route.js';
 import { formatEntryLine, MAX_TEXT_BYTES } from './text.js';
@@ -42,6 +44,32 @@ export const ERROR_REPLY = '抱歉，处理你的查询时出了点问题，请�
 
 function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8');
+}
+
+/** 「这类问题需要模型」的软提示前缀（测试据此断言，别在别处复用）。 */
+export const KEY_HINT_PREFIX = '💡 这类问题要模型才能答。';
+
+function keyHintLine(wecomUserid: string): string {
+  try {
+    return `${KEY_HINT_PREFIX}用自己的 AI Key：${buildSetKeyLink(wecomUserid)}（15 分钟有效，只能用一次）`;
+  } catch {
+    // 未配置加密密钥：不给链接，只教命令。
+    return `${KEY_HINT_PREFIX}发「设置模型」用自己的 AI Key 就能答。`;
+  }
+}
+
+/**
+ * 没配 Key 却问了需要模型的问题时，在检索结果后追一句提示。
+ * 不提示的情形：7 天冷却中、追加后会超过文本上限、存储异常。
+ */
+async function appendKeyHint(
+  wecomUserid: string,
+  reply: string,
+): Promise<string> {
+  const hint = keyHintLine(wecomUserid);
+  if (byteLength(reply) + byteLength(hint) + 2 > MAX_TEXT_BYTES) return reply;
+  if (!(await takeKeyHint(wecomUserid))) return reply;
+  return `${reply}\n\n${hint}`;
 }
 
 function buildReply(lines: string[], truncated: boolean): string {
@@ -166,6 +194,8 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     // 普通搜索必须留在这条零模型、读共享缓存的路径上——进了工具就要烧 token，
     // 而「今天有什么」的回答质量并不会因为模型多跑一轮而变好。
     const toolRoute = routeToTools(msg.content);
+    // 用户要的是模型能力（深挖 / 值不值得用），但没配 Key → 后面补一句提示。
+    const wantsModel = toolRoute.kind === 'tools';
     if (toolRoute.kind === 'tools') {
       const handled = await tryAgentReply(msg, {
         choice,
@@ -215,7 +245,12 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     logIntentMiss(ruled, 'search', items.length, msg.content);
     const summaries = await loadSummariesSafe(items, choice);
     note('summaries', `${summaries.size}/${items.length} 有中文简介`);
-    const reply = formatSearchReply(items, summaries);
+    let reply = formatSearchReply(items, summaries);
+    if (wantsModel && choice.kind === 'none') {
+      const withHint = await appendKeyHint(msg.fromUserName, reply);
+      if (withHint !== reply) note('key-hint', 'shown');
+      reply = withHint;
+    }
     await sendWeComText(msg.fromUserName, reply);
     note('send', `ok ${Buffer.byteLength(reply, 'utf8')} 字节`);
   } catch (err) {

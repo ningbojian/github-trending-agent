@@ -53,6 +53,12 @@ vi.mock('../src/agent/user-llm', () => ({
   loadUserLlm: userLlmMock.loadUserLlm,
 }));
 
+// 冷却存储单独测（tests/key-hint.test.ts）；这里只控制「这次能不能提示」。
+const keyHintMock = vi.hoisted(() => ({ takeKeyHint: vi.fn() }));
+vi.mock('../src/agent/key-hint', () => ({
+  takeKeyHint: keyHintMock.takeKeyHint,
+}));
+
 // 工具链路整体替换：本文件只验证「什么时候进、进了之后不再走检索」，
 // 工具内部行为由 tests/agent-route.test.ts 覆盖。
 vi.mock('../src/wecom/agent-route', () => ({
@@ -83,12 +89,14 @@ import {
   EMPTY_RESULT_REPLY,
   ERROR_REPLY,
   GUIDANCE_FOOTER,
+  KEY_HINT_PREFIX,
   MAX_TEXT_BYTES,
   formatSearchReply,
   handleSearch,
 } from '../src/wecom/reply';
 import { ABOUT_REPLY, OFF_TOPIC_REPLY } from '../src/wecom/onboarding';
 import { routeMessage } from '../src/wecom/router';
+import { allowAllQuota } from './helpers/quota';
 
 function makeItem(overrides: Partial<SearchResultItem> = {}): SearchResultItem {
   return {
@@ -147,6 +155,7 @@ const USER_LLM = {
 };
 
 beforeEach(() => {
+  allowAllQuota();
   apiMock.sendWeComText.mockReset();
   apiMock.sendWeComText.mockResolvedValue(undefined);
   llmMock.generateObjectSafe.mockReset();
@@ -160,6 +169,8 @@ beforeEach(() => {
   userLlmMock.loadUserLlm.mockResolvedValue(USER_LLM);
   agentRouteMock.tryAgentReply.mockReset();
   agentRouteMock.tryAgentReply.mockResolvedValue(false);
+  keyHintMock.takeKeyHint.mockReset();
+  keyHintMock.takeKeyHint.mockResolvedValue(true);
   dbMock.failExecute = false;
   dbMock.insertValues = [];
 });
@@ -717,5 +728,52 @@ describe('router 注册', () => {
       'alice',
       EMPTY_RESULT_REPLY,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 没配 Key 却要模型能力：追一句提示（7 天冷却，普通搜索不打扰）。
+// ---------------------------------------------------------------------------
+describe('handleSearch 无 Key 的模型提示', () => {
+  it('深挖类消息 + 没配 Key → 结果后追提示并登记冷却', async () => {
+    userLlmMock.loadUserLlm.mockResolvedValue(null);
+    searchMock.searchTrending.mockResolvedValue([makeItem()]);
+
+    await handleSearch(makeMsg({ content: '深挖 vercel/next.js 怎么样' }));
+
+    const text = String(apiMock.sendWeComText.mock.calls[0]?.[1]);
+    expect(text).toContain(KEY_HINT_PREFIX);
+    expect(keyHintMock.takeKeyHint).toHaveBeenCalledWith('alice');
+  });
+
+  it('普通搜索不打扰：不查冷却、不加提示', async () => {
+    userLlmMock.loadUserLlm.mockResolvedValue(null);
+    searchMock.searchTrending.mockResolvedValue([makeItem()]);
+
+    await handleSearch(makeMsg({ content: '本周 python 的 ai 项目' }));
+
+    expect(keyHintMock.takeKeyHint).not.toHaveBeenCalled();
+    const text = String(apiMock.sendWeComText.mock.calls[0]?.[1]);
+    expect(text).not.toContain(KEY_HINT_PREFIX);
+  });
+
+  it('冷却中 → 不追加提示', async () => {
+    keyHintMock.takeKeyHint.mockResolvedValue(false);
+    userLlmMock.loadUserLlm.mockResolvedValue(null);
+    searchMock.searchTrending.mockResolvedValue([makeItem()]);
+
+    await handleSearch(makeMsg({ content: '深挖 vercel/next.js 怎么样' }));
+
+    const text = String(apiMock.sendWeComText.mock.calls[0]?.[1]);
+    expect(text).not.toContain(KEY_HINT_PREFIX);
+  });
+
+  it('配了 Key → 走模型链路，不追加提示', async () => {
+    userLlmMock.loadUserLlm.mockResolvedValue(USER_LLM);
+    searchMock.searchTrending.mockResolvedValue([makeItem()]);
+
+    await handleSearch(makeMsg({ content: '深挖 vercel/next.js 怎么样' }));
+
+    expect(keyHintMock.takeKeyHint).not.toHaveBeenCalled();
   });
 });

@@ -7,6 +7,9 @@ import {
   type InboundMessage,
 } from '../src/wecom/router';
 import { SET_MODEL_USAGE_REPLY } from '../src/wecom/llm-settings';
+import { RATE_LIMIT_REPLY } from '../src/agent/rate-limit';
+import { registerQuotaChecker } from '../src/wecom/router';
+import { allowAllQuota } from './helpers/quota';
 
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: vi.fn(),
@@ -107,6 +110,7 @@ const cancelSubscriptionHandler = vi.fn();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  allowAllQuota();
   vi.mocked(sendWeComText).mockReset();
   vi.mocked(sendWeComText).mockResolvedValue(undefined);
   // 默认按老用户处理：事件静默、文本不触发送礼包流程。
@@ -161,6 +165,17 @@ describe('routeMessage 分发', () => {
     expect(helpHandler).toHaveBeenCalledTimes(1);
     expect(favoriteHandler).not.toHaveBeenCalled();
     expect(searchHandler).not.toHaveBeenCalled();
+  });
+
+  it('限流拦截 → 只回固定文案，不分发 handler', async () => {
+    registerQuotaChecker(async () => ({
+      allowed: false,
+      reason: 'minute',
+      retryAfterSeconds: 30,
+    }));
+    await routeMessage(makeMsg({ content: '帮助' }));
+    expect(helpHandler).not.toHaveBeenCalled();
+    expect(sendWeComText).toHaveBeenCalledWith('alice', RATE_LIMIT_REPLY);
   });
 
   it('content 为「收藏 1」→ favoriteHandler', async () => {

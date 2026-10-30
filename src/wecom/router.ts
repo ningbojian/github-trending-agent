@@ -53,6 +53,11 @@ import {
   handleUntrack,
 } from './tracking-commands.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
+import {
+  RATE_LIMIT_REPLY,
+  checkQuota,
+  type QuotaDecision,
+} from '../agent/rate-limit.js';
 
 export interface InboundMessage {
   toUserName: string;
@@ -262,6 +267,16 @@ async function handleEnterAgent(msg: InboundMessage): Promise<void> {
  *   「帮助我找 python」等长句仍走搜索。handler 异常由 dispatchSafely 捕获并
  *   单次回发兜底文案（routeMessage 实际不再 reject；回调端点的 catch 仅作第二道安全网）。
  */
+/** 限流检查器：默认读 kv_cache；测试注入内存实现。 */
+export type QuotaChecker = (userid: string) => Promise<QuotaDecision>;
+let quotaChecker: QuotaChecker = (userid) => checkQuota(userid);
+export function registerQuotaChecker(fn: QuotaChecker): void {
+  quotaChecker = fn;
+}
+export function resetQuotaChecker(): void {
+  quotaChecker = (userid) => checkQuota(userid);
+}
+
 export async function routeMessage(msg: InboundMessage): Promise<void> {
   // 整个分发过程一条 trace：下游任意位置 note() 都挂到这次调用上。
   // 放在这里而不是各个 handler 里，是为了让「哪条命令」与「后续几步」在同一条记录里。
@@ -290,6 +305,17 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
   }
   if (msg.msgType !== 'text') {
     return;
+  }
+
+  // 按用户限流：分钟桶先判、日预算后记（见 rate-limit.ts）。超限只回固定文案，
+  // 不分发 handler、不写 search_caches——「收藏 N」的序号因此不会被限流消息打乱。
+  const quota = await quotaChecker(msg.fromUserName);
+  if (!quota.allowed) {
+    note('rate-limit', `${quota.reason ?? 'unknown'}:${quota.retryAfterSeconds}s`);
+    return dispatchSafely(
+      (m) => sendWeComText(m.fromUserName, RATE_LIMIT_REPLY),
+      msg,
+    );
   }
 
   // Task 13：首条消息自动开通；ensureSubscriber 内部 fail-open（DB 错误返回 false）。

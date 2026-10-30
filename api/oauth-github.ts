@@ -7,6 +7,7 @@ import {
   encryptSecret,
   exchangeCode,
   OAUTH_STATE_PREFIX,
+  safeReturnPath,
 } from '../src/github/oauth.js';
 
 /**
@@ -44,14 +45,29 @@ function firstParam(
   return single == null || single === '' ? undefined : single;
 }
 
-/** 成功页（纯函数，供测试）。login 来自 GitHub，仍按不可信输入转义。 */
-export function renderOauthSuccess(login: string): string {
+/**
+ * 成功页（纯函数，供测试）。login 来自 GitHub，仍按不可信输入转义。
+ * returnPath 存在时（面板发起的绑定）给一个「返回面板」按钮，用户不必回微信。
+ */
+export function renderOauthSuccess(
+  login: string,
+  returnPath?: string | null,
+): string {
+  const back =
+    returnPath == null
+      ? ''
+      : `<div class="p-actions"><a class="p-btn" href="${escapeHtml(returnPath)}">返回面板</a></div>`;
   return renderMessagePage({
     title: 'GitHub 绑定成功',
     tone: 'ok',
     message: '已绑定 GitHub 账号。',
     extraHtml: `<div class="p-kv"><div><dt>账号</dt><dd>${escapeHtml(login)}</dd></div></div>
-      <p class="p-hint">现在回到企业微信，发送「我的收藏」即可测试。</p>`,
+      ${back}
+      <p class="p-hint">${
+        returnPath == null
+          ? '现在回到企业微信，发送「我的收藏」即可测试。'
+          : '现在可以在面板里直接收藏，也会同步到你的 GitHub star。'
+      }</p>`,
   });
 }
 
@@ -111,6 +127,10 @@ export default async function handler(
     errorPage(res, 400, '授权状态数据异常，请回到企业微信重新发送「绑定」。');
     return;
   }
+  // 面板发起的绑定会带上站内返回路径；只接受同站绝对路径。
+  const mappedReturn = safeReturnPath(
+    (stateRow.value as { returnPath?: unknown }).returnPath,
+  );
 
   // 一次性消费：立即删除 state 行，重放同一 state 时查不到行 → 错误页。
   await db().delete(kvCache).where(eq(kvCache.key, stateKey));
@@ -139,5 +159,5 @@ export default async function handler(
     return;
   }
 
-  sendRendered(res, 200, renderOauthSuccess(exchanged.login));
+  sendRendered(res, 200, renderOauthSuccess(exchanged.login, mappedReturn));
 }

@@ -21,7 +21,13 @@ const prefsMock = vi.hoisted(() => ({
   mergePreferences: vi.fn(async () => undefined),
 }));
 const starsMock = vi.hoisted(() => ({
-  loadBindingAuth: vi.fn(async () => ({ kind: 'ok' as const, token: 'gho_test', login: 'alice-gh' })),
+  loadBindingAuth: vi.fn(
+    async (): Promise<
+      | { kind: 'ok'; token: string; login: string }
+      | { kind: 'unbound' }
+      | { kind: 'expired' }
+    > => ({ kind: 'ok' as const, token: 'gho_test', login: 'alice-gh' }),
+  ),
   favoriteRepo: vi.fn(async () => 'synced' as const),
   unfavoriteRepo: vi.fn(async () => 'removed' as const),
 }));
@@ -289,6 +295,20 @@ describe('api/panel 视图', () => {
       { active: false },
     );
     expect(state.body).toContain('先安静几天');
+  });
+
+  it('未绑定 GitHub 时，收藏页直接给授权按钮（不用回微信）', async () => {
+    starsMock.loadBindingAuth.mockResolvedValueOnce({ kind: 'unbound' });
+    dbMock.selectQueue.push([]); // renderFavorites 的收藏列表
+    const { state, res } = response();
+    await handler(
+      { method: 'GET', query: { t: token(), view: 'favorites' } },
+      res,
+    );
+    expect(state.status).toBe(200);
+    expect(state.body).toContain('绑定 GitHub');
+    expect(state.body).toContain('github.com/login/oauth/authorize');
+    expect(state.body).toContain('绑定后可以在面板里直接收藏');
   });
 
   it('收藏动作 → 校验 owner/repo 后调用 favoriteRepo', async () => {

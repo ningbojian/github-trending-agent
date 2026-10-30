@@ -26,6 +26,7 @@ import {
   loadBindingAuth,
   unfavoriteRepo,
 } from '../src/github/stars.js';
+import { buildAuthorizeUrl } from '../src/github/oauth.js';
 import { readBodyFields } from '../src/http/body.js';
 import {
   escapeHtml,
@@ -79,6 +80,11 @@ function href(token: string, params: Record<string, string> = {}): string {
   if (token !== '') qs.set('t', token);
   for (const [key, value] of Object.entries(params)) qs.set(key, value);
   return `?${qs.toString()}`;
+}
+
+/** 带路径的站内链接：GitHub 授权回调要用绝对路径才能跳回面板。 */
+function panelPath(token: string, params: Record<string, string> = {}): string {
+  return `/api/panel${href(token, params)}`;
 }
 
 function shiftDate(date: string, days: number): string {
@@ -466,8 +472,44 @@ async function renderHistory(
 /** 收藏写失败时的统一中文文案（与聊天命令同一套语义）。 */
 function favoriteError(kind: 'unbound' | 'expired'): string {
   return kind === 'unbound'
-    ? '先发「绑定」授权 GitHub，才能收藏并同步 star'
-    : '授权已过期，请重新发「绑定」';
+    ? '还没绑定 GitHub。点上面的「绑定 GitHub」授权一次即可。'
+    : 'GitHub 授权已过期，点上面的「重新绑定」即可。';
+}
+
+/**
+ * GitHub 绑定卡：面板里直接发起授权，不再要求用户回微信发「绑定」。
+ * 只在未绑定/失效时生成一次性链接（写一条 10 分钟的 state）；已绑定只显示账号。
+ */
+async function githubBindingCard(userid: string, token: string): Promise<string> {
+  const auth = await loadBindingAuth(userid);
+  if (auth.kind === 'ok') {
+    return card(
+      'GitHub 账号',
+      `<div class="p-row-sub">已绑定 ${escapeHtml(auth.login ?? '（已授权）')}</div>`,
+    );
+  }
+  const label = auth.kind === 'unbound' ? '绑定 GitHub' : '重新绑定';
+  const hint =
+    auth.kind === 'unbound'
+      ? '绑定后可以在面板里直接收藏，并同步到你的 GitHub star。'
+      : 'GitHub 授权已过期，重新绑定即可恢复收藏。';
+  try {
+    const url = await buildAuthorizeUrl(userid, {
+      returnPath: panelPath(token, { view: 'favorites' }),
+    });
+    return card(
+      'GitHub 账号',
+      `<div class="p-row-sub p-mb">${hint}</div>
+       <a class="p-btn" href="${escapeHtml(url)}">${label}</a>`,
+    );
+  } catch (err) {
+    // 授权链接生成失败（缺 GITHUB_CLIENT_ID、DB 异常）不该让整页 500。
+    console.error('panel bind url failed:', err);
+    return card(
+      'GitHub 账号',
+      `<div class="p-row-sub">${hint}暂时无法生成授权链接，请回微信发「绑定」。</div>`,
+    );
+  }
 }
 
 async function applyFavoriteAction(
@@ -586,6 +628,7 @@ async function renderFavorites(
     token,
     'favorites',
     `${banner(notice, error)}
+     ${await githubBindingCard(userid, token)}
      ${card('我的收藏', favList)}
      ${card(
        '搜一个仓库',
@@ -707,6 +750,7 @@ async function renderSettings(
     'settings',
     `${banner(notice, error)}
      ${card('状态', status)}
+     ${await githubBindingCard(userid, token)}
      <form method="post" action="${href(token, { view: 'settings' })}">
       ${card(
         '推送',

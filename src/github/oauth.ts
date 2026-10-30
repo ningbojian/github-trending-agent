@@ -29,19 +29,39 @@ export const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 // 授权链接
 // ---------------------------------------------------------------------------
 
+export interface AuthorizeOptions {
+  /** 授权完成后要回到的站内路径（如面板收藏页）。只接受同站绝对路径。 */
+  returnPath?: string;
+}
+
+/**
+ * 只允许站内绝对路径：挡掉 `//evil.com`、协议头与换行。
+ * state 存在服务端，但不能假设写入方永远可信——回调时仍按不可信输入校验。
+ */
+export function safeReturnPath(value: unknown): string | null {
+  if (typeof value !== 'string' || value === '') return null;
+  if (!value.startsWith('/') || value.startsWith('//')) return null;
+  if (/[\r\n\\]/.test(value)) return null;
+  return value;
+}
+
 /**
  * 拼 GitHub OAuth 授权链接。
  * state 不再直接携带企业微信 userid（可被伪造/重放）：改为 16 字节随机
- * nonce（32 位 hex），nonce → { wecomUserid } 映射写入 kv_cache（10 分钟过期、
- * 回调一次性消费），回调时凭 nonce 定位订阅者。
+ * nonce（32 位 hex），nonce → { wecomUserid, returnPath? } 映射写入 kv_cache
+ * （10 分钟过期、回调一次性消费），回调时凭 nonce 定位订阅者。
  */
-export async function buildAuthorizeUrl(wecomUserid: string): Promise<string> {
+export async function buildAuthorizeUrl(
+  wecomUserid: string,
+  options: AuthorizeOptions = {},
+): Promise<string> {
   const nonce = randomBytes(16).toString('hex');
+  const returnPath = safeReturnPath(options.returnPath);
   await db()
     .insert(kvCache)
     .values({
       key: `${OAUTH_STATE_PREFIX}${nonce}`,
-      value: { wecomUserid },
+      value: returnPath === null ? { wecomUserid } : { wecomUserid, returnPath },
       expiresAt: new Date(Date.now() + OAUTH_STATE_TTL_MS),
     });
   const params = new URLSearchParams({

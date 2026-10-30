@@ -97,6 +97,7 @@ import {
   decryptSecret,
   encryptSecret,
   exchangeCode,
+  safeReturnPath,
 } from '../src/github/oauth';
 import { registerHandlers, routeMessage, type InboundMessage } from '../src/wecom/router';
 
@@ -561,6 +562,34 @@ describe('OAuth 回执页', () => {
     const html = renderOauthSuccess('<script>alert(1)</script>');
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('面板发起的绑定给「返回面板」按钮，且只接受站内路径', () => {
+    const html = renderOauthSuccess('alice-gh', '/api/panel?t=abc&view=favorites');
+    expect(html).toContain('返回面板');
+    expect(html).toContain('href="/api/panel?t=abc&amp;view=favorites"');
+    expect(html).toContain('面板里直接收藏');
+    // 没有 returnPath 时保持原来的「回微信」文案。
+    expect(renderOauthSuccess('alice-gh')).toContain('回到企业微信');
+  });
+
+  it('buildAuthorizeUrl 把 returnPath 存进 state，外部地址被丢弃', async () => {
+    dbState.kvInsertCalls.length = 0;
+    await buildAuthorizeUrl('alice', { returnPath: '/api/panel?t=x&view=favorites' });
+    await buildAuthorizeUrl('alice', { returnPath: '//evil.example.com' });
+    expect(dbState.kvInsertCalls[0]!.value).toMatchObject({
+      wecomUserid: 'alice',
+      returnPath: '/api/panel?t=x&view=favorites',
+    });
+    expect(dbState.kvInsertCalls[1]!.value).toEqual({ wecomUserid: 'alice' });
+  });
+
+  it('safeReturnPath 只放行同站绝对路径', () => {
+    expect(safeReturnPath('/api/panel?t=1')).toBe('/api/panel?t=1');
+    expect(safeReturnPath('//evil.example.com')).toBeNull();
+    expect(safeReturnPath('https://evil.example.com')).toBeNull();
+    expect(safeReturnPath('/a\r\nb')).toBeNull();
+    expect(safeReturnPath(undefined)).toBeNull();
   });
 
   it('失败页同样带品牌头与错误提示', () => {

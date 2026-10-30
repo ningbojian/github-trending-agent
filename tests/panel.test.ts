@@ -30,6 +30,7 @@ const starsMock = vi.hoisted(() => ({
   ),
   favoriteRepo: vi.fn(async () => 'synced' as const),
   unfavoriteRepo: vi.fn(async () => 'removed' as const),
+  clearGithubBinding: vi.fn(async () => undefined),
 }));
 const profileMock = vi.hoisted(() => ({
   readProfile: vi.fn(async () => ({
@@ -123,6 +124,15 @@ vi.mock('../src/github/stars', () => ({
   loadBindingAuth: starsMock.loadBindingAuth,
   favoriteRepo: starsMock.favoriteRepo,
   unfavoriteRepo: starsMock.unfavoriteRepo,
+  clearGithubBinding: starsMock.clearGithubBinding,
+}));
+
+// 删除 AI Key：只关心是否调用了清空逻辑。
+const userLlmMock = vi.hoisted(() => ({
+  clearUserLlm: vi.fn(async () => undefined),
+}));
+vi.mock('../src/agent/user-llm', () => ({
+  clearUserLlm: userLlmMock.clearUserLlm,
 }));
 
 vi.mock('../src/agent/profile', () => ({
@@ -316,6 +326,46 @@ describe('api/panel 视图', () => {
       { active: false },
     );
     expect(state.body).toContain('先安静几天');
+  });
+
+  it('设置页显示 AI Key 状态并可删除', async () => {
+    dbMock.selectQueue.push([
+      { preferences: {}, active: true, llmModel: 'deepseek-chat' },
+    ]);
+    const { state, res } = response();
+    await handler({ method: 'GET', query: { t: token(), view: 'settings' } }, res);
+    expect(state.body).toContain('已配置：deepseek-chat');
+    expect(state.body).toContain('删除我的 AI Key');
+  });
+
+  it('删除 AI Key → 调用 clearUserLlm', async () => {
+    dbMock.selectQueue.push([{ preferences: {}, active: true }]);
+    const { state, res } = response();
+    await handler(
+      {
+        method: 'POST',
+        query: { t: token(), view: 'settings' },
+        body: { action: 'clear-llm' },
+      },
+      res,
+    );
+    expect(userLlmMock.clearUserLlm).toHaveBeenCalledWith('alice');
+    expect(state.body).toContain('已删除你的 AI Key');
+  });
+
+  it('解除 GitHub 绑定 → 调用 clearGithubBinding', async () => {
+    dbMock.selectQueue.push([{ preferences: {}, active: true }]);
+    const { state, res } = response();
+    await handler(
+      {
+        method: 'POST',
+        query: { t: token(), view: 'settings' },
+        body: { action: 'unbind-github' },
+      },
+      res,
+    );
+    expect(starsMock.clearGithubBinding).toHaveBeenCalledWith('alice');
+    expect(state.body).toContain('已解除 GitHub 绑定');
   });
 
   it('每个视图都有机器人（跟踪/历史/收藏/记忆/设置）', async () => {

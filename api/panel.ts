@@ -25,8 +25,10 @@ import {
   favoriteRepo,
   loadBindingAuth,
   unfavoriteRepo,
+  clearGithubBinding,
   type BindingAuth,
 } from '../src/github/stars.js';
+import { clearUserLlm } from '../src/agent/user-llm.js';
 import { buildAuthorizeUrl } from '../src/github/oauth.js';
 import { readBodyFields } from '../src/http/body.js';
 import {
@@ -538,7 +540,11 @@ async function githubBindingCard(
   if (auth.kind === 'ok') {
     return card(
       'GitHub 账号',
-      `<div class="p-row-sub">已绑定 ${escapeHtml(auth.login ?? '（已授权）')}</div>`,
+      `<div class="p-row-sub p-mb">已绑定 ${escapeHtml(auth.login ?? '（已授权）')}</div>
+       <form method="post" action="${href(token, { view: 'settings' })}">
+         <input type="hidden" name="action" value="unbind-github">
+         <button class="p-btn danger" type="submit">解除绑定</button>
+       </form>`,
     );
   }
   const label = auth.kind === 'unbound' ? '绑定 GitHub' : '重新绑定';
@@ -799,6 +805,7 @@ async function renderSettings(
     readSubscriber(userid),
     loadBindingAuth(userid),
   ]);
+  const llmModel = (sub as { llmModel?: string | null } | undefined)?.llmModel ?? null;
   const prefs = normalizePreferences(sub?.preferences ?? {});
   const languages = Array.isArray((sub?.preferences as { languages?: unknown })?.languages)
     ? (sub?.preferences as { languages: string[] }).languages.join(', ')
@@ -882,9 +889,18 @@ async function renderSettings(
       <button class="p-btn block" type="submit">保存设置</button>
      </form>
      ${card(
-       '模型',
-       `<div class="p-row-sub p-mb">互动里的中文简介可以用你自己的 AI Key，不占用运营方额度。</div>
-        <a class="p-btn ghost" href="${escapeHtml(modelEntryLink(userid))}">配置我的 AI Key</a>`,
+       'AI Key',
+       llmModel
+         ? `<div class="p-row-sub p-mb">已配置：${escapeHtml(llmModel)}。互动使用你自己的额度；Key 加密存储，可随时删除。</div>
+            <div class="p-actions">
+              <a class="p-btn ghost" href="${escapeHtml(modelEntryLink(userid))}">更换</a>
+              <form method="post" action="${href(token, { view: 'settings' })}">
+                <input type="hidden" name="action" value="clear-llm">
+                <button class="p-btn danger" type="submit">删除我的 AI Key</button>
+              </form>
+            </div>`
+         : `<div class="p-row-sub p-mb">互动里的中文简介可以用你自己的 AI Key，不占用运营方额度。</div>
+            <a class="p-btn ghost" href="${escapeHtml(modelEntryLink(userid))}">配置我的 AI Key</a>`,
      )}
      ${card(
        '面板链接',
@@ -915,6 +931,16 @@ async function applyAction(
   view: string,
   fields: Record<string, string>,
 ): Promise<ActionOutcome> {
+  // 账号/凭据的生命周期动作：任何视图都能触发，优先级最高。
+  if (fields.action === 'clear-llm') {
+    await clearUserLlm(userid);
+    return { notice: '已删除你的 AI Key，互动回到规则模式。' };
+  }
+  if (fields.action === 'unbind-github') {
+    await clearGithubBinding(userid);
+    return { notice: '已解除 GitHub 绑定。收藏仍保留在本地。' };
+  }
+
   if (view === 'tracking') {
     if (fields.action === 'track') {
       const result = await addTrackedRepo(userid, fields.repo ?? '');

@@ -287,8 +287,7 @@ async function loadBinding(wecomUserid: string): Promise<GithubBinding> {
   };
 }
 
-/** 读订阅者的加密 token；无订阅者行或未绑定时返回 null。 */
-async function loadTokenEnc(wecomUserid: string): Promise<string | null> {
+/** 读订阅者的加密 token；无订阅者行或未绑定时返回 null。 */async function loadTokenEnc(wecomUserid: string): Promise<string | null> {
   return (await loadBinding(wecomUserid)).tokenEnc;
 }
 
@@ -297,6 +296,19 @@ export type BindingAuth =
   | { kind: 'unbound' }
   | { kind: 'expired' }
   | { kind: 'ok'; token: string; login: string | null };
+
+/**
+ * 解除 GitHub 绑定：清空密文与登录名。
+ *
+ * 收藏行**不删**——那是用户在本产品里的收藏记录，只是之后无法再同步 star；
+ * 面板会显示「仅本地收藏」。
+ */
+export async function clearGithubBinding(wecomUserid: string): Promise<void> {
+  await db()
+    .update(subscribers)
+    .set({ githubTokenEnc: null, githubLogin: null })
+    .where(eq(subscribers.wecomUserid, wecomUserid));
+}
 
 /**
  * 读并解密 token；解密失败按"授权过期"处理（密钥轮换 / 密文被篡改）。

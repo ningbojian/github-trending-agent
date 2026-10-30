@@ -143,7 +143,14 @@ function formPage(options: {
   return renderAppPage({
     title: '设置模型',
     body: `${error}
-    <p class="p-lead">填写任意 OpenAI 兼容接口。Key 只用于你自己的互动请求，加密后存库，不会出现在聊天记录里。</p>
+    <p class="p-lead">填写任意 OpenAI 兼容接口。Key 只用于你自己的互动请求，不会出现在聊天记录里。</p>
+    <div class="p-note">
+      <div><b>你的 Key 会怎么处理</b></div>
+      <div class="p-row-sub">· 只通过 HTTPS 提交一次，服务端用 AES-256-GCM 加密后存库</div>
+      <div class="p-row-sub">· 每次互动时才在内存里解密，请求直连你填写的接口</div>
+      <div class="p-row-sub">· 明文不会进入微信聊天、日志或缓存；日志里的 Key 会自动打码</div>
+      <div class="p-row-sub">· 运营方持有部署密钥，技术上可以解密。介意的话请用可随时吊销的专用 Key，并可在面板「AI Key」卡片里删除</div>
+    </div>
     <div class="p-chips">${presets}</div>
     <form method="post" action="${escapeHtml(action)}" class="p-mt">
       <label class="p-field">

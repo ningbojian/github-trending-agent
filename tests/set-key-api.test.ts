@@ -155,6 +155,15 @@ describe('GET /api/set-key', () => {
     expect(out.body).toContain(encodeURIComponent(TOKEN));
   });
 
+  it('表单页说明 Key 的处理流程、加密方式与可删除', async () => {
+    const out = await call({ method: 'GET', query: { t: TOKEN } });
+    expect(out.body).toContain('AES-256-GCM');
+    expect(out.body).toContain('不会进入微信聊天、日志或缓存');
+    // 不夸大安全性：明确说明运营方持有部署密钥、可自行删除。
+    expect(out.body).toContain('运营方持有部署密钥');
+    expect(out.body).toContain('删除');
+  });
+
   it('?p=deepseek 预设 → Base URL 与模型名已预填', async () => {
     const out = await call({ method: 'GET', query: { t: TOKEN, p: 'deepseek' } });
     expect(out.status).toBe(200);

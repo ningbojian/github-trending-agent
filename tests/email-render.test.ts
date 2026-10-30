@@ -43,7 +43,16 @@ describe('renderDigestEmail — HTML', () => {
     expect(html).toContain(BRAND.name);
     expect(html).toContain('2026-10-25');
     expect(html).toContain('北京时间 09:00');
-    expect(html).toContain(`background:${BRAND.colors.header}`);
+    expect(html).toContain('background:#141922');
+  });
+
+  it('uses the dark skin with an explicit color-scheme declaration', () => {
+    const { html } = renderDigestEmail(BASE);
+    // 深色底 + 实色卡片；声明 dark 让客户端别自作主张反色。
+    expect(html).toContain('name="color-scheme" content="dark light"');
+    expect(html).toContain('bgcolor="#141922"');
+    expect(html).toContain('background:#1B222C');
+    expect(html).toContain(`color:${BRAND.dark.accent}`);
   });
 
   it('is mobile-first: viewport meta and table layout', () => {

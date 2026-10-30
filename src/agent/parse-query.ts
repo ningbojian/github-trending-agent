@@ -42,12 +42,52 @@ function cleanKeyword(raw: string): string {
 }
 
 /**
- * LLM 输出不可信，统一归一化：语言小写去空白、关键词去标点、
+ * 中文领域词 → GitHub 上常见的英文关键词。
+ *
+ * 用户说的是「图像识别」「嵌入式开发」，仓库描述里写的却是 vision / embedded；
+ * 关键词之间是 AND，原样保留中文只会在 ILIKE 上 0 命中，最后退化成「又发一遍总榜」。
+ * 命中即替换（不是追加），避免中英双关键词互相把结果卡死。
+ */
+const DOMAIN_TERMS: Array<{ re: RegExp; keyword: string }> = [
+  { re: /图像识别|计算机视觉|图像处理|视觉识别|ocr/i, keyword: 'vision' },
+  { re: /嵌入式|单片机|物联网|firmware/i, keyword: 'embedded' },
+  { re: /大模型|语言模型|llm/i, keyword: 'llm' },
+  { re: /智能体|agent/i, keyword: 'agent' },
+  { re: /爬虫|抓取|scraper/i, keyword: 'crawler' },
+  { re: /数据可视化|可视化|图表/i, keyword: 'visualization' },
+  { re: /数据分析|数据处理/i, keyword: 'data' },
+  { re: /数据库|存储引擎/i, keyword: 'database' },
+  { re: /编译器|解释器/i, keyword: 'compiler' },
+  { re: /操作系统|内核/i, keyword: 'kernel' },
+  { re: /网络安全|信息安全|加密/i, keyword: 'security' },
+  { re: /语音|音频|音视频/i, keyword: 'audio' },
+  { re: /推荐系统|推荐算法/i, keyword: 'recommendation' },
+  { re: /知识库|检索增强|rag/i, keyword: 'rag' },
+  { re: /机器人|自动驾驶|robotics/i, keyword: 'robotics' },
+  { re: /量化/i, keyword: 'quant' },
+  { re: /游戏/i, keyword: 'game' },
+  { re: /前端/i, keyword: 'frontend' },
+  { re: /后端/i, keyword: 'backend' },
+  { re: /命令行|终端|cli/i, keyword: 'cli' },
+];
+
+/** 把中文领域词换成英文关键词；没命中的原样返回。 */
+export function translateDomainKeyword(keyword: string): string {
+  const hit = DOMAIN_TERMS.find((term) => term.re.test(keyword));
+  return hit ? hit.keyword : keyword;
+}
+
+/**
+ * LLM 输出不可信，统一归一化：语言小写去空白、关键词去标点并翻译领域词、
  * topN 钳位到 1..25、minStars ≥ 0。
  */
 function normalizeQuery(query: SearchQuery): SearchQuery {
   const languages = query.languages.map((l) => l.trim().toLowerCase()).filter(Boolean);
-  const keywords = query.keywords.map(cleanKeyword).filter(Boolean);
+  const keywords = query.keywords
+    .map(cleanKeyword)
+    .filter(Boolean)
+    .map(translateDomainKeyword)
+    .filter((keyword, index, all) => all.indexOf(keyword) === index);
   const minStars =
     query.minStars === null || !Number.isFinite(query.minStars)
       ? null
@@ -73,6 +113,8 @@ function buildPrompt(text: string): string {
     '其余一律 search —— 「看看热榜」「今天有什么」都属于 search，绝不判成 off_topic。',
     '铁律：只允许从给定文本推断，禁止编造文本中没有的信息；无信号的字段一律用默认值。',
     '「比较火」「热门」「流行」只表示热度排序（sortBy），不得作为 keywords。',
+    '关键词用 GitHub 上常见的英文词，不要原样保留中文领域词：',
+    '图像识别→vision、嵌入式开发→embedded、大模型→llm、爬虫→crawler、推荐系统→recommendation。',
     '',
     '示例 1',
     '输入：本周 python 里 ai 相关的',
@@ -292,7 +334,9 @@ export function fallbackParse(text: string): SearchQuery {
     if (!cleaned) continue; // 清洗后为空的纯标点 token 丢弃
     if (/^\d+$/.test(cleaned)) continue; // 纯数字是 star 数/条数，不是关键词
     if (cleaned.length < 2) continue; // 单字噪声（的、里、前…）不入关键词
-    if (!keywords.includes(cleaned)) keywords.push(cleaned);
+    // 领域词换成英文关键词（图像识别→vision）；没命中的保持原样。
+    const keyword = translateDomainKeyword(cleaned);
+    if (!keywords.includes(keyword)) keywords.push(keyword);
   }
 
   return {

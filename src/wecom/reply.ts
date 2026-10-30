@@ -1,6 +1,7 @@
 import { classifyByRules, type Intent } from '../agent/intent.js';
 import { recordIntentMiss, shouldLogMiss } from '../agent/intent-log.js';
 import { takeKeyHint } from '../agent/key-hint.js';
+import { readLastRepo, rememberRepo } from '../agent/last-repo.js';
 import type { LlmChoice } from '../agent/llm.js';
 import { parseSearchQuery } from '../agent/parse-query.js';
 import { loadRepoSummaries } from '../agent/repo-summary.js';
@@ -11,7 +12,7 @@ import { tryAgentReply } from './agent-route.js';
 import { sendWeComText } from './api.js';
 import { buildSetKeyLink } from './llm-settings.js';
 import { ABOUT_REPLY, OFF_TOPIC_REPLY } from './onboarding.js';
-import { routeToTools } from './tool-route.js';
+import { routeToTools, findRepoRef } from './tool-route.js';
 import { formatEntryLine, MAX_TEXT_BYTES } from './text.js';
 import type { InboundMessage } from './router.js';
 
@@ -193,9 +194,22 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     // 规则前置：只有「点名仓库 / 深挖 / 靠不靠谱 / 改订阅」这类消息才进工具链路。
     // 普通搜索必须留在这条零模型、读共享缓存的路径上——进了工具就要烧 token，
     // 而「今天有什么」的回答质量并不会因为模型多跑一轮而变好。
-    const toolRoute = routeToTools(msg.content);
+    // 短期记忆：上一条提到的仓库，给「这个项目靠不靠谱」这类追问补位。
+    const lastRepo = await readLastRepo(msg.fromUserName);
+    const toolRoute = routeToTools(msg.content, { lastRepo });
+    // 任何消息里点名了仓库都记 30 分钟——下一句不带仓库名也接得上。
+    const mentioned = findRepoRef(msg.content);
+    if (mentioned !== null) void rememberRepo(msg.fromUserName, mentioned);
     // 用户要的是模型能力（深挖 / 值不值得用），但没配 Key → 后面补一句提示。
     const wantsModel = toolRoute.kind === 'tools';
+    if (toolRoute.kind === 'search' && /^深挖/.test(msg.content.trim())) {
+      // 说了「深挖」却没给出仓库：别默默回一份榜单，直接告诉他缺什么。
+      await sendWeComText(
+        msg.fromUserName,
+        '想深挖哪个仓库？发「深挖 owner/repo」，或者先说一次仓库名——我记住 30 分钟，之后说「这个项目」就行。',
+      );
+      return;
+    }
     if (toolRoute.kind === 'tools') {
       const handled = await tryAgentReply(msg, {
         choice,
@@ -228,11 +242,13 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     }
 
     let items = await searchTrending(query, msg.fromUserName);
+    let retriedKeywords = false;
     if (items.length === 0 && query.keywords.length > 0) {
       items = await searchTrending(
         { ...query, keywords: [] },
         msg.fromUserName,
       );
+      retriedKeywords = true;
       note('search-retry', '去掉关键词再查一次');
     }
     note('search', `${items.length} 条`);
@@ -246,6 +262,10 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     const summaries = await loadSummariesSafe(items, choice);
     note('summaries', `${summaries.size}/${items.length} 有中文简介`);
     let reply = formatSearchReply(items, summaries);
+    if (retriedKeywords) {
+      // 没有匹配项时退回总榜，但必须说清楚——否则用户会以为「又把日报发了一遍」。
+      reply = `没找到「${query.keywords.join('、')}」相关的项目，先看本周总榜：\n\n${reply}`;
+    }
     if (wantsModel && choice.kind === 'none') {
       const withHint = await appendKeyHint(msg.fromUserName, reply);
       if (withHint !== reply) note('key-hint', 'shown');

@@ -125,7 +125,13 @@ const TRAILING_PUNCT_RE = /[。！？!?；;，,．.…]+$/;
  * 分发给 handler 时用的就是这份文本——handler 还会用自己的正则再校验一次。
  */
 export function normalizeCommandText(content: string): string {
-  return content.trim().replace(TRAILING_PUNCT_RE, '').trim();
+  return content
+    // 多余空白（含全角空格）收敛成一个：用户手滑多打一个空格，
+    // 「深挖  vercel/next.js」不该掉进搜索路径。
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(TRAILING_PUNCT_RE, '')
+    .trim();
 }
 
 /**

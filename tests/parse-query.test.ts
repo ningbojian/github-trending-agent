@@ -268,6 +268,18 @@ describe('parseSearchQuery — regex fallback when LLM returns null', () => {
   });
 });
 
+describe('领域词翻译', () => {
+  it('中文领域词换成 GitHub 上的英文关键词', () => {
+    expect(fallbackParse('本周有没有图像识别相关的项目').keywords).toContain('vision');
+    expect(fallbackParse('嵌入式开发的项目').keywords).toContain('embedded');
+    expect(fallbackParse('大模型相关的项目').keywords).toContain('llm');
+  });
+
+  it('不是领域词的中文关键词保持原样', () => {
+    expect(fallbackParse('量子计算的项目').keywords).toContain('量子计算');
+  });
+});
+
 describe('fallbackParse (direct, pure)', () => {
   it('extracts multiple languages and maps 新 → new', () => {
     expect(fallbackParse('python 和 rust 的新项目')).toEqual({
@@ -347,10 +359,10 @@ describe('fallbackParse (direct, pure)', () => {
     });
   });
 
-  it('「找一下推荐系统的python项目」→ keywords 含「推荐系统」（不漏出过宽的「系统」）', () => {
+  it('「找一下推荐系统的python项目」→ keywords 含推荐系统（不漏出过宽的「系统」）', () => {
     expect(fallbackParse('找一下推荐系统的python项目')).toMatchObject({
       languages: ['python'],
-      keywords: ['推荐系统'],
+      keywords: ['recommendation'],
     });
   });
 
@@ -361,7 +373,7 @@ describe('fallbackParse (direct, pure)', () => {
   it('「热门游戏 rust」→ keywords 含「热门游戏」（前导剥除后剩 2 字则整词保留）', () => {
     expect(fallbackParse('热门游戏 rust')).toMatchObject({
       languages: ['rust'],
-      keywords: ['热门游戏'],
+      keywords: ['game'],
     });
   });
 

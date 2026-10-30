@@ -59,6 +59,16 @@ vi.mock('../src/agent/key-hint', () => ({
   takeKeyHint: keyHintMock.takeKeyHint,
 }));
 
+// 短期记忆单独测（tests/last-repo.test.ts）；这里只控制「记得哪个仓库」。
+const lastRepoMock = vi.hoisted(() => ({
+  readLastRepo: vi.fn(),
+  rememberRepo: vi.fn(),
+}));
+vi.mock('../src/agent/last-repo', () => ({
+  readLastRepo: lastRepoMock.readLastRepo,
+  rememberRepo: lastRepoMock.rememberRepo,
+}));
+
 // 工具链路整体替换：本文件只验证「什么时候进、进了之后不再走检索」，
 // 工具内部行为由 tests/agent-route.test.ts 覆盖。
 vi.mock('../src/wecom/agent-route', () => ({
@@ -171,6 +181,10 @@ beforeEach(() => {
   agentRouteMock.tryAgentReply.mockResolvedValue(false);
   keyHintMock.takeKeyHint.mockReset();
   keyHintMock.takeKeyHint.mockResolvedValue(true);
+  lastRepoMock.readLastRepo.mockReset();
+  lastRepoMock.readLastRepo.mockResolvedValue(null);
+  lastRepoMock.rememberRepo.mockReset();
+  lastRepoMock.rememberRepo.mockResolvedValue(undefined);
   dbMock.failExecute = false;
   dbMock.insertValues = [];
 });
@@ -732,8 +746,51 @@ describe('router 注册', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 没配 Key 却要模型能力：追一句提示（7 天冷却，普通搜索不打扰）。
+// 短期记忆、兜底反馈与领域词
 // ---------------------------------------------------------------------------
+describe('短期记忆与兜底反馈', () => {
+  it('说了「深挖」但没给仓库 → 明确要仓库，不默默发榜单', async () => {
+    await handleSearch(makeMsg({ content: '深挖一下' }));
+
+    expect(searchMock.searchTrending).not.toHaveBeenCalled();
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain(
+      '想深挖哪个仓库',
+    );
+  });
+
+  it('上一条提过仓库 → 「这个项目靠不靠谱」沿用记忆走工具', async () => {
+    lastRepoMock.readLastRepo.mockResolvedValue('vercel/next.js');
+
+    await handleSearch(makeMsg({ content: '这个项目靠不靠谱' }));
+
+    expect(agentRouteMock.tryAgentReply).toHaveBeenCalled();
+  });
+
+  it('点名仓库会写短期记忆（30 分钟）', async () => {
+    searchMock.searchTrending.mockResolvedValue([makeItem()]);
+
+    await handleSearch(makeMsg({ content: '深挖 vercel/next.js 怎么样' }));
+
+    expect(lastRepoMock.rememberRepo).toHaveBeenCalledWith(
+      'alice',
+      'vercel/next.js',
+    );
+  });
+
+  it('关键词无匹配退回总榜时，明确告诉用户「没找到」', async () => {
+    llmMock.generateObjectSafe.mockResolvedValue(
+      makeQuery({ keywords: ['vision'] }),
+    );
+    searchMock.searchTrending
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([makeItem()]);
+
+    await handleSearch(makeMsg({ content: '图像识别相关的项目' }));
+
+    const text = String(apiMock.sendWeComText.mock.calls[0]?.[1]);
+    expect(text).toContain('没找到「vision」相关的项目');
+  });
+});
 describe('handleSearch 无 Key 的模型提示', () => {
   it('深挖类消息 + 没配 Key → 结果后追提示并登记冷却', async () => {
     userLlmMock.loadUserLlm.mockResolvedValue(null);

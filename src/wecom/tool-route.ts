@@ -20,6 +20,11 @@ export type ToolRoute =
   | { kind: 'tools'; tool: AgentToolName; repo: string | null }
   | { kind: 'search' };
 
+export interface ToolRouteOptions {
+  /** 上一条消息里提到的仓库（短期记忆，30 分钟）。 */
+  lastRepo?: string | null;
+}
+
 /**
  * 改订阅：必须同时出现「订阅」和修改动词。
  * 「订阅里的词是什么意思」是提问不是修改，不能命中。
@@ -48,14 +53,16 @@ const TOKEN_RE = /([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)/g;
  * 要求 owner 或 name 至少含一个 ASCII 字母，避免把 `10/27`、`2/3` 当仓库。
  */
 export function findRepoRef(text: string): string | null {
-  const url = text.match(URL_RE)?.[0];
+  // 容忍 `owner / repo` 与全角斜杠：用户手滑加空格不该让仓库名识别失败。
+  const normalized = text.replace(/／/g, '/').replace(/\s*\/\s*/g, '/');
+  const url = normalized.match(URL_RE)?.[0];
   if (url !== undefined && parseRepoRef(url) !== null) {
     return url;
   }
 
   TOKEN_RE.lastIndex = 0;
   let match: RegExpExecArray | null;
-  while ((match = TOKEN_RE.exec(text)) !== null) {
+  while ((match = TOKEN_RE.exec(normalized)) !== null) {
     const raw = match[0];
     if (!/[A-Za-z]/.test(raw)) continue;
     if (parseRepoRef(raw) !== null) {
@@ -69,7 +76,10 @@ export function findRepoRef(text: string): string | null {
  * 决定一条**已过命令路由**的文本是否需要工具。
  * 调用方是搜索路径：返回 `search` 时沿用原有「规则意图 → 解析 → 检索」链路。
  */
-export function routeToTools(content: string): ToolRoute {
+export function routeToTools(
+  content: string,
+  options: ToolRouteOptions = {},
+): ToolRoute {
   const text = content.trim();
   if (text === '') {
     return { kind: 'search' };
@@ -80,9 +90,26 @@ export function routeToTools(content: string): ToolRoute {
   }
 
   const repo = findRepoRef(text);
+  const remembered = repo === null ? (options.lastRepo ?? null) : null;
 
   if (repo !== null && HEALTH_RE.test(text)) {
     return { kind: 'tools', tool: 'repo_health', repo };
+  }
+
+  // 没有仓库名但语义指向「刚才那个」：用短期记忆补位
+  // （「这个项目靠不靠谱」「继续深挖」）。
+  if (repo === null && remembered !== null) {
+    const pointsAtPrevious =
+      DEMONSTRATIVE_RE.test(text) ||
+      HEALTH_RE.test(text) ||
+      /^(深挖|介绍|分析)/.test(text);
+    if (pointsAtPrevious) {
+      return {
+        kind: 'tools',
+        tool: HEALTH_RE.test(text) ? 'repo_health' : 'deep_dive_repo',
+        repo: remembered,
+      };
+    }
   }
 
   if (repo === null && DEMONSTRATIVE_RE.test(text) && HEALTH_RE.test(text)) {

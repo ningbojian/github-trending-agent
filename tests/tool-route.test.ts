@@ -8,6 +8,30 @@ import { findRepoRef, routeToTools } from '../src/wecom/tool-route';
  * 绝不能因为多了一个斜杠或一句「怎么样」就去调模型——那既慢又花钱。
  */
 
+describe('容错与短期记忆', () => {
+  it('多余空格、全角斜杠照样识别仓库', () => {
+    expect(routeToTools('深挖   vercel/next.js   怎么样').kind).toBe('tools');
+    expect(findRepoRef('看看 vercel ／ next.js')).toBe('vercel/next.js');
+  });
+
+  it('带 lastRepo 时，指代「这个项目」的追问沿用记忆', () => {
+    expect(
+      routeToTools('这个项目靠不靠谱', { lastRepo: 'vercel/next.js' }),
+    ).toEqual({ kind: 'tools', tool: 'repo_health', repo: 'vercel/next.js' });
+    expect(routeToTools('深挖一下', { lastRepo: 'astral-sh/ruff' })).toEqual({
+      kind: 'tools',
+      tool: 'deep_dive_repo',
+      repo: 'astral-sh/ruff',
+    });
+  });
+
+  it('普通检索不会被记忆带偏', () => {
+    expect(routeToTools('看看 rust 项目', { lastRepo: 'a/b' })).toEqual({
+      kind: 'search',
+    });
+  });
+});
+
 describe('findRepoRef', () => {
   it('识别 owner/repo 与 GitHub 链接', () => {
     expect(findRepoRef('深挖 astral-sh/ruff')).toBe('astral-sh/ruff');

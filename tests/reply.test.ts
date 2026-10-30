@@ -6,7 +6,7 @@ import type { InboundMessage } from '../src/wecom/router';
 // ---------------------------------------------------------------------------
 const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
-  sendWeComNews: vi.fn(),
+  sendWeComNews: vi.fn(async (_to: string, _articles: unknown) => undefined),
 }));
 
 const llmMock = vi.hoisted(() => ({

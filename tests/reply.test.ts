@@ -6,6 +6,7 @@ import type { InboundMessage } from '../src/wecom/router';
 // ---------------------------------------------------------------------------
 const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
+  sendWeComNews: vi.fn(),
 }));
 
 const llmMock = vi.hoisted(() => ({
@@ -35,6 +36,15 @@ const dbMock = vi.hoisted(() => ({
 
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
+  sendWeComNews: apiMock.sendWeComNews,
+}));
+
+// 搜索结果的卡片会写 search_caches（收藏 N 对齐）；本文件只断言「写了哪一批」。
+const digestMock = vi.hoisted(() => ({
+  saveRecentResults: vi.fn(async () => undefined),
+}));
+vi.mock('../src/agent/digest', () => ({
+  saveRecentResults: digestMock.saveRecentResults,
 }));
 
 vi.mock('../src/agent/llm', () => ({
@@ -179,6 +189,11 @@ beforeEach(() => {
   userLlmMock.loadUserLlm.mockResolvedValue(USER_LLM);
   agentRouteMock.tryAgentReply.mockReset();
   agentRouteMock.tryAgentReply.mockResolvedValue(false);
+  // 默认让卡片发送失败 → 既有用例继续走文本路径；卡片用例单独放行。
+  apiMock.sendWeComNews.mockReset();
+  apiMock.sendWeComNews.mockRejectedValue(new Error('news disabled in unit tests'));
+  digestMock.saveRecentResults.mockReset();
+  digestMock.saveRecentResults.mockResolvedValue(undefined);
   keyHintMock.takeKeyHint.mockReset();
   keyHintMock.takeKeyHint.mockResolvedValue(true);
   lastRepoMock.readLastRepo.mockReset();
@@ -832,5 +847,56 @@ describe('handleSearch 无 Key 的模型提示', () => {
     await handleSearch(makeMsg({ content: '深挖 vercel/next.js 怎么样' }));
 
     expect(keyHintMock.takeKeyHint).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 搜索结果卡片化：≤8 条走 news，缓存对齐实际卡片数；被拒退回文本。
+// ---------------------------------------------------------------------------
+describe('handleSearch 搜索结果卡片化', () => {
+  it('≤8 条 → 发 news 卡片，并把「收藏 N」缓存对齐到实际卡片数', async () => {
+    apiMock.sendWeComNews.mockResolvedValue(undefined);
+    llmMock.generateObjectSafe.mockResolvedValue(makeQuery({ keywords: [] }));
+    const items = Array.from({ length: 3 }, (_, i) =>
+      makeItem({ fullName: `o/r${i}`, htmlUrl: `https://github.com/o/r${i}` }),
+    );
+    searchMock.searchTrending.mockResolvedValue(items);
+
+    await handleSearch(makeMsg({ content: '本周 python 项目' }));
+
+    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
+    const articles = apiMock.sendWeComNews.mock.calls[0]?.[1] as Array<{ title: string }>;
+    expect(articles).toHaveLength(3);
+    expect(digestMock.saveRecentResults).toHaveBeenCalledWith('alice', [
+      { fullName: 'o/r0' },
+      { fullName: 'o/r1' },
+      { fullName: 'o/r2' },
+    ]);
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+  });
+
+  it('>8 条 → 只放前 8 张卡片，再补一句说明', async () => {
+    apiMock.sendWeComNews.mockResolvedValue(undefined);
+    llmMock.generateObjectSafe.mockResolvedValue(makeQuery({ keywords: [] }));
+    const items = Array.from({ length: 10 }, (_, i) =>
+      makeItem({ fullName: `o/r${i}` }),
+    );
+    searchMock.searchTrending.mockResolvedValue(items);
+
+    await handleSearch(makeMsg({ content: 'python' }));
+
+    const articles = apiMock.sendWeComNews.mock.calls[0]?.[1] as unknown[];
+    expect(articles).toHaveLength(8);
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('只放了前 8 条');
+    expect(digestMock.saveRecentResults.mock.calls[0]?.[1]).toHaveLength(8);
+  });
+
+  it('卡片被拒 → 退回编号文本', async () => {
+    searchMock.searchTrending.mockResolvedValue([makeItem({ fullName: 'a/b' })]);
+
+    await handleSearch(makeMsg({ content: 'python' }));
+
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('1. a/b');
   });
 });

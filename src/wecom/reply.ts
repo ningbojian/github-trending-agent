@@ -9,8 +9,10 @@ import { searchTrending, type SearchResultItem } from '../agent/search.js';
 import { loadUserLlm } from '../agent/user-llm.js';
 import { note, traceError } from '../obs/trace.js';
 import { tryAgentReply } from './agent-route.js';
-import { sendWeComText } from './api.js';
+import { sendWeComNews, sendWeComText } from './api.js';
 import { buildSetKeyLink } from './llm-settings.js';
+import { NEWS_MAX_ARTICLES, buildNewsArticles } from './news.js';
+import { saveRecentResults } from '../agent/digest.js';
 import { ABOUT_REPLY, OFF_TOPIC_REPLY } from './onboarding.js';
 import { routeToTools, findRepoRef } from './tool-route.js';
 import { formatEntryLine, MAX_TEXT_BYTES } from './text.js';
@@ -261,6 +263,50 @@ export async function handleSearch(msg: InboundMessage): Promise<void> {
     logIntentMiss(ruled, 'search', items.length, msg.content);
     const summaries = await loadSummariesSafe(items, choice);
     note('summaries', `${summaries.size}/${items.length} 有中文简介`);
+
+    // 搜索结果本质是「一批仓库 + 链接」：前 8 条用 news 卡片（与每日简报同一形态），
+    // 比编号文本更直观。带「没找到关键词、退回总榜」的说明时不切卡片——那句话必须看得见。
+    const shown = items.slice(0, NEWS_MAX_ARTICLES);
+    if (!retriedKeywords && shown.length > 0) {
+      try {
+        const byName = new Map(shown.map((item) => [item.fullName, item]));
+        const articles = buildNewsArticles(
+          shown.map((item) => ({
+            fullName: item.fullName,
+            stars: item.stars,
+            starsDelta: item.starsDelta,
+            isNew: item.isNew,
+            language: item.language,
+            summary: summaries.get(item.fullName),
+          })),
+          { htmlUrlOf: (entry) => byName.get(entry.fullName)?.htmlUrl },
+        );
+        await sendWeComNews(msg.fromUserName, articles);
+        note('send', `news ${articles.length} 篇`);
+        // 写入的条目必须等于用户实际看到的卡片数：「收藏 N」才对得上。
+        await saveRecentResults(
+          msg.fromUserName,
+          shown.map((item) => ({ fullName: item.fullName })),
+        );
+        if (items.length > shown.length) {
+          await sendWeComText(
+            msg.fromUserName,
+            `只放了前 ${shown.length} 条；还有 ${items.length - shown.length} 条，说得更具体一点可以缩小范围。`,
+          );
+        }
+        if (wantsModel && choice.kind === 'none') {
+          if (await takeKeyHint(msg.fromUserName)) {
+            await sendWeComText(msg.fromUserName, keyHintLine(msg.fromUserName));
+            note('key-hint', 'shown');
+          }
+        }
+        return;
+      } catch (err) {
+        // 卡片被拒：退回编号文本，绝不静默。
+        note('news-fallback', err instanceof Error ? err.message : String(err));
+      }
+    }
+
     let reply = formatSearchReply(items, summaries);
     if (retriedKeywords) {
       // 没有匹配项时退回总榜，但必须说清楚——否则用户会以为「又把日报发了一遍」。

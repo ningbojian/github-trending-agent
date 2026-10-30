@@ -54,6 +54,14 @@ const PANEL_STYLES_DELTA = `
 .panel-nav a[aria-current="page"]{background:var(--p-card);color:var(--p-text);
   font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.25);}
 
+/* 视图头：标题 + 一句状态 + 角落机器人。除总览外每个视图都用它。 */
+.p-view-head{display:flex;align-items:center;gap:10px;padding:10px 12px;margin:0 0 10px;}
+.p-view-head-main{flex:1;min-width:0;}
+.p-view-say{display:inline-block;max-width:100%;margin-top:5px;padding:3px 8px;
+  border-radius:8px;background:var(--p-card);border:1px solid var(--p-line);
+  font-size:12px;line-height:1.5;color:var(--p-text);}
+.p-view-head .p-mascot{flex:0 0 auto;width:54px;height:64px;}
+
 /* 总览主卡：状态、节奏、动作一次看完。 */
 .p-hero-card{position:relative;}
 /* 右侧给角落机器人留位；必须带 .panel 前缀，否则被 .panel .p-card 的 padding 简写盖掉。 */

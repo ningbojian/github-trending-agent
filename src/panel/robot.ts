@@ -14,7 +14,52 @@ import type { Weather } from '../weather/service.js';
  * 日贴纸/天气图标在服务端决定，客户端不请求外部接口。
  */
 
-const ROBOT_SVG = `<svg class="p-robot-svg" viewBox="0 0 420 420" role="img" aria-label="今日小机器人">
+export const ROBOT_ATTRIBUTION = 'Emoji artwork: Twemoji (CC-BY 4.0)';
+
+/**
+ * 表情：头部眼睛与嘴随状态变化，让机器人在每个视图里都能表达一点情绪。
+ * - idle：常态
+ * - sleepy：暂停推送（睡着）
+ * - alert：有需要用户处理的事（未绑定 GitHub）
+ * - happy：刚完成一个动作（收藏成功、设置已保存）
+ */
+export type RobotMood = 'idle' | 'sleepy' | 'alert' | 'happy';
+
+function faceSvg(mood: RobotMood): string {
+  if (mood === 'sleepy') {
+    return `<g id="prEyes">
+      <path d="M-69 0 Q-46 12 -23 0" stroke="#0B1220" stroke-width="10" fill="none" stroke-linecap="round"/>
+      <path d="M23 0 Q46 12 69 0" stroke="#0B1220" stroke-width="10" fill="none" stroke-linecap="round"/>
+    </g>
+    <path d="M-14 38 Q0 46 14 38" stroke="#0B1220" stroke-width="8" fill="none" stroke-linecap="round"/>`;
+  }
+  if (mood === 'happy') {
+    return `<g id="prEyes">
+      <path d="M-69 8 Q-46 -16 -23 8" stroke="#0B1220" stroke-width="11" fill="none" stroke-linecap="round"/>
+      <path d="M23 8 Q46 -16 69 8" stroke="#0B1220" stroke-width="11" fill="none" stroke-linecap="round"/>
+    </g>
+    <path d="M-26 34 Q0 62 26 34" stroke="#0B1220" stroke-width="9" fill="none" stroke-linecap="round"/>`;
+  }
+  if (mood === 'alert') {
+    return `<g id="prEyes">
+      <ellipse cx="-46" cy="0" rx="26" ry="30" fill="#0B1220"/>
+      <circle cx="-54" cy="-10" r="7" fill="#ffffff"/>
+      <ellipse cx="46" cy="0" rx="26" ry="30" fill="#0B1220"/>
+      <circle cx="38" cy="-10" r="7" fill="#ffffff"/>
+    </g>
+    <circle cx="0" cy="40" r="9" fill="#0B1220"/>`;
+  }
+  return `<g id="prEyes">
+      <ellipse cx="-46" cy="0" rx="23" ry="27" fill="#0B1220"/>
+      <circle cx="-54" cy="-10" r="6" fill="#ffffff"/>
+      <ellipse cx="46" cy="0" rx="23" ry="27" fill="#0B1220"/>
+      <circle cx="38" cy="-10" r="6" fill="#ffffff"/>
+    </g>
+    <path d="M-18 36 Q0 50 18 36" stroke="#0B1220" stroke-width="8" fill="none" stroke-linecap="round"/>`;
+}
+
+function robotSvg(mood: RobotMood): string {
+  return `<svg class="p-robot-svg" viewBox="0 0 420 420" role="img" aria-label="今日小机器人">
   <defs>
     <radialGradient id="prBlobFill" cx="35%" cy="28%" r="78%">
       <stop offset="0%" stop-color="#9dbdff"/>
@@ -49,26 +94,30 @@ const ROBOT_SVG = `<svg class="p-robot-svg" viewBox="0 0 420 420" role="img" ari
       <circle cx="0" cy="-154" r="20" fill="url(#prBubbleFill)"/>
       <circle cx="-6" cy="-160" r="6" fill="#ffffff" opacity=".7"/>
     </g>
-    <g id="prEyes">
-      <ellipse cx="-46" cy="0" rx="23" ry="27" fill="#0B1220"/>
-      <circle cx="-54" cy="-10" r="6" fill="#ffffff"/>
-      <ellipse cx="46" cy="0" rx="23" ry="27" fill="#0B1220"/>
-      <circle cx="38" cy="-10" r="6" fill="#ffffff"/>
-    </g>
+    ${faceSvg(mood)}
   </g>
 </svg>`;
+}
 
-export const ROBOT_ATTRIBUTION = 'Emoji artwork: Twemoji (CC-BY 4.0)';
+export interface RobotOptions {
+  /** 表情；缺省 idle。 */
+  mood?: RobotMood;
+}
 
-export function renderRobotMascot(weather: Weather | null, now: Date = new Date()): string {
+export function renderRobotMascot(
+  weather: Weather | null,
+  now: Date = new Date(),
+  options: RobotOptions = {},
+): string {
+  const mood = options.mood ?? 'idle';
   const day = dayStickerFor(now);
   const weatherIcon = weatherIconFor(weather);
   const daySrc = `/docs/assets/emoji/${STICKER_CODES[day.sticker]}.svg`;
   const weatherSrc = `/docs/assets/emoji/${WEATHER_CODES[weatherIcon]}.svg`;
   const weatherLabel = weather === null ? '暂无天气' : `${weather.city} ${weather.temperature}°C`;
 
-  return `<div class="p-mascot" data-robot-stage>
-    ${ROBOT_SVG}
+  return `<div class="p-mascot" data-robot-stage data-mood="${mood}">
+    ${robotSvg(mood)}
     <div class="p-orb" data-orb="day" role="img" aria-label="${escapeHtml(`今日贴纸：${day.name}`)}">
       <img src="${daySrc}" alt="">
     </div>

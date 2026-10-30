@@ -297,8 +297,19 @@ describe('api/panel 视图', () => {
     expect(state.body).toContain('先安静几天');
   });
 
-  it('未绑定 GitHub 时，收藏页直接给授权按钮（不用回微信）', async () => {
-    starsMock.loadBindingAuth.mockResolvedValueOnce({ kind: 'unbound' });
+  it('每个视图都有机器人（跟踪/历史/收藏/记忆/设置）', async () => {
+    for (const view of ['tracking', 'history', 'favorites', 'memory', 'settings']) {
+      dbMock.selectQueue.length = 0;
+      const { state, res } = response();
+      await handler({ method: 'GET', query: { t: token(), view } }, res);
+      expect(state.status).toBe(200);
+      expect(state.body).toContain('p-view-head');
+      expect(state.body).toContain('p-mascot');
+      expect(state.body).toContain('data-mood');
+    }
+  });
+
+  it('未绑定 GitHub 时，收藏页直接给授权按钮（不用回微信）', async () => {    starsMock.loadBindingAuth.mockResolvedValueOnce({ kind: 'unbound' });
     dbMock.selectQueue.push([]); // renderFavorites 的收藏列表
     const { state, res } = response();
     await handler(

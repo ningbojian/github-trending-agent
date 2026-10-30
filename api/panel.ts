@@ -25,6 +25,7 @@ import {
   favoriteRepo,
   loadBindingAuth,
   unfavoriteRepo,
+  type BindingAuth,
 } from '../src/github/stars.js';
 import { buildAuthorizeUrl } from '../src/github/oauth.js';
 import { readBodyFields } from '../src/http/body.js';
@@ -42,7 +43,7 @@ import {
 } from '../src/panel/styles.js';
 import { POINTER_SCRIPT } from '../src/ui/pointer.js';
 import { APP_FOOTER, APP_TEXT } from '../src/ui/tokens.js';
-import { renderRobotMascot, ROBOT_ATTRIBUTION, ROBOT_SCRIPT } from '../src/panel/robot.js';
+import { renderRobotMascot, ROBOT_ATTRIBUTION, ROBOT_SCRIPT, type RobotMood } from '../src/panel/robot.js';
 import { AUTO_CITY, cityBySlug, WEATHER_CITIES } from '../src/weather/cities.js';
 import { getWeatherForRequest, type Weather } from '../src/weather/service.js';
 import { bumpPanelVersion, getPanelVersion } from '../src/panel/version.js';
@@ -119,6 +120,41 @@ function card(title: string, body: string): string {
 
 function empty(text: string): string {
   return `<div class="p-empty">${escapeHtml(text)}</div>`;
+}
+
+/**
+ * 非总览视图的天气：只按 IP 取（不额外读订阅行——那会多一次 DB 查询，
+ * 打乱渲染顺序）。总览仍按用户设置的城市取，那里本来就要读订阅行。
+ * 失败了就当没有天气：机器人会显示云，不影响功能。
+ */
+async function weatherForHeaders(
+  headers: PanelRequest['headers'],
+): Promise<Weather | null> {
+  try {
+    return await getWeatherForRequest(headers, AUTO_CITY, new Date());
+  } catch (err) {
+    console.error('panel weather failed:', err);
+    return null;
+  }
+}
+
+/**
+ * 视图头：标题 + 一句状态 + 角落机器人。
+ * 除总览（hero 自带机器人）外，每个视图都用它，保证每个功能里都有那张脸。
+ */
+function viewHead(
+  title: string,
+  say: string,
+  weather: Weather | null,
+  mood: RobotMood = 'idle',
+): string {
+  return `<section class="p-card p-view-head">
+    <div class="p-view-head-main">
+      <div class="p-hero-label">${escapeHtml(title)}</div>
+      <div class="p-view-say">${escapeHtml(say)}</div>
+    </div>
+    ${renderRobotMascot(weather, new Date(), { mood })}
+  </section>`;
 }
 
 function banner(notice?: string, error?: string): string {
@@ -296,6 +332,7 @@ async function renderOverview(
   } catch (err) {
     console.error('panel weather failed:', err);
   }
+  const mood: RobotMood = notice ? 'happy' : error ? 'alert' : active ? 'idle' : 'sleepy';
 
   const cadence =
     prefs.intervalDays > 1
@@ -316,7 +353,7 @@ async function renderOverview(
       <a class="p-btn" href="${href(token, { view: 'settings' })}">调整设置</a>
       ${subscriptionToggle(token, 'overview', sub !== undefined, active)}
     </div>
-    ${renderRobotMascot(weather)}
+    ${renderRobotMascot(weather, new Date(), { mood })}
   </section>`;
 
   const tiles = `<div class="p-grid">
@@ -363,6 +400,7 @@ async function renderOverview(
 async function renderTracking(
   userid: string,
   token: string,
+  weather: Weather | null,
   notice?: string,
   error?: string,
 ): Promise<string> {
@@ -390,6 +428,12 @@ async function renderTracking(
     token,
     'tracking',
     `${banner(notice, error)}
+     ${viewHead(
+       '跟踪',
+       tracked.length ? `${tracked.length} 个仓库 · 有变化我会说` : '还没跟踪仓库',
+       weather,
+       error ? 'alert' : notice ? 'happy' : 'idle',
+     )}
      ${card('跟踪中', rows)}
      ${card(
        '加一个',
@@ -426,6 +470,7 @@ async function renderHistory(
   userid: string,
   token: string,
   date: string,
+  weather: Weather | null,
 ): Promise<string> {
   void userid;
   const archives = await readArchives(14);
@@ -466,7 +511,16 @@ async function renderHistory(
         .join('')}</ul>`
     : empty('还没有归档。明天 9 点之后再来看。');
 
-  return page('历史简报', token, 'history', card('最近 14 天', list));
+  return page(
+    '历史简报',
+    token,
+    'history',
+    `${viewHead(
+      '历史简报',
+      archives.length ? `已归档 ${archives.length} 天` : '还没有归档',
+      weather,
+    )}${card('最近 14 天', list)}`,
+  );
 }
 
 /** 收藏写失败时的统一中文文案（与聊天命令同一套语义）。 */
@@ -480,8 +534,11 @@ function favoriteError(kind: 'unbound' | 'expired'): string {
  * GitHub 绑定卡：面板里直接发起授权，不再要求用户回微信发「绑定」。
  * 只在未绑定/失效时生成一次性链接（写一条 10 分钟的 state）；已绑定只显示账号。
  */
-async function githubBindingCard(userid: string, token: string): Promise<string> {
-  const auth = await loadBindingAuth(userid);
+async function githubBindingCard(
+  userid: string,
+  token: string,
+  auth: BindingAuth,
+): Promise<string> {
   if (auth.kind === 'ok') {
     return card(
       'GitHub 账号',
@@ -552,6 +609,7 @@ async function renderFavorites(
   userid: string,
   token: string,
   query: string,
+  weather: Weather | null,
   notice?: string,
   error?: string,
 ): Promise<string> {
@@ -564,6 +622,15 @@ async function renderFavorites(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
   const owned = new Set(sorted.map((row) => row.fullName.toLowerCase()));
+  // 未绑定 GitHub 时收藏写不进来：机器人举牌子提示，而不是等用户点「取消」才发现。
+  const binding = await loadBindingAuth(userid);
+  const mood: RobotMood = error
+    ? 'alert'
+    : notice
+      ? 'happy'
+      : binding.kind === 'ok'
+        ? 'idle'
+        : 'alert';
 
   const favList = sorted.length
     ? `<ul class="p-list">${sorted
@@ -628,7 +695,13 @@ async function renderFavorites(
     token,
     'favorites',
     `${banner(notice, error)}
-     ${await githubBindingCard(userid, token)}
+     ${viewHead(
+       '收藏与搜索',
+       binding.kind === 'ok' ? `${sorted.length} 个收藏` : '还没绑定 GitHub',
+       weather,
+       mood,
+     )}
+     ${await githubBindingCard(userid, token, binding)}
      ${card('我的收藏', favList)}
      ${card(
        '搜一个仓库',
@@ -646,6 +719,7 @@ async function renderFavorites(
 async function renderMemory(
   userid: string,
   token: string,
+  weather: Weather | null,
   notice?: string,
   error?: string,
 ): Promise<string> {
@@ -672,6 +746,12 @@ async function renderMemory(
     token,
     'memory',
     `${banner(notice, error)}
+     ${viewHead(
+       '我的记忆',
+       facts.length ? `${facts.length} 条记忆` : '还没记下任何背景',
+       weather,
+       error ? 'alert' : notice ? 'happy' : 'idle',
+     )}
      ${card(`我的记忆（${facts.length}/${PROFILE_MAX_FACTS}）`, list)}
      ${card(
        '记一句',
@@ -707,10 +787,12 @@ function modelEntryLink(userid: string): string {
 async function renderSettings(
   userid: string,
   token: string,
+  weather: Weather | null,
   notice?: string,
   error?: string,
 ): Promise<string> {
   const sub = await readSubscriber(userid);
+  const binding = await loadBindingAuth(userid);
   const prefs = normalizePreferences(sub?.preferences ?? {});
   const languages = Array.isArray((sub?.preferences as { languages?: unknown })?.languages)
     ? (sub?.preferences as { languages: string[] }).languages.join(', ')
@@ -749,8 +831,14 @@ async function renderSettings(
     token,
     'settings',
     `${banner(notice, error)}
+     ${viewHead(
+       '订阅设置',
+       `${prefs.pushTime} · ${prefs.intervalDays > 1 ? `每 ${prefs.intervalDays} 天` : '每天'} · ${prefs.digestCount} 条`,
+       weather,
+       error ? 'alert' : notice ? 'happy' : 'idle',
+     )}
      ${card('状态', status)}
-     ${await githubBindingCard(userid, token)}
+     ${await githubBindingCard(userid, token, binding)}
      <form method="post" action="${href(token, { view: 'settings' })}">
       ${card(
         '推送',
@@ -912,6 +1000,7 @@ export default async function handler(
 
   const userid = parsed.userid;
   const view = queryParam(req, 'view') || 'overview';
+  const weather = await weatherForHeaders(req.headers);
   const fields = method === 'POST' ? readBodyFields(req.body) : {};
   let notice: string | undefined;
   let error: string | undefined;
@@ -949,7 +1038,7 @@ export default async function handler(
             ? '间隔需为 1–30 的整数'
             : null;
     if (validation !== null) {
-      sendHtml(res, 400, await renderSettings(userid, token, undefined, validation));
+      sendHtml(res, 400, await renderSettings(userid, token, weather, undefined, validation));
       return;
     }
     const weatherCityRaw = (fields.weatherCity ?? AUTO_CITY).trim();
@@ -971,23 +1060,23 @@ export default async function handler(
   }
 
   if (view === 'tracking') {
-    sendHtml(res, 200, await renderTracking(userid, token, notice, error));
+    sendHtml(res, 200, await renderTracking(userid, token, weather, notice, error));
     return;
   }
   if (view === 'history') {
-    sendHtml(res, 200, await renderHistory(userid, token, queryParam(req, 'date')));
+    sendHtml(res, 200, await renderHistory(userid, token, queryParam(req, 'date'), weather));
     return;
   }
   if (view === 'favorites') {
-    sendHtml(res, 200, await renderFavorites(userid, token, queryParam(req, 'q'), notice, error));
+    sendHtml(res, 200, await renderFavorites(userid, token, queryParam(req, 'q'), weather, notice, error));
     return;
   }
   if (view === 'memory') {
-    sendHtml(res, 200, await renderMemory(userid, token, notice, error));
+    sendHtml(res, 200, await renderMemory(userid, token, weather, notice, error));
     return;
   }
   if (view === 'settings') {
-    sendHtml(res, 200, await renderSettings(userid, token, notice, error));
+    sendHtml(res, 200, await renderSettings(userid, token, weather, notice, error));
     return;
   }
   sendHtml(res, 200, await renderOverview(userid, token, req.headers, notice, error));

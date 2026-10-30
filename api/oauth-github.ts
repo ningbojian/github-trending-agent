@@ -9,6 +9,7 @@ import {
   OAUTH_STATE_PREFIX,
   safeReturnPath,
 } from '../src/github/oauth.js';
+import { importGithubStars } from '../src/github/stars.js';
 
 /**
  * GitHub OAuth 回调端点（Vercel Node function，GET）。
@@ -157,6 +158,14 @@ export default async function handler(
     // 映射的 userid 匹配不到任何订阅者：什么也没写。
     errorPage(res, 404, '未找到对应的企业微信用户。');
     return;
+  }
+
+  // 绑定成功顺手把 GitHub 上已有的 star 导入本地收藏（最多 100 个）。
+  // 失败不影响绑定结果，面板里还有手动「同步收藏」按钮。
+  try {
+    await importGithubStars(mappedUserid, exchanged.token, exchanged.login);
+  } catch (err) {
+    console.warn('importGithubStars after bind failed:', err);
   }
 
   sendRendered(res, 200, renderOauthSuccess(exchanged.login, mappedReturn));

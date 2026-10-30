@@ -18,7 +18,7 @@ import {
 } from '../src/agent/tracking-service.js';
 import { readWeekStats, type WeeklyStats } from '../src/agent/weekly-review.js';
 import { db } from '../src/db/client.js';
-import { favorites, kvCache, repos, subscribers } from '../src/db/schema.js';
+import { favorites, kvCache, repos, subscribers, trendingEntries } from '../src/db/schema.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
 import { parseRepoRef } from '../src/github/repo-ref.js';
 import {
@@ -26,8 +26,10 @@ import {
   loadBindingAuth,
   unfavoriteRepo,
   clearGithubBinding,
+  importGithubStars,
   type BindingAuth,
 } from '../src/github/stars.js';
+import { readDailySnapshotCache, type DigestSnapshotItem } from '../src/agent/digest-snapshot.js';
 import { clearUserLlm } from '../src/agent/user-llm.js';
 import { buildAuthorizeUrl } from '../src/github/oauth.js';
 import { readBodyFields } from '../src/http/body.js';
@@ -129,6 +131,29 @@ function card(title: string, body: string): string {
 
 function empty(text: string): string {
   return `<div class="p-empty">${escapeHtml(text)}</div>`;
+}
+
+/**
+ * 今日洞察：从当日快照缓存里算一句真话（不调模型、不猜）。
+ * 没有任何快照时返回空串，机器人气泡退回默认文案。
+ */
+function dailyInsight(items: DigestSnapshotItem[]): string {
+  if (items.length === 0) return '';
+  const fresh = items.filter((item) => item.isNew).length;
+  const top = [...items].sort((a, b) => b.starsDelta - a.starsDelta)[0];
+  const languages = new Map<string, number>();
+  for (const item of items) {
+    if (item.language) {
+      languages.set(item.language, (languages.get(item.language) ?? 0) + 1);
+    }
+  }
+  const topLanguage = [...languages.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const parts = [
+    `今天 ${items.length} 个项目，${fresh} 个新上榜`,
+    `涨得最快 ${top.fullName}（+${top.starsDelta}）`,
+  ];
+  if (topLanguage) parts.push(`主力语言 ${topLanguage}`);
+  return parts.join('；');
 }
 
 /**
@@ -315,7 +340,7 @@ async function renderOverview(
   const prefs = normalizePreferences(sub?.preferences ?? {});
   const active = sub?.active ?? false;
   // 四个查询互不依赖：并行跑，别把 DB 往返叠成四个。
-  const [tracked, archives, memoryCount, week] = await Promise.all([
+  const [tracked, archives, memoryCount, week, snapshot] = await Promise.all([
     listTracked(userid),
     readArchives(1),
     readProfile(userid)
@@ -325,7 +350,9 @@ async function renderOverview(
       console.error('panel weekly stats failed:', err);
       return null;
     }),
+    readDailySnapshotCache().catch(() => null),
   ]);
+  const insight = snapshot ? dailyInsight(snapshot.items) : '';
   const mood: RobotMood = notice ? 'happy' : error ? 'alert' : active ? 'idle' : 'sleepy';
 
   const cadence =
@@ -343,11 +370,15 @@ async function renderOverview(
     </div>
     <div class="p-hero-sub">北京时间 · 每次 ${prefs.digestCount} 条</div>
     ${chips ? `<div class="p-chips">${chips}</div>` : ''}
+    ${insight ? `<div class="p-taste">💡 ${escapeHtml(insight)}</div>` : ''}
     <div class="p-actions">
       <a class="p-btn" href="${href(token, { view: 'settings' })}">调整设置</a>
       ${subscriptionToggle(token, 'overview', sub !== undefined, active)}
     </div>
-    ${renderRobotMascot(weather, new Date(), { mood })}
+    ${renderRobotMascot(weather, new Date(), {
+      mood,
+      say: insight || '捏我试试；两颗贴纸可以拖。',
+    })}
   </section>`;
 
   const tiles = `<div class="p-grid">
@@ -521,6 +552,96 @@ async function renderHistory(
   );
 }
 
+/** 仓库体检：从收藏/跟踪里挑一个仓库，出一屏数据卡（只读库，不调外部 API）。 */
+async function renderCheckup(
+  userid: string,
+  token: string,
+  weather: Weather | null,
+  index: number,
+): Promise<string> {
+  const [favRows, tracked] = await Promise.all([
+    db()
+      .select()
+      .from(favorites)
+      .where(eq(favorites.wecomUserid, userid))
+      .orderBy(desc(favorites.createdAt))
+      .limit(5),
+    listTracked(userid),
+  ]);
+  const candidates = [
+    ...favRows.map((row) => row.fullName),
+    ...tracked.map((row) => row.identifier),
+  ];
+  const head = (say: string, mood: RobotMood = 'idle', tip = ''): string =>
+    viewHead('仓库体检', say, weather, mood, 'search', tip);
+
+  if (candidates.length === 0) {
+    return page(
+      '仓库体检',
+      token,
+      'checkup',
+      `${head('还没有可体检的仓库', 'alert', '先收藏或跟踪一个仓库，再回来。')}
+       ${card('怎么做', empty('收藏或跟踪一个仓库后，这里会给你一张体检卡。'))}`,
+    );
+  }
+
+  const pick = candidates[Math.abs(index) % candidates.length]!;
+  const [repoRows, entryRows] = await Promise.all([
+    db().select().from(repos).where(eq(repos.fullName, pick)).limit(1),
+    db()
+      .select()
+      .from(trendingEntries)
+      .where(eq(trendingEntries.fullName, pick))
+      .orderBy(desc(trendingEntries.date))
+      .limit(1),
+  ]);
+  const repo = repoRows[0];
+  const entry = entryRows[0];
+
+  const next = `<div class="p-actions">
+    <a class="p-btn ghost" href="${href(token, { view: 'checkup', i: String(index + 1) })}">换一个</a>
+    <a class="p-btn ghost" href="${href(token, { view: 'favorites' })}">回收藏</a>
+  </div>`;
+
+  if (repo === undefined) {
+    return page(
+      '仓库体检',
+      token,
+      'checkup',
+      `${head('这个仓库还没入库', 'alert')}
+       ${card(pick, empty('刚收藏的仓库可能还没抓取到；明天再看。'))}${next}`,
+    );
+  }
+
+  const verdict =
+    repo.stars >= 50000
+      ? '大热门，生态成熟，适合直接采用'
+      : repo.stars >= 10000
+        ? '成熟项目，社区活跃，可以放心依赖'
+        : repo.stars >= 1000
+          ? '稳步成长，值得关注，注意维护频率'
+          : '早期项目，采用前先看提交活跃度';
+  const trend = entry
+    ? `最近一次在榜 ${entry.date}，+${entry.starsDelta} 星${entry.isNew ? '（新上榜）' : ''}`
+    : '最近没有上榜记录';
+
+  const body = `<div class="p-kv">
+    <div><dt>仓库</dt><dd>${escapeHtml(repo.fullName)}</dd></div>
+    <div><dt>语言</dt><dd>${escapeHtml(repo.language ?? '未知')}</dd></div>
+    <div><dt>星标</dt><dd>${escapeHtml(String(repo.stars))}</dd></div>
+    <div><dt>榜单</dt><dd>${escapeHtml(trend)}</dd></div>
+    <div><dt>结论</dt><dd>${escapeHtml(verdict)}</dd></div>
+  </div>`;
+
+  return page(
+    '仓库体检',
+    token,
+    'checkup',
+    `${head(verdict, 'happy', '这是从你收藏/跟踪里挑的一个仓库。')}
+     ${card(pick, body)}${next}`,
+  );
+}
+
 /** 收藏写失败时的统一中文文案（与聊天命令同一套语义）。 */
 function favoriteError(kind: 'unbound' | 'expired'): string {
   return kind === 'unbound'
@@ -541,10 +662,16 @@ async function githubBindingCard(
     return card(
       'GitHub 账号',
       `<div class="p-row-sub p-mb">已绑定 ${escapeHtml(auth.login ?? '（已授权）')}</div>
-       <form method="post" action="${href(token, { view: 'settings' })}">
-         <input type="hidden" name="action" value="unbind-github">
-         <button class="p-btn danger" type="submit">解除绑定</button>
-       </form>`,
+       <div class="p-actions">
+         <form method="post" action="${href(token, { view: 'favorites' })}">
+           <input type="hidden" name="action" value="sync-stars">
+           <button class="p-btn ghost sm" type="submit">从 GitHub 同步收藏</button>
+         </form>
+         <form method="post" action="${href(token, { view: 'settings' })}">
+           <input type="hidden" name="action" value="unbind-github">
+           <button class="p-btn danger" type="submit">解除绑定</button>
+         </form>
+       </div>`,
     );
   }
   const label = auth.kind === 'unbound' ? '绑定 GitHub' : '重新绑定';
@@ -711,6 +838,9 @@ async function renderFavorites(
      )}
      ${await githubBindingCard(userid, token, binding)}
      ${card('我的收藏', favList)}
+     <div class="p-actions">
+       <a class="p-btn ghost" href="${href(token, { view: 'checkup' })}">给一个仓库做体检</a>
+     </div>
      ${card(
        '搜一个仓库',
        `<form method="get" action="">
@@ -940,6 +1070,16 @@ async function applyAction(
     await clearGithubBinding(userid);
     return { notice: '已解除 GitHub 绑定。收藏仍保留在本地。' };
   }
+  if (fields.action === 'sync-stars') {
+    const auth = await loadBindingAuth(userid);
+    if (auth.kind !== 'ok') {
+      return { error: '先绑定 GitHub，再从 GitHub 同步。' };
+    }
+    const imported = await importGithubStars(userid, auth.token, auth.login ?? '');
+    return imported > 0
+      ? { notice: `从 GitHub 同步了 ${imported} 个收藏。` }
+      : { error: '没有同步到收藏（可能是 star 列表为空或 GitHub 暂时不可用）。' };
+  }
 
   if (view === 'tracking') {
     if (fields.action === 'track') {
@@ -1041,7 +1181,9 @@ export default async function handler(
   // 30 秒短缓存：同一页面连点/返回直接回 HTML，连天气和 DB 都不用碰。
   // 带查询参数的视图（搜索 q、历史 date）不缓存。
   const noQuery =
-    queryParam(req, 'q') === '' && queryParam(req, 'date') === '';
+    queryParam(req, 'q') === '' &&
+    queryParam(req, 'date') === '' &&
+    queryParam(req, 'i') === '';
   const cacheable = method === 'GET' && noQuery;
   const dirty = cacheable ? await readPanelDirty(userid) : '';
   if (cacheable) {
@@ -1138,6 +1280,11 @@ export default async function handler(
   }
   if (view === 'memory') {
     await sendView(await renderMemory(userid, token, weather, notice, error));
+    return;
+  }
+  if (view === 'checkup') {
+    const index = Number(queryParam(req, 'i'));
+    await sendView(await renderCheckup(userid, token, weather, Number.isFinite(index) ? index : 0));
     return;
   }
   if (view === 'settings') {

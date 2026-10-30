@@ -214,6 +214,20 @@ async function readCache(date: string): Promise<DigestSnapshot | null> {
   return value;
 }
 
+/**
+ * 只读取今日快照缓存，**绝不重建**（重建会调用模型）。
+ * 面板「今日洞察」用它：拿不到就当没有，绝不为了一个气泡多烧一次 LLM。
+ */
+export async function readDailySnapshotCache(
+  now: Date = new Date(),
+): Promise<DigestSnapshot | null> {
+  try {
+    return await readCache(shanghaiToday(now));
+  } catch {
+    return null;
+  }
+}
+
 async function writeCache(snapshot: DigestSnapshot): Promise<void> {
   const expiresAt = new Date(Date.now() + CACHE_TTL_MS);
   await db()

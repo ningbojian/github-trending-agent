@@ -31,6 +31,7 @@ const starsMock = vi.hoisted(() => ({
   favoriteRepo: vi.fn(async () => 'synced' as const),
   unfavoriteRepo: vi.fn(async () => 'removed' as const),
   clearGithubBinding: vi.fn(async () => undefined),
+  importGithubStars: vi.fn(async () => 0),
 }));
 const profileMock = vi.hoisted(() => ({
   readProfile: vi.fn(async () => ({
@@ -125,6 +126,7 @@ vi.mock('../src/github/stars', () => ({
   favoriteRepo: starsMock.favoriteRepo,
   unfavoriteRepo: starsMock.unfavoriteRepo,
   clearGithubBinding: starsMock.clearGithubBinding,
+  importGithubStars: starsMock.importGithubStars,
 }));
 
 // 删除 AI Key：只关心是否调用了清空逻辑。
@@ -163,6 +165,14 @@ const panelWeatherMock = vi.hoisted(() => ({
 
 vi.mock('../src/panel/weather', () => ({
   weatherForPanel: panelWeatherMock.weatherForPanel,
+}));
+
+// 今日洞察只读快照缓存；测试默认没有快照，避免额外的队列消费。
+const snapshotMock = vi.hoisted(() => ({
+  readDailySnapshotCache: vi.fn(async (): Promise<unknown> => null),
+}));
+vi.mock('../src/agent/digest-snapshot', () => ({
+  readDailySnapshotCache: snapshotMock.readDailySnapshotCache,
 }));
 
 // 短缓存单独测（tests/panel-cache.test.ts）；面板行为测试里一律当未命中。
@@ -205,6 +215,7 @@ function token(): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  snapshotMock.readDailySnapshotCache.mockResolvedValue(null);
   dbMock.selectQueue.length = 0;
   dbMock.updateCalls.length = 0;
   dbMock.deleteCalls.length = 0;
@@ -366,6 +377,65 @@ describe('api/panel 视图', () => {
     );
     expect(starsMock.clearGithubBinding).toHaveBeenCalledWith('alice');
     expect(state.body).toContain('已解除 GitHub 绑定');
+  });
+
+  it('今日洞察：从当日快照算一句真话', async () => {
+    snapshotMock.readDailySnapshotCache.mockResolvedValue({
+      items: [
+        { fullName: 'a/b', language: 'TypeScript', stars: 100, starsDelta: 50, isNew: true },
+        { fullName: 'c/d', language: 'TypeScript', stars: 200, starsDelta: 120, isNew: false },
+      ],
+    });
+    dbMock.selectQueue.push([
+      { preferences: {}, active: true, createdAt: new Date('2026-10-20T00:00:00Z') },
+    ]);
+    dbMock.selectQueue.push([]); // archives
+    const { state, res } = response();
+    await handler({ method: 'GET', query: { t: token(), view: 'overview' } }, res);
+    expect(state.body).toContain('今天 2 个项目，1 个新上榜');
+    expect(state.body).toContain('涨得最快 c/d（+120）');
+  });
+
+  it('仓库体检：从收藏里挑一个给出结论', async () => {
+    dbMock.selectQueue.push([{ fullName: 'vercel/next.js' }]); // favorites
+    dbMock.selectQueue.push([
+      {
+        fullName: 'vercel/next.js',
+        name: 'next.js',
+        owner: 'vercel',
+        description: 'The React Framework',
+        language: 'TypeScript',
+        topics: [],
+        stars: 128000,
+        htmlUrl: 'https://github.com/vercel/next.js',
+      },
+    ]);
+    dbMock.selectQueue.push([{ date: '2026-10-30', starsDelta: 321, isNew: false }]);
+    const { state, res } = response();
+    await handler({ method: 'GET', query: { t: token(), view: 'checkup' } }, res);
+    expect(state.body).toContain('大热门');
+    expect(state.body).toContain('128000');
+    expect(state.body).toContain('换一个');
+  });
+
+  it('同步 GitHub 收藏 → importGithubStars', async () => {
+    starsMock.importGithubStars.mockResolvedValueOnce(3);
+    dbMock.selectQueue.push([]); // renderFavorites 的收藏列表
+    const { state, res } = response();
+    await handler(
+      {
+        method: 'POST',
+        query: { t: token(), view: 'favorites' },
+        body: { action: 'sync-stars' },
+      },
+      res,
+    );
+    expect(starsMock.importGithubStars).toHaveBeenCalledWith(
+      'alice',
+      'gho_test',
+      'alice-gh',
+    );
+    expect(state.body).toContain('同步了 3 个收藏');
   });
 
   it('每个视图都有机器人（跟踪/历史/收藏/记忆/设置）', async () => {

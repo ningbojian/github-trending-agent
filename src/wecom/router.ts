@@ -44,6 +44,7 @@ import {
 } from './subscription.js';
 import { sendWelcomeFlow } from './welcome.js';
 import { handleMyPanel } from './panel-link.js';
+import { handleTodayDigest } from './today-digest.js';
 import {
   MY_TRACKING_EMPTY_REPLY,
   TRACK_USAGE_REPLY,
@@ -277,6 +278,15 @@ export function resetQuotaChecker(): void {
   quotaChecker = (userid) => checkQuota(userid);
 }
 
+/** 手动要今天简报的说法（精确匹配，避免把「每日推送设置」之类吞进来）。 */
+const TODAY_DIGEST_COMMANDS = new Set([
+  '每日推送',
+  '今日推送',
+  '今日简报',
+  '今天的简报',
+  '今天的推送',
+]);
+
 export async function routeMessage(msg: InboundMessage): Promise<void> {
   // 整个分发过程一条 trace：下游任意位置 note() 都挂到这次调用上。
   // 放在这里而不是各个 handler 里，是为了让「哪条命令」与「后续几步」在同一条记录里。
@@ -339,6 +349,12 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
     content: normalizeCommandText(msg.content),
   };
   const decision = decideTextRoute(normalized.content);
+
+  // 手动要今天简报：与每日推送同一个 news 渲染器，别再回一份纯文本列表。
+  if (TODAY_DIGEST_COMMANDS.has(normalized.content)) {
+    note('route', 'today-digest');
+    return dispatchSafely(handleTodayDigest, normalized);
+  }
 
   // 多轮状态只消费「整条消息就是待办要的那个答复」：系统刚问过「要我记住吗」
   // 或「想订阅什么」。任何别的内容（尤其是命令）都把 pending 清掉后按新消息

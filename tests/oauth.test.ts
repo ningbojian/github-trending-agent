@@ -84,6 +84,13 @@ vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
 }));
 
+// 绑定后导入 star 会额外打一次 GitHub API；本文件只验证 OAuth 回调本身。
+// 其余 stars 导出（收藏 handler 等）保持真实实现，避免 router 绑定失败。
+vi.mock('../src/github/stars', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/github/stars')>();
+  return { ...actual, importGithubStars: async () => 0 };
+});
+
 // trace 会多写一次 kv_cache insert，与本文件的写库次数断言无关 → 只透传。
 vi.mock('../src/obs/trace', () => ({
   withTrace: (_meta: unknown, fn: () => Promise<unknown>) => fn(),

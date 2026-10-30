@@ -262,6 +262,67 @@ export async function loadGithubStars(
   }
 }
 
+/** 绑定后一次性导入的 star 上限（最近 100 个）。 */
+export const STAR_IMPORT_LIMIT = 100;
+
+/**
+ * 把 GitHub 上已有的 star 导入本地收藏（绑定回调 / 面板手动同步）。
+ *
+ * - 只导入最近 STAR_IMPORT_LIMIT 个：几百个 star 全塞进面板列表没有意义；
+ * - 已存在的收藏不降级：冲突时只把 starredOnGithub 置真；
+ * - 任何失败返回 0，不抛错——同步是增强，不能阻断绑定流程。
+ */
+export async function importGithubStars(
+  wecomUserid: string,
+  token: string,
+  login: string,
+): Promise<number> {
+  try {
+    const res = await fetch(
+      `${starsEndpoint(login)}?sort=created&direction=desc&per_page=${STAR_IMPORT_LIMIT}`,
+      {
+        headers: {
+          accept: 'application/vnd.github+json',
+          authorization: `Bearer ${token}`,
+        },
+      },
+    );
+    if (res.status !== 200) {
+      console.warn(`importGithubStars ${login}: HTTP ${res.status}`);
+      return 0;
+    }
+    const raw: unknown = await res.json();
+    const names = Array.isArray(raw)
+      ? raw
+          .filter(
+            (row): row is { full_name?: unknown } =>
+              typeof row === 'object' && row !== null,
+          )
+          .map((row) => String(row.full_name ?? ''))
+          .filter((name) => name.length > 0)
+      : [];
+    if (names.length === 0) return 0;
+
+    await db()
+      .insert(favorites)
+      .values(
+        names.map((fullName) => ({
+          wecomUserid,
+          fullName,
+          starredOnGithub: true,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [favorites.wecomUserid, favorites.fullName],
+        set: { starredOnGithub: true },
+      });
+    return names.length;
+  } catch (err) {
+    console.warn(`importGithubStars ${login}: ${String(err)}`);
+    return 0;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // DB 访问（全部经 db()，测试以 mock 桩替换）
 // ---------------------------------------------------------------------------

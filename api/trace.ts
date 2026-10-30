@@ -2,7 +2,8 @@ import { desc, eq, like, sql, type SQL } from 'drizzle-orm';
 import { env } from '../src/config.js';
 import { db } from '../src/db/client.js';
 import { agentRuns, kvCache } from '../src/db/schema.js';
-import { escapeHtml, renderPage, sendHtml } from '../src/http/html.js';
+import { escapeHtml, sendHtml } from '../src/http/html.js';
+import { renderAppPage, renderMessagePage } from '../src/ui/page.js';
 
 /**
  * 运行日志页（只读）：回答「刚才那条消息走了哪条路、慢在哪一段」。
@@ -225,38 +226,35 @@ async function readKvTraces(
 }
 
 function renderTrace(view: TraceView): string {
-  const c = {
-    cardBorder: '#d0d7de',
-    muted: '#57606a',
-    badge: view.ok ? '#1a7f37' : '#cf222e',
-  };
   const summary = [
-    `<span style="color:${c.badge};font-weight:700;">${view.ok ? '✓' : '✗'}</span>`,
-    `<span style="color:${c.muted};">${escapeHtml(view.time)}</span>`,
+    `<span class="p-status ${view.ok ? 'ok' : 'err'}">${view.ok ? '✓' : '✗'}</span>`,
+    `<span class="p-meta">${escapeHtml(view.time)}</span>`,
     `<b>${escapeHtml(view.userid)}</b>`,
-    `<span style="color:${c.muted};">${escapeHtml(view.kind)}</span>`,
-    `<span style="color:${c.muted};">${view.totalMs} ms</span>`,
+    `<span class="p-meta">${escapeHtml(view.kind)}</span>`,
+    `<span class="p-meta">${view.totalMs} ms</span>`,
   ].join(' · ');
 
   const stepsRow = view.steps
     .map(
       (step) =>
-        `<tr><td style="padding:2px 8px 2px 0;color:${c.muted};text-align:right;white-space:nowrap;">${step.ms}ms</td>` +
-        `<td style="padding:2px 8px 2px 0;white-space:nowrap;">${escapeHtml(step.name)}</td>` +
-        `<td style="padding:2px 0;color:${c.muted};word-break:break-all;">${escapeHtml(step.detail)}</td></tr>`,
+        `<tr><td class="num">${step.ms}ms</td>` +
+        `<td>${escapeHtml(step.name)}</td>` +
+        `<td class="wrap">${escapeHtml(step.detail)}</td></tr>`,
     )
     .join('');
 
   const table =
     view.steps.length === 0
-      ? `<div style="color:${c.muted};font-size:13px;">${
+      ? `<div class="p-empty">${
           view.broken ? '这条记录的形状不对（可能是旧版本写入）。' : '没有任何步骤。'
         }</div>`
-      : `<table style="width:100%;border-collapse:collapse;font-size:13px;font-family:ui-monospace,Consolas,monospace;">${stepsRow}</table>`;
+      : `<div class="p-table-wrap" role="region" aria-label="运行步骤" tabindex="0">
+  <table class="p-table">${stepsRow}</table>
+</div>`;
 
-  return `<details style="border:1px solid ${c.cardBorder};border-radius:8px;padding:8px 10px;margin:0 0 8px;">
-  <summary style="cursor:pointer;font-size:13px;line-height:1.7;">${summary}</summary>
-  <div style="margin:8px 0 4px;font-size:13px;word-break:break-all;">${escapeHtml(view.text)}</div>
+  return `<details class="p-disclosure">
+  <summary>${summary}</summary>
+  <div class="p-break p-meta">${escapeHtml(view.text)}</div>
   ${table}
 </details>`;
 }
@@ -289,10 +287,11 @@ export default async function handler(
     sendHtml(
       res,
       500,
-      renderPage({
+      renderMessagePage({
         title: '运行日志',
         subtitle: '读取失败',
-        body: `<p style="font-size:14px;">查询 trace 记录时出错，请稍后重试。</p>`,
+        message: '查询 trace 记录时出错，请稍后重试。',
+        tone: 'err',
       }),
     );
     return;
@@ -307,17 +306,17 @@ export default async function handler(
     ? `筛选用户：<b>${escapeHtml(userid)}</b>（去掉 <code>u</code> 参数看全部）`
     : `全部用户 · 按 <code>u=&lt;userid&gt;</code> 筛选单个人 · <code>n</code> 调整条数（上限 ${MAX_LIMIT}）`;
 
-  const body = `<div style="font-size:13px;color:#57606a;margin:0 0 12px;">${filterLine}</div>
-<div style="font-size:13px;color:#57606a;margin:0 0 12px;">共 ${views.length} 条 · 正式表 agent_runs + 缓存降级记录 · 保留 7 天 · 时间均为北京时间</div>
+  const body = `<p class="p-meta">${filterLine}</p>
+<p class="p-meta">共 ${views.length} 条 · 正式表 agent_runs + 缓存降级记录 · 保留 7 天 · 时间均为北京时间</p>
 ${
   views.length === 0
-    ? '<p style="font-size:14px;">暂无记录。发一条消息给 Agent，几秒后刷新本页。</p>'
+    ? '<div class="p-empty">暂无记录。发一条消息给 Agent，几秒后刷新本页。</div>'
     : views.map(renderTrace).join('\n')
 }`;
 
   sendHtml(
     res,
     200,
-    renderPage({ title: '运行日志', subtitle: '每条消息走了哪条路', body }),
+    renderAppPage({ title: '运行日志', subtitle: '每条消息走了哪条路', body }),
   );
 }

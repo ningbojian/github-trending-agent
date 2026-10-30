@@ -1,11 +1,12 @@
 import { eq } from 'drizzle-orm';
-import { BRAND } from '../src/brand.js';
 import { db } from '../src/db/client.js';
 import { emailSubscribers, kvCache } from '../src/db/schema.js';
+import { renderConfirmEmail, renderManageEmail } from '../src/email/render.js';
 import { emailConfigured, sendEmail } from '../src/email/send.js';
 import { resolveBaseUrl, randomToken } from '../src/email/tokens.js';
 import { readBodyFields } from '../src/http/body.js';
-import { escapeHtml, renderPage, sendHtml, type HtmlResponse } from '../src/http/html.js';
+import { escapeHtml, sendHtml, type HtmlResponse } from '../src/http/html.js';
+import { renderAppPage, renderMessagePage, type MessageTone } from '../src/ui/page.js';
 import { shanghaiToday } from '../src/agent/time.js';
 
 /**
@@ -82,26 +83,26 @@ async function releaseConfirmSlot(date: string): Promise<void> {
 }
 
 function formPage(email = ''): string {
-  const body = `<div style="font-size:14px;line-height:1.7;color:#1f2328;margin-bottom:16px;">
-    填写邮箱后，我们会先发一封确认邮件。确认后每天在固定时间收到中文 GitHub 热榜简报。
-  </div>
+  const body = `<p class="p-lead">填写邮箱后，我们会先发一封确认邮件。确认后每天在固定时间收到中文 GitHub 热榜简报。</p>
   <form method="post" action="/api/subscribe">
-    <label for="email" style="display:block;font-size:14px;margin-bottom:6px;">邮箱地址</label>
-    <input id="email" name="email" type="email" required value="${escapeHtml(email)}"
-      style="width:100%;box-sizing:border-box;padding:12px 14px;font-size:16px;border:1px solid #d0d7de;border-radius:8px;">
-    <button type="submit" style="margin-top:16px;width:100%;padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:${BRAND.colors.accent};color:#ffffff;font-weight:600;">订阅</button>
+    <div class="p-field">
+      <label class="p-label" for="email">邮箱地址</label>
+      <input class="p-input" id="email" name="email" type="email" required
+        autocomplete="email" value="${escapeHtml(email)}">
+    </div>
+    <button class="p-btn block" type="submit">订阅</button>
   </form>
-  <div style="margin-top:16px;font-size:12px;color:#656d76;line-height:1.6;">
-    我们只发送简报，不发其他邮件；每封邮件都带退订链接。
-  </div>`;
-  return renderPage({ title: '订阅 GitHub 热榜简报', body });
+  <p class="p-hint">我们只发送简报，不发其他邮件；每封邮件都带退订链接。</p>`;
+  return renderAppPage({ title: '订阅 GitHub 热榜简报', body });
 }
 
-function messagePage(title: string, message: string, extra = ''): string {
-  return renderPage({
-    title,
-    body: `<div style="font-size:14px;line-height:1.7;color:#1f2328;">${message}</div>${extra}`,
-  });
+function messagePage(
+  title: string,
+  message: string,
+  extra = '',
+  tone: MessageTone = 'info',
+): string {
+  return renderMessagePage({ title, message, extraHtml: extra, tone });
 }
 
 const NEUTRAL_MESSAGE =
@@ -142,11 +143,11 @@ function confirmMail(to: string, confirmUrl: string, resume: boolean): OutgoingM
       '',
       '链接 48 小时内有效。如果这不是你本人操作，忽略本邮件即可。',
     ].join('\n'),
-    html: renderPage({
-      title,
-      body: `<div style="font-size:14px;line-height:1.7;color:#1f2328;">${lead}链接 48 小时内有效。</div>
-      <div style="margin-top:18px;"><a href="${escapeHtml(confirmUrl)}" style="display:inline-block;padding:12px 20px;border-radius:8px;background:${BRAND.colors.accent};color:#ffffff;font-size:15px;text-decoration:none;font-weight:600;">${resume ? '恢复订阅' : '确认订阅'}</a></div>
-      <div style="margin-top:16px;font-size:12px;color:#656d76;line-height:1.6;">如果这不是你本人操作，忽略本邮件即可。</div>`,
+    html: renderConfirmEmail({
+      subject: title,
+      lead,
+      confirmUrl,
+      actionLabel: resume ? '恢复订阅' : '确认订阅',
     }),
   };
 }
@@ -170,15 +171,7 @@ function manageMail(
       '',
       '如果这不是你本人操作，忽略本邮件即可。',
     ].join('\n'),
-    html: renderPage({
-      title: '订阅管理',
-      body: `<div style="font-size:14px;line-height:1.7;color:#1f2328;">你好，这是你的 GitHub 热榜简报订阅管理链接。</div>
-      <div style="margin-top:18px;font-size:14px;line-height:1.9;">
-        <a href="${escapeHtml(settingsUrl)}" style="color:${BRAND.colors.link};">调整推送时间 / 频率</a><br>
-        <a href="${escapeHtml(unsubscribeUrl)}" style="color:#656d76;">退订</a>
-      </div>
-      <div style="margin-top:16px;font-size:12px;color:#656d76;line-height:1.6;">如果这不是你本人操作，忽略本邮件即可。</div>`,
-    }),
+    html: renderManageEmail({ settingsUrl, unsubscribeUrl }),
   };
 }
 
@@ -192,7 +185,7 @@ export default async function handler(
     return;
   }
   if (method !== 'POST') {
-    sendHtml(res, 405, messagePage('请求方式不支持', '本端点支持 GET / POST。'));
+    sendHtml(res, 405, messagePage('请求方式不支持', '本端点支持 GET / POST。', '', 'err'));
     return;
   }
 
@@ -200,7 +193,7 @@ export default async function handler(
     sendHtml(
       res,
       503,
-      messagePage('邮箱订阅即将开放', '邮箱通道尚未配置，请稍后再试。'),
+      messagePage('邮箱订阅即将开放', '邮箱通道尚未配置，请稍后再试。', '', 'err'),
     );
     return;
   }
@@ -208,7 +201,7 @@ export default async function handler(
   const fields = readBodyFields(req.body);
   const email = (fields.email ?? '').trim().toLowerCase();
   if (!isValidEmail(email)) {
-    sendHtml(res, 400, messagePage('邮箱格式不正确', '请返回上一页填写有效的邮箱地址。'));
+    sendHtml(res, 400, messagePage('邮箱格式不正确', '请返回上一页填写有效的邮箱地址。', '', 'err'));
     return;
   }
 
@@ -231,7 +224,7 @@ export default async function handler(
     sendHtml(
       res,
       429,
-      messagePage('今日确认邮件已达上限', '请明天再试，或直接联系管理员。'),
+      messagePage('今日确认邮件已达上限', '请明天再试，或直接联系管理员。', '', 'err'),
     );
     return;
   }
@@ -307,7 +300,7 @@ export default async function handler(
       }
     }
     await releaseConfirmSlot(today);
-    sendHtml(res, 502, messagePage('邮件发送失败', '请稍后重试。'));
+    sendHtml(res, 502, messagePage('邮件发送失败', '请稍后重试。', '', 'err'));
     return;
   }
 

@@ -207,6 +207,8 @@ describe('api/trace 渲染', () => {
     expect(body).toContain('parse-source');
     // createdAt = 01:02:03Z → 北京时间 09:02:03
     expect(body).toContain('09:02:03');
+    expect(body).toContain('p-disclosure');
+    expect(body).toContain('p-table-wrap');
   });
 
   it('失败的一步：ok=false 时摘要行给出 ✗ 标记', async () => {

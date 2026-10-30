@@ -2,7 +2,8 @@ import { gte } from 'drizzle-orm';
 import { env } from '../src/config.js';
 import { db } from '../src/db/client.js';
 import { agentRuns, toolCalls } from '../src/db/schema.js';
-import { escapeHtml, renderPage, sendHtml } from '../src/http/html.js';
+import { escapeHtml, sendHtml } from '../src/http/html.js';
+import { renderAppPage, renderMessagePage } from '../src/ui/page.js';
 import {
   metricsSince,
   resolveDays,
@@ -55,29 +56,22 @@ function latency(pair: { p50: number; p95: number } | null): string {
 
 function table(headers: string[], rows: string[][]): string {
   if (rows.length === 0) {
-    return '<p style="font-size:13px;color:#57606a;">窗口内没有数据。</p>';
+    return '<div class="p-empty">窗口内没有数据。</div>';
   }
   const head = headers
-    .map(
-      (cell) =>
-        `<th style="text-align:left;padding:4px 10px 4px 0;color:#57606a;font-weight:600;">${escapeHtml(cell)}</th>`,
-    )
+    .map((cell) => `<th scope="col">${escapeHtml(cell)}</th>`)
     .join('');
   const body = rows
     .map(
       (row) =>
         `<tr>${row
-          .map(
-            (cell) =>
-              `<td style="padding:3px 10px 3px 0;white-space:nowrap;">${escapeHtml(cell)}</td>`,
-          )
+          .map((cell) => `<td>${escapeHtml(cell)}</td>`)
           .join('')}</tr>`,
     )
     .join('');
-  return `<table style="border-collapse:collapse;font-size:13px;margin:0 0 16px;">
-  <thead><tr>${head}</tr></thead>
-  <tbody>${body}</tbody>
-</table>`;
+  return `<div class="p-table-wrap" role="region" aria-label="数据表" tabindex="0">
+  <table class="p-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+</div>`;
 }
 
 function renderMetrics(summary: MetricsSummary): string {
@@ -95,10 +89,7 @@ function renderMetrics(summary: MetricsSummary): string {
   const tileHtml = tiles
     .map(
       ([label, value]) =>
-        `<div style="border:1px solid #d0d7de;border-radius:8px;padding:8px 12px;min-width:150px;">
-  <div style="font-size:12px;color:#57606a;">${escapeHtml(label)}</div>
-  <div style="font-size:20px;font-weight:700;">${escapeHtml(value)}</div>
-</div>`,
+        `<div class="p-stat"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`,
     )
     .join('');
 
@@ -112,15 +103,15 @@ function renderMetrics(summary: MetricsSummary): string {
     `${row.latencyMs.p50} / ${row.latencyMs.p95} ms`,
   ]);
 
-  return `<div style="display:flex;flex-wrap:wrap;gap:8px;margin:0 0 16px;">${tileHtml}</div>
-<div style="font-size:12px;color:#57606a;margin:0 0 12px;">窗口：最近 ${summary.windowDays} 天 · 生成于 ${escapeHtml(summary.generatedAt)} · 时间为北京时间</div>
-<h3 style="font-size:15px;margin:16px 0 8px;">按天</h3>
+  return `<div class="p-stat-grid">${tileHtml}</div>
+<p class="p-meta">窗口：最近 ${summary.windowDays} 天 · 生成于 ${escapeHtml(summary.generatedAt)} · 时间为北京时间</p>
+<h3 class="p-section-title">按天</h3>
 ${table(['日期', '总数', '成功', '失败'], dayRows)}
-<h3 style="font-size:15px;margin:16px 0 8px;">路由分布</h3>
+<h3 class="p-section-title">路由分布</h3>
 ${table(['处理器', '次数'], routeRows)}
-<h3 style="font-size:15px;margin:16px 0 8px;">解析来源</h3>
+<h3 class="p-section-title">解析来源</h3>
 ${table(['来源', '次数'], parseRows)}
-<h3 style="font-size:15px;margin:16px 0 8px;">工具</h3>
+<h3 class="p-section-title">工具</h3>
 ${table(['工具', '次数', '错误', 'p50 / p95'], toolRows)}`;
 }
 
@@ -179,10 +170,11 @@ export default async function handler(
       sendHtml(
         res,
         503,
-        renderPage({
+        renderMessagePage({
           title: '度量看板',
           subtitle: '暂时不可用',
-          body: `<p style="font-size:14px;">${escapeHtml(hint)}</p>`,
+          message: hint,
+          tone: 'err',
         }),
       );
       return;
@@ -196,7 +188,7 @@ export default async function handler(
     sendHtml(
       res,
       200,
-      renderPage({
+      renderAppPage({
         title: '度量看板',
         subtitle: `最近 ${days} 天`,
         body: renderMetrics(summary),

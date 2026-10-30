@@ -12,6 +12,10 @@ export const BRAND = {
     accent: '#2563EB',
     /** 徽章、步骤序号的底色。 */
     accentSoft: '#DBEAFE',
+    /** 浅蓝底上的深蓝文字（徽章/步骤序号）。 */
+    accentInk: '#1d4ed8',
+    /** 页面顶部径向渐变的起点。 */
+    accentWash: '#e7efff',
     /** 深色底上渐变起点。 */
     accentBright: '#3B82F6',
     /** 深色底上渐变终点 / 天线点 / 高光。 */
@@ -21,7 +25,19 @@ export const BRAND = {
     link: '#2563EB',
     pageBg: '#f6f8fa',
     cardBg: '#ffffff',
+    /** 主卡片渐变的第二段（近白冷调）。 */
+    cardAlt: '#f7f9fc',
     cardBorder: '#d0d7de',
+    /** 浅灰分组块（卡片内的 section）。 */
+    soft: '#eef2f7',
+    /** 分隔线 / 禁用态底色。 */
+    divider: '#eaeef2',
+    onHeader: '#ffffff',
+    headerMuted: '#b1bac4',
+    danger: '#cf222e',
+    dangerBg: '#ffebe9',
+    warn: '#7d4e00',
+    warnBg: '#fff8c5',
     /** 数据语义色：GitHub 的增长绿，只用于「+N 今日 / 新上榜」，不是品牌色。 */
     growth: '#1a7f37',
     growthBg: '#dafbe1',
@@ -31,6 +47,44 @@ export const BRAND = {
   monoFontFamily:
     'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
   maxWidth: 640,
+  /**
+   * 深色玻璃主题：所有网页（面板、join、订阅、邮箱设置、metrics、trace、OAuth）
+   * 共用这一套。邮件仍是浅色——邮件客户端不支持半透明与毛玻璃，另有一套模板。
+   */
+  dark: {
+    /** 页面底色：深墨夜景。 */
+    pageBg: '#101318',
+    /** 页壳/主卡片底色：半透明深墨，叠在页面光源上。 */
+    cardBg: 'rgba(16,19,24,.66)',
+    cardBorder: 'rgba(255,255,255,.12)',
+    text: 'rgba(255,255,255,.95)',
+    muted: 'rgba(255,255,255,.68)',
+    /** 页脚等最弱的一层文字。 */
+    faint: 'rgba(255,255,255,.55)',
+    line: 'rgba(255,255,255,.14)',
+    /** 表单控件描边：比普通分隔线更实，否则输入框边界只有 1.2:1。 */
+    fieldLine: 'rgba(255,255,255,.32)',
+    /** 输入框占位文字：低于正文但仍在 4.5:1 以上。 */
+    placeholder: 'rgba(255,255,255,.55)',
+    /** 卡片内部的浅色玻璃层。 */
+    soft: 'rgba(255,255,255,.055)',
+    /** 浮起的瓦片、输入框、徽章底色。 */
+    card: 'rgba(255,255,255,.09)',
+    /** 强调色：深底上用青色，蓝字在白底才够对比。 */
+    accent: '#22D3EE',
+    accentSoft: 'rgba(34,211,238,.14)',
+    accentInk: '#A5F3FC',
+    ok: '#3FB950',
+    okBg: 'rgba(63,185,80,.14)',
+    danger: '#FF6B6B',
+    dangerBg: 'rgba(255,107,107,.12)',
+    warn: '#E4B863',
+    warnBg: 'rgba(228,184,99,.12)',
+    divider: 'rgba(255,255,255,.10)',
+    /** 页面顶部/底部的两团光源。 */
+    glowCyan: 'rgba(34,211,238,.12)',
+    glowBlue: 'rgba(59,130,246,.14)',
+  },
 } as const;
 
 /**

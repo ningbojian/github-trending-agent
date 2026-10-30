@@ -1,5 +1,4 @@
 import { eq } from 'drizzle-orm';
-import { BRAND } from '../src/brand.js';
 import { db } from '../src/db/client.js';
 import { emailSubscribers } from '../src/db/schema.js';
 import {
@@ -12,12 +11,16 @@ import {
 } from '../src/email/preferences.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
 import { readBodyFields, readBodyFieldsAll } from '../src/http/body.js';
-import { escapeHtml, renderPage, sendHtml, type HtmlResponse } from '../src/http/html.js';
+import { escapeHtml, sendHtml, type HtmlResponse } from '../src/http/html.js';
+import { renderAppPage, renderMessagePage } from '../src/ui/page.js';
 import { SCRAPER_LANGUAGES } from '../src/config.js';
 
 /**
  * 邮箱订阅设置（GET 表单 / POST 保存，凭证是长期有效的 unsubToken）。
  * 越界值回错误提示；未知 token → 404 零写入。
+ *
+ * 视觉：表单统一走 .p-* 类；option 的 selected 与 checkbox 的 checked
+ * 保持原样输出，测试与回显都依赖它们。
  */
 
 export interface SettingsRequest {
@@ -50,7 +53,7 @@ function select(
   options: Array<{ value: string; label: string }>,
   current: string,
 ): string {
-  return `<select name="${escapeHtml(name)}" style="width:100%;box-sizing:border-box;padding:11px 12px;font-size:16px;border:1px solid #d0d7de;border-radius:8px;background:#ffffff;">
+  return `<select class="p-select" id="${escapeHtml(name)}" name="${escapeHtml(name)}">
     ${options
       .map(
         (option) =>
@@ -70,19 +73,19 @@ function form(options: {
 }): string {
   const { token, preferences } = options;
   const error = options.error
-    ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:#ffebe9;color:#cf222e;font-size:14px;">${escapeHtml(options.error)}</div>`
+    ? `<div class="p-banner err" role="alert">${escapeHtml(options.error)}</div>`
     : '';
   const notice = options.notice
-    ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:${BRAND.colors.accentSoft};color:${BRAND.colors.accent};font-size:14px;">${escapeHtml(options.notice)}</div>`
+    ? `<div class="p-banner ok" role="status">${escapeHtml(options.notice)}</div>`
     : '';
   const inactive = options.inactive
-    ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:#fff8c5;color:#7d4e00;font-size:14px;">当前处于退订状态，保存设置不会自动恢复订阅。</div>`
+    ? '<div class="p-banner warn">当前处于退订状态，保存设置不会自动恢复订阅。</div>'
     : '';
 
   const languages = (SCRAPER_LANGUAGES as readonly string[])
     .map(
       (slug) =>
-        `<label style="display:inline-flex;align-items:center;gap:6px;margin:4px 12px 4px 0;font-size:14px;">
+        `<label class="p-check">
           <input type="checkbox" name="languages" value="${escapeHtml(slug)}"${preferences.languages.includes(slug) ? ' checked' : ''}>
           ${escapeHtml(languageLabel(slug))}
         </label>`,
@@ -91,20 +94,20 @@ function form(options: {
 
   const unsubscribe = `${options.baseUrl}/api/email-unsubscribe?t=${encodeURIComponent(token)}`;
 
-  return renderPage({
+  return renderAppPage({
     title: '邮箱订阅设置',
     body: `${error}${notice}${inactive}
     <form method="post" action="/api/email-settings?t=${encodeURIComponent(token)}">
-      <div style="margin-bottom:14px;">
-        <label style="display:block;font-size:14px;margin-bottom:6px;">推送时间（北京时间）</label>
+      <div class="p-field">
+        <label class="p-label" for="pushTime">推送时间（北京时间）</label>
         ${select(
           'pushTime',
           EMAIL_PUSH_TIMES.map((time) => ({ value: time, label: time })),
           preferences.pushTime,
         )}
       </div>
-      <div style="margin-bottom:14px;">
-        <label style="display:block;font-size:14px;margin-bottom:6px;">推送间隔</label>
+      <div class="p-field">
+        <label class="p-label" for="intervalDays">推送间隔</label>
         ${select(
           'intervalDays',
           EMAIL_INTERVALS.map((days) => ({
@@ -114,8 +117,8 @@ function form(options: {
           String(preferences.intervalDays),
         )}
       </div>
-      <div style="margin-bottom:14px;">
-        <label style="display:block;font-size:14px;margin-bottom:6px;">每次简报条数</label>
+      <div class="p-field">
+        <label class="p-label" for="digestCount">每次简报条数</label>
         ${select(
           'digestCount',
           EMAIL_DIGEST_COUNTS.map((count) => ({
@@ -125,19 +128,19 @@ function form(options: {
           String(preferences.digestCount),
         )}
       </div>
-      <div style="margin-bottom:14px;">
-        <label style="display:block;font-size:14px;margin-bottom:6px;">关注方向（不选 = 全部）</label>
-        <div>${languages}</div>
+      <div class="p-field">
+        <span class="p-label">关注方向（不选 = 全部）</span>
+        <div class="p-checks">${languages}</div>
       </div>
-      <div style="margin-bottom:18px;">
-        <label style="display:block;font-size:14px;margin-bottom:6px;">关键词（用逗号分隔，可留空）</label>
-        <input name="keywords" type="text" value="${escapeHtml(preferences.keywords.join(', '))}"
-          style="width:100%;box-sizing:border-box;padding:12px 14px;font-size:16px;border:1px solid #d0d7de;border-radius:8px;">
+      <div class="p-field">
+        <label class="p-label" for="keywords">关键词（用逗号分隔，可留空）</label>
+        <input class="p-input" id="keywords" name="keywords" type="text"
+          value="${escapeHtml(preferences.keywords.join(', '))}">
       </div>
-      <button type="submit" style="width:100%;padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:${BRAND.colors.accent};color:#ffffff;font-weight:600;">保存设置</button>
+      <button class="p-btn block" type="submit">保存设置</button>
     </form>
-    <div style="margin-top:18px;font-size:14px;">
-      <a href="${escapeHtml(unsubscribe)}" style="color:#656d76;">退订</a>
+    <div class="p-actions">
+      <a class="p-btn ghost" href="${escapeHtml(unsubscribe)}">退订</a>
     </div>`,
   });
 }
@@ -148,7 +151,15 @@ export default async function handler(
 ): Promise<void> {
   const method = req.method ?? 'GET';
   if (method !== 'GET' && method !== 'POST') {
-    sendHtml(res, 405, renderPage({ title: '请求方式不支持', body: '<p>本端点支持 GET / POST。</p>' }));
+    sendHtml(
+      res,
+      405,
+      renderMessagePage({
+        title: '请求方式不支持',
+        message: '本端点支持 GET / POST。',
+        tone: 'err',
+      }),
+    );
     return;
   }
 
@@ -157,7 +168,11 @@ export default async function handler(
     sendHtml(
       res,
       400,
-      renderPage({ title: '链接无效', body: '<p>缺少设置参数，请从邮件页脚的链接进入。</p>' }),
+      renderMessagePage({
+        title: '链接无效',
+        message: '缺少设置参数，请从邮件页脚的链接进入。',
+        tone: 'err',
+      }),
     );
     return;
   }
@@ -169,7 +184,11 @@ export default async function handler(
       .where(eq(emailSubscribers.unsubToken, token))
   )[0];
   if (!row) {
-    sendHtml(res, 404, renderPage({ title: '链接无效', body: '<p>链接无效或已失效。</p>' }));
+    sendHtml(
+      res,
+      404,
+      renderMessagePage({ title: '链接无效', message: '链接无效或已失效。', tone: 'err' }),
+    );
     return;
   }
 

@@ -192,9 +192,10 @@ describe('renderJoinPage', () => {
       emailReady: true,
       appName: 'GitHub 热榜',
     });
-    expect(html).toContain(`background:${BRAND.colors.accent}`);
-    expect(html).not.toContain('#1a7f37');
-    expect(html).not.toContain('#dafbe1');
+    expect(html).toContain(`--p-accent:${BRAND.dark.accent}`);
+    expect(html).toContain('class="p-btn"');
+    expect(html).not.toContain(`background:${BRAND.colors.growth}`);
+    expect(html).not.toContain(`background:${BRAND.colors.growthBg}`);
   });
 });
 

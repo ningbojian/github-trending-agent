@@ -1,16 +1,31 @@
-import { and, desc, eq, ilike, inArray, or } from 'drizzle-orm';
+import { desc, eq, ilike, inArray, or } from 'drizzle-orm';
 import { normalizePreferences, PUSH_TIME_RE } from '../src/agent/preferences.js';
-import { formatSubscriptionSummary } from '../src/agent/subscription-summary.js';
+import {
+  forgetAll,
+  forgetFacts,
+  PROFILE_MAX_FACT_CHARS,
+  PROFILE_MAX_FACTS,
+  readProfile,
+  rememberFact,
+} from '../src/agent/profile.js';
+import { signSetKeyToken } from '../src/agent/setkey-token.js';
 import { mergePreferences } from '../src/agent/subscription-store.js';
+import { shanghaiToday } from '../src/agent/time.js';
 import {
   addTrackedRepo,
   listTracked,
   removeTracked,
 } from '../src/agent/tracking-service.js';
-import { shanghaiToday } from '../src/agent/time.js';
+import { readWeekStats, type WeeklyStats } from '../src/agent/weekly-review.js';
 import { db } from '../src/db/client.js';
 import { favorites, kvCache, repos, subscribers } from '../src/db/schema.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
+import { parseRepoRef } from '../src/github/repo-ref.js';
+import {
+  favoriteRepo,
+  loadBindingAuth,
+  unfavoriteRepo,
+} from '../src/github/stars.js';
 import { readBodyFields } from '../src/http/body.js';
 import {
   escapeHtml,
@@ -18,15 +33,30 @@ import {
   sendHtml,
   type HtmlResponse,
 } from '../src/http/html.js';
-import { getPanelVersion, bumpPanelVersion } from '../src/panel/version.js';
+import {
+  PANEL_CARD_BG,
+  PANEL_CARD_BORDER,
+  PANEL_PAGE_BG,
+  PANEL_STYLES,
+} from '../src/panel/styles.js';
+import { POINTER_SCRIPT } from '../src/ui/pointer.js';
+import { APP_FOOTER, APP_TEXT } from '../src/ui/tokens.js';
+import { renderRobotMascot, ROBOT_ATTRIBUTION, ROBOT_SCRIPT } from '../src/panel/robot.js';
+import { AUTO_CITY, cityBySlug, WEATHER_CITIES } from '../src/weather/cities.js';
+import { getWeatherForRequest, type Weather } from '../src/weather/service.js';
+import { bumpPanelVersion, getPanelVersion } from '../src/panel/version.js';
 import { signPanelToken, verifyPanelToken } from '../src/panel/token.js';
 
 /**
- * 薄 H5 控制面板：聊天里做不了的事才放这里——跟踪管理、历史简报、
- * 收藏与搜索、订阅设置。入口由机器人按需发签名链接，不追求日活。
+ * H5 控制面板：聊天里做不了、做起来别扭的事才放这里——订阅暂停/恢复、
+ * 跟踪管理、历史简报、收藏与搜索、记忆增删、模型入口。
  *
- * 所有动态内容都经过 escapeHtml；写操作只接受 POST + 签名 token；
- * token 带版本号，用户在面板里重置后旧链接立即失效。
+ * 数据纪律：所有写操作与聊天命令共用同一套服务层（mergePreferences、
+ * tracking-service、stars 的 favoriteRepo/unfavoriteRepo、profile 的
+ * rememberFact/forgetFacts），面板只是换了个输入方式，不另写一套业务规则。
+ *
+ * 安全：所有动态内容经 escapeHtml；写操作只接受 POST + 签名 token；
+ * token 带版本号，重置后旧链接立即失效。
  */
 
 export interface PanelRequest {
@@ -38,12 +68,17 @@ export interface PanelRequest {
 
 export type PanelResponse = HtmlResponse;
 
-function queryParam(
-  req: PanelRequest,
-  name: string,
-): string {
+function queryParam(req: PanelRequest, name: string): string {
   const value = req.query?.[name];
   return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+}
+
+/** 站内链接：统一走 URLSearchParams，token 与 view 不会把 `&` 拼错。 */
+function href(token: string, params: Record<string, string> = {}): string {
+  const qs = new URLSearchParams();
+  if (token !== '') qs.set('t', token);
+  for (const [key, value] of Object.entries(params)) qs.set(key, value);
+  return `?${qs.toString()}`;
 }
 
 function shiftDate(date: string, days: number): string {
@@ -53,38 +88,66 @@ function shiftDate(date: string, days: number): string {
   return base.toISOString().slice(0, 10);
 }
 
-const INPUT =
-  'width:100%;box-sizing:border-box;padding:10px 12px;font-size:16px;border:1px solid #d0d7de;border-radius:8px;';
-const BUTTON =
-  'display:inline-block;padding:10px 14px;font-size:15px;border:0;border-radius:8px;background:#2563eb;color:#fff;text-decoration:none;';
-const LINK = 'color:#2563eb;text-decoration:none;';
-
-function card(title: string, body: string): string {
-  return `<section style="border:1px solid #d0d7de;border-radius:10px;padding:16px;margin:0 0 14px;">
-  <h2 style="font-size:16px;margin:0 0 10px;">${escapeHtml(title)}</h2>
-  ${body}
-</section>`;
-}
+const NAV_ITEMS: Array<{ view: string; label: string }> = [
+  { view: 'overview', label: '总览' },
+  { view: 'tracking', label: '跟踪' },
+  { view: 'history', label: '历史' },
+  { view: 'favorites', label: '收藏' },
+  { view: 'memory', label: '记忆' },
+  { view: 'settings', label: '设置' },
+];
 
 function nav(token: string, current: string): string {
-  const item = (view: string, label: string): string => {
-    const active = view === current;
-    return `<a href="?t=${encodeURIComponent(token)}&view=${view}" style="margin-right:14px;font-size:14px;${
-      active ? 'font-weight:700;color:#1f2328;' : LINK
-    }">${escapeHtml(label)}</a>`;
-  };
-  return `<nav style="margin:0 0 16px;">${item('overview', '总览')}${item('tracking', '跟踪')}${item(
-    'history',
-    '历史',
-  )}${item('favorites', '收藏')}${item('settings', '设置')}</nav>`;
+  const items = NAV_ITEMS.map(
+    (item) =>
+      `<a href="${href(token, { view: item.view })}"${
+        item.view === current ? ' aria-current="page"' : ''
+      }>${escapeHtml(item.label)}</a>`,
+  ).join('');
+  return `<nav class="panel-nav" aria-label="面板导航">${items}</nav>`;
+}
+
+function card(title: string, body: string): string {
+  return `<section class="p-card"><h2 class="p-card-title">${escapeHtml(title)}</h2>${body}</section>`;
+}
+
+function empty(text: string): string {
+  return `<div class="p-empty">${escapeHtml(text)}</div>`;
+}
+
+function banner(notice?: string, error?: string): string {
+  if (error) {
+    return `<div class="p-banner err">${escapeHtml(error)}</div>`;
+  }
+  if (notice) {
+    return `<div class="p-banner ok">${escapeHtml(notice)}</div>`;
+  }
+  return '';
 }
 
 function page(title: string, token: string, view: string, body: string): string {
   return renderPage({
     title,
-    body: `${nav(token, view)}${body}`,
+    body: `<div class="panel">${nav(token, view)}${body}</div><script>${POINTER_SCRIPT}</script>`,
     subtitle: '控制面板',
+    styles: PANEL_STYLES,
+    pageBg: PANEL_PAGE_BG,
+    cardBg: PANEL_CARD_BG,
+    cardBorder: PANEL_CARD_BORDER,
+    textColor: APP_TEXT,
+    footerColor: APP_FOOTER,
+    cardPadding: '16px',
+    headerClass: 'panel-header',
+    shellClass: 'panel-shell',
+    shellRadius: '20px',
   });
+}
+
+function statusBadge(hasRow: boolean, active: boolean): string {
+  if (!hasRow) return '<span class="p-badge off">尚未订阅</span>';
+  return active
+    ? '<span class="p-badge ok">推送中</span>'
+    : '<span class="p-badge off">已暂停</span>';
 }
 
 interface ArchiveItem {
@@ -116,39 +179,178 @@ async function readArchives(days: number): Promise<Archive[]> {
     .sort((a, b) => b.date.localeCompare(a.date));
 }
 
-async function renderOverview(userid: string, token: string): Promise<string> {
+async function readSubscriber(userid: string) {
   const rows = await db()
     .select()
     .from(subscribers)
     .where(eq(subscribers.wecomUserid, userid));
-  const sub = rows[0];
-  // 摘要里含用户自己填的语言/关键词：逐行转义后再换行，绝不直接拼 HTML。
-  const summary = (
-    sub === undefined
-      ? '没有找到订阅记录。'
-      : formatSubscriptionSummary(sub.preferences, sub.active)
-  )
-    .split('\n')
-    .map(escapeHtml)
-    .join('<br>');
+  return rows[0];
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** 订阅天数按北京日历日算；created_at 缺失/坏值时按 0（今天）处理。 */
+function subscribedDays(createdAt: unknown, now: Date): number {
+  const date = createdAt instanceof Date ? createdAt : new Date(String(createdAt ?? ''));
+  if (Number.isNaN(date.getTime())) return 0;
+  const start = Date.parse(shanghaiToday(date));
+  const today = Date.parse(shanghaiToday(now));
+  return Math.max(0, Math.round((today - start) / DAY_MS));
+}
+
+/**
+ * 本周个人卡：数字全部来自周复盘同一套统计（readWeekStats），
+ * 不另算一套；没有数据时只说一句，不摆一排 0。
+ */
+function personalCard(
+  sub: { createdAt?: unknown } | undefined,
+  week: WeeklyStats | null,
+): string {
+  if (sub === undefined) return '';
+
+  const days = subscribedDays(sub.createdAt, new Date());
+  const pushed = week?.pushed ?? 0;
+  const favorited = week?.favorited ?? 0;
+  const liked = week?.liked ?? 0;
+  const disliked = week?.disliked ?? 0;
+  const more = week?.more ?? [];
+  const less = week?.less ?? [];
+
+  if (days === 0 && pushed === 0 && favorited === 0) {
+    return card('本周', empty('今天刚订阅。明天 9 点的简报是第一封。'));
+  }
+
+  let taste: string;
+  if (more.length > 0 || less.length > 0) {
+    const parts: string[] = [];
+    if (more.length > 0) {
+      parts.push(`最近更常看 <b>${more.map(escapeHtml).join('、')}</b>`);
+    }
+    if (less.length > 0) {
+      parts.push(`少看 <b>${less.map(escapeHtml).join('、')}</b>`);
+    }
+    taste = `<div class="p-taste">${parts.join('；')}</div>`;
+  } else if (liked + disliked > 0) {
+    taste = '<div class="p-taste">口味信号还不多，再回几次「感兴趣 / 不感兴趣」。</div>';
+  } else {
+    taste =
+      '<div class="p-taste">还没有口味信号。在简报上回「感兴趣」或「不感兴趣」，我就知道该多推什么。</div>';
+  }
+
+  return card(
+    '本周',
+    `<div class="p-stats">
+      <div class="p-stat"><strong>${pushed}</strong><span>条推送</span></div>
+      <div class="p-stat"><strong>${favorited}</strong><span>个收藏</span></div>
+      <div class="p-stat"><strong>${days + 1}</strong><span>订阅天数</span></div>
+    </div>${taste}`,
+  );
+}
+
+/** 暂停/恢复的按钮。没有订阅者行时不显示（恢复需要先发「订阅 …」建行）。 */
+function subscriptionToggle(
+  token: string,
+  view: string,
+  hasRow: boolean,
+  active: boolean,
+): string {
+  if (!hasRow) return '';
+  const action = active ? 'unsubscribe' : 'resubscribe';
+  const label = active ? '暂停推送' : '恢复推送';
+  const style = active ? 'p-btn ghost' : 'p-btn';
+  return `<form method="post" action="${href(token, { view })}">
+    <input type="hidden" name="action" value="${action}">
+    <button class="${style}" type="submit">${label}</button>
+  </form>`;
+}
+
+async function renderOverview(
+  userid: string,
+  token: string,
+  headers: PanelRequest['headers'],
+  notice?: string,
+  error?: string,
+): Promise<string> {
+  const sub = await readSubscriber(userid);
+  const prefs = normalizePreferences(sub?.preferences ?? {});
+  const active = sub?.active ?? false;
   const tracked = await listTracked(userid);
   const archives = await readArchives(1);
+  const memoryCount = (await readProfile(userid))?.facts.length ?? 0;
+  let week: WeeklyStats | null = null;
+  try {
+    week = await readWeekStats(userid);
+  } catch (err) {
+    console.error('panel weekly stats failed:', err);
+  }
+  let weather: Weather | null = null;
+  try {
+    const citySlug = (sub?.preferences as { weatherCity?: unknown } | undefined)?.weatherCity;
+    weather = await getWeatherForRequest(headers, citySlug, new Date());
+  } catch (err) {
+    console.error('panel weather failed:', err);
+  }
+
+  const cadence =
+    prefs.intervalDays > 1
+      ? `每 ${prefs.intervalDays} 天 · ${prefs.pushTime}`
+      : `每天 ${prefs.pushTime}`;
+  const chips = [...prefs.languages, ...prefs.keywords]
+    .map((item) => `<span class="p-chip">${escapeHtml(item)}</span>`)
+    .join('');
+
+  const hero = `<section class="p-card p-hero-card">
+    <div class="p-hero-head">
+      <div class="p-hero-time">${escapeHtml(cadence)}</div>
+      ${statusBadge(sub !== undefined, active)}
+    </div>
+    <div class="p-hero-sub">北京时间 · 每次 ${prefs.digestCount} 条</div>
+    ${chips ? `<div class="p-chips">${chips}</div>` : ''}
+    <div class="p-actions">
+      <a class="p-btn" href="${href(token, { view: 'settings' })}">调整设置</a>
+      ${subscriptionToggle(token, 'overview', sub !== undefined, active)}
+    </div>
+    ${renderRobotMascot(weather)}
+  </section>`;
+
+  const tiles = `<div class="p-grid">
+    <a class="p-tile" href="${href(token, { view: 'tracking' })}">
+      <div class="p-tile-num">${tracked.length}</div>
+      <div class="p-tile-label">跟踪仓库</div>
+      <div class="p-tile-hint">release 与 star 异动</div>
+    </a>
+    <a class="p-tile" href="${href(token, { view: 'favorites' })}">
+      <div class="p-tile-num">★</div>
+      <div class="p-tile-label">收藏</div>
+      <div class="p-tile-hint">收藏、取消与搜索</div>
+    </a>
+    <a class="p-tile" href="${href(token, { view: 'history' })}">
+      <div class="p-tile-num">${archives[0] ? archives[0].items.length : '—'}</div>
+      <div class="p-tile-label">最近简报</div>
+      <div class="p-tile-hint">${archives[0] ? escapeHtml(archives[0].date) : '还没有归档'}</div>
+    </a>
+    <a class="p-tile" href="${href(token, { view: 'memory' })}">
+      <div class="p-tile-num">${memoryCount}</div>
+      <div class="p-tile-label">记忆</div>
+      <div class="p-tile-hint">你的背景与偏好</div>
+    </a>
+  </div>`;
+
+  const recent = archives[0]
+    ? `<a class="p-btn ghost" href="${href(token, {
+        view: 'history',
+        date: archives[0].date,
+      })}">看看 ${escapeHtml(archives[0].date)} 的简报</a>`
+    : empty('今天还没有归档。等明天 9 点。');
 
   return page(
     '总览',
     token,
     'overview',
-    `${card('订阅', `<div style="font-size:14px;line-height:1.8;">${summary}</div>`)}
-     ${card(
-       '跟踪',
-       `<div style="font-size:14px;line-height:1.8;">${tracked.length} 个仓库 · <a style="${LINK}" href="?t=${encodeURIComponent(token)}&view=tracking">管理</a></div>`,
-     )}
-     ${card(
-       '最近简报',
-       archives[0]
-         ? `<div style="font-size:14px;line-height:1.8;"><a style="${LINK}" href="?t=${encodeURIComponent(token)}&view=history&date=${encodeURIComponent(archives[0].date)}">${escapeHtml(archives[0].date)}</a> · ${archives[0].items.length} 条</div>`
-         : '<div style="font-size:14px;color:#57606a;">还没有归档。</div>',
-     )}`,
+    `${banner(notice, error)}${hero}${personalCard(sub, week)}${tiles}
+     ${card('最近简报', recent)}
+     <p class="p-foot">${escapeHtml(ROBOT_ATTRIBUTION)}</p>
+     <script>${ROBOT_SCRIPT}</script>`,
   );
 }
 
@@ -156,53 +358,62 @@ async function renderTracking(
   userid: string,
   token: string,
   notice?: string,
+  error?: string,
 ): Promise<string> {
   const tracked = await listTracked(userid);
-  const noticeHtml = notice
-    ? `<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#dafbe1;color:#1a7f37;font-size:14px;">${escapeHtml(notice)}</div>`
-    : '';
   const rows = tracked.length
-    ? tracked
+    ? `<ul class="p-list">${tracked
         .map(
-          (row) => `<li style="margin:0 0 8px;font-size:14px;">
-        <a style="${LINK}" href="https://github.com/${escapeHtml(row.identifier)}">${escapeHtml(row.displayName)}</a>
-        <form method="post" action="?t=${encodeURIComponent(token)}&view=tracking" style="display:inline;margin-left:8px;">
+          (row) => `<li class="p-row">
+        <div class="p-row-main">
+          <a href="https://github.com/${escapeHtml(row.identifier)}" target="_blank" rel="noopener">${escapeHtml(row.displayName)}</a>
+          <div class="p-row-sub">${escapeHtml(row.identifier)}</div>
+        </div>
+        <form method="post" action="${href(token, { view: 'tracking' })}">
           <input type="hidden" name="action" value="untrack">
           <input type="hidden" name="identifier" value="${escapeHtml(row.identifier)}">
-          <button type="submit" style="border:0;background:none;color:#cf222e;font-size:13px;cursor:pointer;">取消</button>
+          <button class="p-btn danger" type="submit">取消</button>
         </form>
       </li>`,
         )
-        .join('')
-    : '<div style="font-size:14px;color:#57606a;">还没有跟踪任何仓库。</div>';
+        .join('')}</ul>`
+    : empty('还没跟踪任何仓库。加一个 owner/repo，有 release 或 star 加速时我会说一声。');
 
   return page(
     '跟踪管理',
     token,
     'tracking',
-    `${noticeHtml}
-     ${card('正在跟踪', `<ul style="padding-left:20px;margin:0;">${rows}</ul>`)}
+    `${banner(notice, error)}
+     ${card('跟踪中', rows)}
      ${card(
-       '添加仓库',
-       `<form method="post" action="?t=${encodeURIComponent(token)}&view=tracking">
-          <input name="action" type="hidden" value="track">
-          <input name="repo" placeholder="owner/repo 或 GitHub 链接" style="${INPUT}" required>
-          <button type="submit" style="${BUTTON}margin-top:10px;">添加</button>
-        </form>
-        <div style="font-size:12px;color:#57606a;margin-top:8px;">最多 10 个；每天只报新 release、star 加速或归档。</div>`,
+       '加一个',
+       `<form method="post" action="${href(token, { view: 'tracking' })}">
+          <input type="hidden" name="action" value="track">
+          <label class="p-field">
+            <span class="p-label">仓库</span>
+            <input class="p-input" name="repo" placeholder="owner/repo 或 GitHub 链接" required>
+            <span class="p-hint">最多 10 个；每天只报新 release、star 加速或归档。</span>
+          </label>
+          <button class="p-btn block" type="submit">添加跟踪</button>
+        </form>`,
      )}`,
   );
 }
 
-function renderArchiveDetail(archive: Archive, token: string): string {
+function renderArchiveDetail(archive: Archive): string {
   const items = archive.items
     .map(
-      (item, index) =>
-        `<li style="margin:0 0 8px;font-size:14px;line-height:1.6;">${index + 1}. <a style="${LINK}" href="${escapeHtml(item.url)}">${escapeHtml(item.fullName)}</a> ★${item.stars} (+${item.starsDelta})${item.summary ? ` — ${escapeHtml(item.summary)}` : ''}</li>`,
+      (item, index) => `<div class="p-item">
+        <div class="p-item-rank">${index + 1}</div>
+        <div class="p-item-body">
+          <a class="p-item-name" href="${escapeHtml(item.url)}">${escapeHtml(item.fullName)}</a>
+          <div class="p-item-meta">★${item.stars} · +${item.starsDelta}</div>
+          ${item.summary ? `<div class="p-item-summary">${escapeHtml(item.summary)}</div>` : ''}
+        </div>
+      </div>`,
     )
     .join('');
-  return `<div style="font-size:14px;white-space:pre-wrap;line-height:1.7;margin:0 0 14px;">${escapeHtml(archive.message ?? '当天没有观察。')}</div>
-    <ul style="padding-left:20px;margin:0;">${items}</ul>`;
+  return `<div class="p-prose">${escapeHtml(archive.message ?? '当天没有观察。')}</div>${items}`;
 }
 
 async function renderHistory(
@@ -215,47 +426,120 @@ async function renderHistory(
   if (date !== '') {
     const archive = archives.find((item) => item.date === date);
     if (archive === undefined) {
-      return page('历史简报', token, 'history', card('没有这一天的归档', ''));
+      return page(
+        '历史简报',
+        token,
+        'history',
+        `${card('没有这一天的归档', empty('换一天看看。'))}
+         <p><a class="p-btn ghost" href="${href(token, { view: 'history' })}">← 返回列表</a></p>`,
+      );
     }
     return page(
       '历史简报',
       token,
       'history',
-      `${card(
-        archive.date,
-        `${renderArchiveDetail(archive, token)}<p><a style="${LINK}" href="?t=${encodeURIComponent(token)}&view=history">← 返回列表</a></p>`,
-      )}`,
+      `${card(archive.date, renderArchiveDetail(archive))}
+       <p><a class="p-btn ghost" href="${href(token, { view: 'history' })}">← 返回列表</a></p>`,
     );
   }
 
   const list = archives.length
-    ? archives
+    ? `<ul class="p-list">${archives
         .map(
-          (archive) =>
-            `<li style="margin:0 0 8px;font-size:14px;"><a style="${LINK}" href="?t=${encodeURIComponent(token)}&view=history&date=${encodeURIComponent(archive.date)}">${escapeHtml(archive.date)}</a> · ${archive.items.length} 条 · ${archive.message ? '有观察' : '无观察'}</li>`,
+          (archive) => `<li class="p-row">
+          <a class="p-row-main p-row-link" href="${href(token, {
+            view: 'history',
+            date: archive.date,
+          })}">
+            <span class="p-row-title">${escapeHtml(archive.date)}</span>
+            <span class="p-row-sub">${archive.items.length} 条 · ${archive.message ? '有观察' : '无观察'}</span>
+          </a>
+          <span class="p-row-arrow" aria-hidden="true">›</span>
+        </li>`,
         )
-        .join('')
-    : '<div style="font-size:14px;color:#57606a;">还没有历史归档（从 2026-10-29 起积累）。</div>';
-  return page('历史简报', token, 'history', card('最近 14 天', `<ul style="padding-left:20px;margin:0;">${list}</ul>`));
+        .join('')}</ul>`
+    : empty('还没有归档。明天 9 点之后再来看。');
+
+  return page('历史简报', token, 'history', card('最近 14 天', list));
+}
+
+/** 收藏写失败时的统一中文文案（与聊天命令同一套语义）。 */
+function favoriteError(kind: 'unbound' | 'expired'): string {
+  return kind === 'unbound'
+    ? '先发「绑定」授权 GitHub，才能收藏并同步 star'
+    : '授权已过期，请重新发「绑定」';
+}
+
+async function applyFavoriteAction(
+  userid: string,
+  action: 'favorite' | 'unfavorite',
+  rawFullName: string,
+): Promise<{ notice?: string; error?: string }> {
+  const ref = parseRepoRef(rawFullName);
+  if (ref === null) {
+    return { error: '这个仓库名不对，应该是 owner/repo。' };
+  }
+  const fullName = `${ref.owner}/${ref.name}`;
+  const auth = await loadBindingAuth(userid);
+  if (auth.kind !== 'ok') {
+    return { error: favoriteError(auth.kind) };
+  }
+
+  if (action === 'favorite') {
+    const result = await favoriteRepo(userid, auth.token, fullName);
+    if (result === 'auth_failed') {
+      return { error: favoriteError('expired') };
+    }
+    if (result === 'sync_failed') {
+      return { notice: `记下了：${fullName}。GitHub 没同步上，以后不会再推它。` };
+    }
+    return { notice: `收好了：${fullName}。GitHub 上也 star 了。` };
+  }
+
+  const result = await unfavoriteRepo(userid, auth.token, fullName);
+  if (result === 'auth_failed') {
+    return { error: favoriteError('expired') };
+  }
+  if (result === 'failed') {
+    return { error: '没取消成功，稍后再试。' };
+  }
+  return { notice: `取消了：${fullName}。GitHub 上的 star 也撤了。` };
 }
 
 async function renderFavorites(
   userid: string,
   token: string,
   query: string,
+  notice?: string,
+  error?: string,
 ): Promise<string> {
   const favRows = await db()
     .select()
     .from(favorites)
     .where(eq(favorites.wecomUserid, userid));
-  const favList = favRows.length
-    ? favRows
+  // 新收藏的排前面；createdAt 可能是 Date（PG timestamp 序列化）。
+  const sorted = [...favRows].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+  const owned = new Set(sorted.map((row) => row.fullName.toLowerCase()));
+
+  const favList = sorted.length
+    ? `<ul class="p-list">${sorted
         .map(
-          (row) =>
-            `<li style="margin:0 0 6px;font-size:14px;"><a style="${LINK}" href="https://github.com/${escapeHtml(row.fullName)}">${escapeHtml(row.fullName)}</a></li>`,
+          (row) => `<li class="p-row">
+          <div class="p-row-main">
+            <a href="https://github.com/${escapeHtml(row.fullName)}" target="_blank" rel="noopener">${escapeHtml(row.fullName)}</a>
+            <div class="p-row-sub">${row.starredOnGithub ? '已同步到 GitHub' : '仅本地收藏'}</div>
+          </div>
+          <form method="post" action="${href(token, { view: 'favorites' })}">
+            <input type="hidden" name="action" value="unfavorite">
+            <input type="hidden" name="fullName" value="${escapeHtml(row.fullName)}">
+            <button class="p-btn danger" type="submit">取消</button>
+          </form>
+        </li>`,
         )
-        .join('')
-    : '<div style="font-size:14px;color:#57606a;">还没有收藏。</div>';
+        .join('')}</ul>`
+    : empty('这里还空着。搜一个仓库，点「收藏」；或者在简报里回「收藏 1」。');
 
   let searchHtml = '';
   if (query.trim() !== '') {
@@ -270,31 +554,111 @@ async function renderFavorites(
       .where(or(ilike(repos.fullName, pattern), ilike(repos.description, pattern)))
       .orderBy(desc(repos.stars))
       .limit(10);
+    // 收藏后回到同一个搜索页，而不是把用户刚搜的结果清掉。
+    const favoriteAction = href(token, {
+      view: 'favorites',
+      q: query,
+    });
     searchHtml = results.length
-      ? `<ul style="padding-left:20px;margin:10px 0 0;">${results
-          .map(
-            (row) =>
-              `<li style="margin:0 0 6px;font-size:14px;"><a style="${LINK}" href="https://github.com/${escapeHtml(row.fullName)}">${escapeHtml(row.fullName)}</a> ★${row.stars}${row.description ? ` — ${escapeHtml(row.description.slice(0, 80))}` : ''}</li>`,
-          )
+      ? `<ul class="p-list">${results
+          .map((row) => {
+            const action = owned.has(row.fullName.toLowerCase())
+              ? '<span class="p-badge ok">已收藏</span>'
+              : `<form method="post" action="${favoriteAction}">
+                  <input type="hidden" name="action" value="favorite">
+                  <input type="hidden" name="fullName" value="${escapeHtml(row.fullName)}">
+                  <button class="p-btn ghost sm" type="submit">收藏</button>
+                </form>`;
+            return `<li class="p-row">
+              <div class="p-row-main">
+                <a href="https://github.com/${escapeHtml(row.fullName)}" target="_blank" rel="noopener">${escapeHtml(row.fullName)}</a>
+                <div class="p-row-sub">★${row.stars}${row.description ? ` · ${escapeHtml(row.description.slice(0, 70))}` : ''}</div>
+              </div>
+              ${action}
+            </li>`;
+          })
           .join('')}</ul>`
-      : '<div style="font-size:14px;color:#57606a;margin-top:10px;">没有找到。</div>';
+      : empty('没搜到。换个仓库名或关键词试试。');
   }
 
   return page(
     '收藏与搜索',
     token,
     'favorites',
-    `${card('我的收藏', `<ul style="padding-left:20px;margin:0;">${favList}</ul>`)}
+    `${banner(notice, error)}
+     ${card('我的收藏', favList)}
      ${card(
-       '搜索仓库',
+       '搜一个仓库',
        `<form method="get" action="">
           <input type="hidden" name="t" value="${escapeHtml(token)}">
           <input type="hidden" name="view" value="favorites">
-          <input name="q" value="${escapeHtml(query)}" placeholder="仓库名或关键词" style="${INPUT}">
-          <button type="submit" style="${BUTTON}margin-top:10px;">搜索</button>
-        </form>${searchHtml}`,
+          <input class="p-input" name="q" value="${escapeHtml(query)}" placeholder="仓库名或关键词">
+          <button class="p-btn block p-mt" type="submit">搜索</button>
+        </form>
+        ${searchHtml}`,
      )}`,
   );
+}
+
+async function renderMemory(
+  userid: string,
+  token: string,
+  notice?: string,
+  error?: string,
+): Promise<string> {
+  const profile = await readProfile(userid);
+  const facts = profile?.facts ?? [];
+  const list = facts.length
+    ? `<ul class="p-list">${facts
+        .map(
+          (fact, index) => `<li class="p-row">
+          <span class="p-row-num">${index + 1}</span>
+          <div class="p-row-main">${escapeHtml(fact)}</div>
+          <form method="post" action="${href(token, { view: 'memory' })}">
+            <input type="hidden" name="action" value="forget">
+            <input type="hidden" name="term" value="${escapeHtml(fact)}">
+            <button class="p-btn danger" type="submit">删除</button>
+          </form>
+        </li>`,
+        )
+        .join('')}</ul>`
+    : empty('还没写过记忆。写一句你在做什么，我回答时会照着你的语境来。');
+
+  return page(
+    '我的记忆',
+    token,
+    'memory',
+    `${banner(notice, error)}
+     ${card(`我的记忆（${facts.length}/${PROFILE_MAX_FACTS}）`, list)}
+     ${card(
+       '记一句',
+       `<form method="post" action="${href(token, { view: 'memory' })}">
+          <input type="hidden" name="action" value="remember">
+          <label class="p-field">
+            <span class="p-label">一句话背景</span>
+            <input class="p-input" name="fact" placeholder="例如：我主要做 Agent 开发" required>
+            <span class="p-hint">最多 ${PROFILE_MAX_FACTS} 条，每条 ${PROFILE_MAX_FACT_CHARS} 字；180 天未使用自动过期。</span>
+          </label>
+          <button class="p-btn block" type="submit">记住</button>
+        </form>`,
+     )}
+     ${
+       facts.length > 0
+         ? card(
+             '清空',
+             `<form method="post" action="${href(token, { view: 'memory' })}">
+                <input type="hidden" name="action" value="forget-all">
+                <button class="p-btn danger" type="submit">清空全部记忆</button>
+              </form>`,
+           )
+         : ''
+     }`,
+  );
+}
+
+/** 模型入口：一次点击进 set-key 表单页（15 分钟一次性 token）。 */
+function modelEntryLink(userid: string): string {
+  return `/api/set-key?t=${encodeURIComponent(signSetKeyToken(userid))}`;
 }
 
 async function renderSettings(
@@ -303,51 +667,93 @@ async function renderSettings(
   notice?: string,
   error?: string,
 ): Promise<string> {
-  const rows = await db()
-    .select()
-    .from(subscribers)
-    .where(eq(subscribers.wecomUserid, userid));
-  const prefs = normalizePreferences(rows[0]?.preferences ?? {});
-  const languages = Array.isArray((rows[0]?.preferences as { languages?: unknown })?.languages)
-    ? ((rows[0]?.preferences as { languages: string[] }).languages.join(', '))
+  const sub = await readSubscriber(userid);
+  const prefs = normalizePreferences(sub?.preferences ?? {});
+  const languages = Array.isArray((sub?.preferences as { languages?: unknown })?.languages)
+    ? (sub?.preferences as { languages: string[] }).languages.join(', ')
     : '';
-  const keywords = Array.isArray((rows[0]?.preferences as { keywords?: unknown })?.keywords)
-    ? ((rows[0]?.preferences as { keywords: string[] }).keywords.join(', '))
+  const keywords = Array.isArray((sub?.preferences as { keywords?: unknown })?.keywords)
+    ? (sub?.preferences as { keywords: string[] }).keywords.join(', ')
     : '';
-  const banner = error
-    ? `<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#ffebe9;color:#cf222e;font-size:14px;">${escapeHtml(error)}</div>`
-    : notice
-      ? `<div style="margin-bottom:12px;padding:10px 12px;border-radius:8px;background:#dafbe1;color:#1a7f37;font-size:14px;">${escapeHtml(notice)}</div>`
-      : '';
+  const active = sub?.active ?? false;
+  const rawWeatherCity = (
+    sub?.preferences as { weatherCity?: unknown } | undefined
+  )?.weatherCity;
+  const weatherCity =
+    typeof rawWeatherCity === 'string' ? rawWeatherCity : AUTO_CITY;
+  const cityOptions = [
+    `<option value="${AUTO_CITY}"${weatherCity === AUTO_CITY ? ' selected' : ''}>自动（按网络位置）</option>`,
+    ...WEATHER_CITIES.map(
+      (city) =>
+        `<option value="${city.slug}"${weatherCity === city.slug ? ' selected' : ''}>${escapeHtml(city.name)}</option>`,
+    ),
+  ].join('');
+
+  const status = `<div class="p-hero-top">
+      <div>
+        <div class="p-hero-label">推送状态</div>
+        <div class="p-hero-time sm">${escapeHtml(prefs.pushTime)} · ${
+          prefs.intervalDays > 1 ? `每 ${prefs.intervalDays} 天` : '每天'
+        }</div>
+        <div class="p-hero-sub">北京时间 · 每次 ${prefs.digestCount} 条</div>
+      </div>
+      ${statusBadge(sub !== undefined, active)}
+    </div>
+    <div class="p-actions">${subscriptionToggle(token, 'settings', sub !== undefined, active)}</div>`;
 
   return page(
     '订阅设置',
     token,
     'settings',
-    `${banner}
-     <form method="post" action="?t=${encodeURIComponent(token)}&view=settings">
+    `${banner(notice, error)}
+     ${card('状态', status)}
+     <form method="post" action="${href(token, { view: 'settings' })}">
       ${card(
         '推送',
-        `<label style="font-size:14px;display:block;margin-bottom:6px;">推送时间（北京时间 HH:MM）</label>
-         <input name="pushTime" value="${escapeHtml(prefs.pushTime)}" style="${INPUT}" placeholder="09:00">
-         <label style="font-size:14px;display:block;margin:12px 0 6px;">每次条数（1–8）</label>
-         <input name="digestCount" value="${String(prefs.digestCount)}" style="${INPUT}" inputmode="numeric">
-         <label style="font-size:14px;display:block;margin:12px 0 6px;">推送间隔（1–30 天）</label>
-         <input name="intervalDays" value="${String(prefs.intervalDays)}" style="${INPUT}" inputmode="numeric">`,
+        `<label class="p-field">
+           <span class="p-label">推送时间（北京时间 HH:MM）</span>
+           <input class="p-input" name="pushTime" value="${escapeHtml(prefs.pushTime)}" placeholder="09:00">
+         </label>
+         <label class="p-field">
+           <span class="p-label">每次条数（1–8）</span>
+           <input class="p-input" name="digestCount" value="${String(prefs.digestCount)}" inputmode="numeric">
+         </label>
+         <label class="p-field">
+           <span class="p-label">推送间隔（1–30 天）</span>
+           <input class="p-input" name="intervalDays" value="${String(prefs.intervalDays)}" inputmode="numeric">
+         </label>`,
       )}
       ${card(
         '偏好',
-        `<label style="font-size:14px;display:block;margin-bottom:6px;">语言（逗号分隔，留空为全部）</label>
-         <input name="languages" value="${escapeHtml(languages)}" style="${INPUT}" placeholder="python, rust">
-         <label style="font-size:14px;display:block;margin:12px 0 6px;">关键词（逗号分隔，留空为不限制）</label>
-         <input name="keywords" value="${escapeHtml(keywords)}" style="${INPUT}" placeholder="ai, agent">`,
+        `<label class="p-field">
+           <span class="p-label">语言（逗号分隔，留空为全部）</span>
+           <input class="p-input" name="languages" value="${escapeHtml(languages)}" placeholder="python, rust">
+         </label>
+         <label class="p-field">
+           <span class="p-label">关键词（逗号分隔，留空为不限制）</span>
+           <input class="p-input" name="keywords" value="${escapeHtml(keywords)}" placeholder="ai, agent">
+         </label>
+         <label class="p-field">
+           <span class="p-label">天气城市</span>
+           <select class="p-select" name="weatherCity">${cityOptions}</select>
+           <span class="p-hint">自动只到城市级；不准时手动选一个。</span>
+         </label>`,
       )}
-      <button type="submit" style="${BUTTON}">保存</button>
+      <button class="p-btn block" type="submit">保存设置</button>
      </form>
-     <form method="post" action="?t=${encodeURIComponent(token)}&view=settings" style="margin-top:12px;">
-      <input type="hidden" name="action" value="reset">
-      <button type="submit" style="border:0;background:none;color:#cf222e;font-size:13px;cursor:pointer;">重置面板链接（旧链接立即失效）</button>
-     </form>`,
+     ${card(
+       '模型',
+       `<div class="p-row-sub p-mb">互动里的中文简介可以用你自己的 AI Key，不占用运营方额度。</div>
+        <a class="p-btn ghost" href="${escapeHtml(modelEntryLink(userid))}">配置我的 AI Key</a>`,
+     )}
+     ${card(
+       '面板链接',
+       `<div class="p-row-sub p-mb">链接可被转发，重置后旧链接立即失效。</div>
+        <form method="post" action="${href(token, { view: 'settings' })}">
+          <input type="hidden" name="action" value="reset">
+          <button class="p-btn danger" type="submit">重置面板链接</button>
+        </form>`,
+     )}`,
   );
 }
 
@@ -356,6 +762,86 @@ function splitList(value: string): string[] {
     .split(/[,，、\s]+/)
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
+}
+
+interface ActionOutcome {
+  notice?: string;
+  error?: string;
+}
+
+/** 面板里的所有写操作：与聊天命令共用服务层，这里只做输入校验与文案映射。 */
+async function applyAction(
+  userid: string,
+  view: string,
+  fields: Record<string, string>,
+): Promise<ActionOutcome> {
+  if (view === 'tracking') {
+    if (fields.action === 'track') {
+      const result = await addTrackedRepo(userid, fields.repo ?? '');
+      if (result.ok) {
+        return {
+          notice: `跟上了：${result.displayName}（★${result.stars}）。有 release 或 star 加速时我会说一声。`,
+        };
+      }
+      return {
+        error:
+          result.reason === 'usage'
+            ? '用法：owner/repo 或 GitHub 链接'
+            : result.reason === 'limit'
+              ? '最多 10 个。先取消一个。'
+              : '这个仓库暂时读不到，等下再试。',
+      };
+    }
+    if (fields.action === 'untrack') {
+      await removeTracked(userid, fields.identifier ?? '');
+      return { notice: '不跟了。' };
+    }
+  }
+
+  if (view === 'favorites' && (fields.action === 'favorite' || fields.action === 'unfavorite')) {
+    return applyFavoriteAction(
+      userid,
+      fields.action,
+      fields.fullName ?? '',
+    );
+  }
+
+  if (view === 'memory') {
+    if (fields.action === 'remember') {
+      const status = await rememberFact(userid, fields.fact ?? '');
+      if (status === 'added') return { notice: '记住了。' };
+      if (status === 'duplicate') return { notice: '这条已经记过了。' };
+      if (status === 'full') {
+        return { error: `记忆满了（${PROFILE_MAX_FACTS} 条）。先删一条。` };
+      }
+      return { error: '没写进去，稍后再试。' };
+    }
+    if (fields.action === 'forget') {
+      const term = (fields.term ?? '').trim();
+      if (term === '') return { error: '要删哪一条？' };
+      const removed = await forgetFacts(userid, term);
+      return removed.length > 0
+        ? { notice: `删了：${removed.join('；')}` }
+        : { error: '没找到匹配的记忆。' };
+    }
+    if (fields.action === 'forget-all') {
+      const ok = await forgetAll(userid);
+      return ok ? { notice: '清空了。' } : { error: '没清掉，稍后再试。' };
+    }
+  }
+
+  if (view === 'overview' || view === 'settings') {
+    if (fields.action === 'unsubscribe') {
+      await mergePreferences(userid, {}, { active: false });
+      return { notice: '先安静几天。收藏和跟踪都还在。' };
+    }
+    if (fields.action === 'resubscribe') {
+      await mergePreferences(userid, {}, { active: true });
+      return { notice: '好，明天 9 点见。' };
+    }
+  }
+
+  return {};
 }
 
 export default async function handler(
@@ -384,45 +870,33 @@ export default async function handler(
   const view = queryParam(req, 'view') || 'overview';
   const fields = method === 'POST' ? readBodyFields(req.body) : {};
   let notice: string | undefined;
+  let error: string | undefined;
 
-  if (method === 'POST' && view === 'tracking') {
-    if (fields.action === 'track') {
-      const result = await addTrackedRepo(userid, fields.repo ?? '');
-      notice = result.ok
-        ? `已跟踪 ${result.displayName}（当前 ★${result.stars}）`
-        : result.reason === 'usage'
-          ? '用法：owner/repo 或 GitHub 链接'
-          : result.reason === 'limit'
-            ? '最多同时跟踪 10 个仓库'
-            : '暂时读不到这个仓库';
-    } else if (fields.action === 'untrack') {
-      await removeTracked(userid, fields.identifier ?? '');
-      notice = '已取消跟踪';
-    }
+  if (method === 'POST' && view === 'settings' && fields.action === 'reset') {
+    const version = await bumpPanelVersion(userid);
+    const newToken = signPanelToken(userid, version);
+    const link = `${resolveBaseUrl(req.headers)}/api/panel?t=${encodeURIComponent(newToken)}`;
+    sendHtml(
+      res,
+      200,
+      page(
+        '链接已重置',
+        newToken,
+        'overview',
+        card(
+          '新链接好了，旧的已经失效',
+          `<div class="p-row-sub p-break"><a href="${escapeHtml(link)}">${escapeHtml(link)}</a></div>`,
+        ),
+      ),
+    );
+    return;
   }
 
-  if (method === 'POST' && view === 'settings') {
-    if (fields.action === 'reset') {
-      const version = await bumpPanelVersion(userid);
-      const newToken = signPanelToken(userid, version);
-      const link = `${resolveBaseUrl(req.headers)}/api/panel?t=${encodeURIComponent(newToken)}`;
-      sendHtml(
-        res,
-        200,
-        page(
-          '链接已重置',
-          newToken,
-          'overview',
-          card('新的面板链接（旧链接已失效）', `<div style="font-size:13px;word-break:break-all;"><a style="${LINK}" href="${escapeHtml(link)}">${escapeHtml(link)}</a></div>`),
-        ),
-      );
-      return;
-    }
-
+  if (method === 'POST' && view === 'settings' && fields.action === undefined) {
     const pushTime = (fields.pushTime ?? '').trim();
     const digestCount = Number(fields.digestCount);
     const intervalDays = Number(fields.intervalDays);
-    const error =
+    const validation =
       !PUSH_TIME_RE.test(pushTime)
         ? '推送时间需为 HH:MM（北京时间），例如 09:00'
         : !Number.isInteger(digestCount) || digestCount < 1 || digestCount > 8
@@ -430,22 +904,30 @@ export default async function handler(
           : !Number.isInteger(intervalDays) || intervalDays < 1 || intervalDays > 30
             ? '间隔需为 1–30 的整数'
             : null;
-    if (error !== null) {
-      sendHtml(res, 400, await renderSettings(userid, token, undefined, error));
+    if (validation !== null) {
+      sendHtml(res, 400, await renderSettings(userid, token, undefined, validation));
       return;
     }
+    const weatherCityRaw = (fields.weatherCity ?? AUTO_CITY).trim();
+    const weatherCity =
+      cityBySlug(weatherCityRaw) === null ? AUTO_CITY : weatherCityRaw;
     await mergePreferences(userid, {
       pushTime,
       digestCount,
       intervalDays,
       languages: splitList(fields.languages ?? ''),
       keywords: splitList(fields.keywords ?? ''),
+      weatherCity,
     });
-    notice = '已保存';
+    notice = '改好了。';
+  } else if (method === 'POST') {
+    const outcome = await applyAction(userid, view, fields);
+    notice = outcome.notice;
+    error = outcome.error;
   }
 
   if (view === 'tracking') {
-    sendHtml(res, 200, await renderTracking(userid, token, notice));
+    sendHtml(res, 200, await renderTracking(userid, token, notice, error));
     return;
   }
   if (view === 'history') {
@@ -453,12 +935,16 @@ export default async function handler(
     return;
   }
   if (view === 'favorites') {
-    sendHtml(res, 200, await renderFavorites(userid, token, queryParam(req, 'q')));
+    sendHtml(res, 200, await renderFavorites(userid, token, queryParam(req, 'q'), notice, error));
+    return;
+  }
+  if (view === 'memory') {
+    sendHtml(res, 200, await renderMemory(userid, token, notice, error));
     return;
   }
   if (view === 'settings') {
-    sendHtml(res, 200, await renderSettings(userid, token, notice));
+    sendHtml(res, 200, await renderSettings(userid, token, notice, error));
     return;
   }
-  sendHtml(res, 200, await renderOverview(userid, token));
+  sendHtml(res, 200, await renderOverview(userid, token, req.headers, notice, error));
 }

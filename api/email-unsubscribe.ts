@@ -1,9 +1,9 @@
 import { eq } from 'drizzle-orm';
-import { BRAND } from '../src/brand.js';
 import { db } from '../src/db/client.js';
 import { emailSubscribers } from '../src/db/schema.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
-import { escapeHtml, renderPage, sendHtml, type HtmlResponse } from '../src/http/html.js';
+import { escapeHtml, sendHtml, type HtmlResponse } from '../src/http/html.js';
+import { renderMessagePage } from '../src/ui/page.js';
 
 /**
  * 邮箱退订（GET ?t=… 与 RFC 8058 一键退订 POST）。
@@ -27,11 +27,12 @@ function firstParam(
 }
 
 function donePage(baseUrl: string): string {
-  return renderPage({
+  return renderMessagePage({
     title: '已退订',
-    body: `<div style="font-size:14px;line-height:1.7;color:#1f2328;">你已不再收到 GitHub 热榜简报。</div>
-    <div style="margin-top:16px;font-size:14px;">
-      <a href="${escapeHtml(`${baseUrl}/api/subscribe`)}" style="color:${BRAND.colors.link};">重新订阅</a>
+    message: '你已不再收到 GitHub 热榜简报。',
+    tone: 'ok',
+    extraHtml: `<div class="p-actions">
+      <a class="p-btn ghost" href="${escapeHtml(`${baseUrl}/api/subscribe`)}">重新订阅</a>
     </div>`,
   });
 }
@@ -42,7 +43,15 @@ export default async function handler(
 ): Promise<void> {
   const method = req.method ?? 'GET';
   if (method !== 'GET' && method !== 'POST') {
-    sendHtml(res, 405, renderPage({ title: '请求方式不支持', body: '<p>本端点支持 GET / POST。</p>' }));
+    sendHtml(
+      res,
+      405,
+      renderMessagePage({
+        title: '请求方式不支持',
+        message: '本端点支持 GET / POST。',
+        tone: 'err',
+      }),
+    );
     return;
   }
 
@@ -74,7 +83,11 @@ export default async function handler(
     sendHtml(
       res,
       400,
-      renderPage({ title: '链接无效', body: '<p>缺少退订参数，请从邮件页脚的链接进入。</p>' }),
+      renderMessagePage({
+        title: '链接无效',
+        message: '缺少退订参数，请从邮件页脚的链接进入。',
+        tone: 'err',
+      }),
     );
     return;
   }
@@ -86,7 +99,11 @@ export default async function handler(
       .where(eq(emailSubscribers.unsubToken, token))
   )[0];
   if (!row) {
-    sendHtml(res, 404, renderPage({ title: '链接无效', body: '<p>链接无效或已失效。</p>' }));
+    sendHtml(
+      res,
+      404,
+      renderMessagePage({ title: '链接无效', message: '链接无效或已失效。', tone: 'err' }),
+    );
     return;
   }
 

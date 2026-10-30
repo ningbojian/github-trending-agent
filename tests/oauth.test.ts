@@ -2,6 +2,8 @@ import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import handler, {
+  renderOauthError,
+  renderOauthSuccess,
   type OAuthRequest,
   type OAuthResponse,
 } from '../api/oauth-github';
@@ -544,5 +546,26 @@ describe('api/oauth-github 回调端点', () => {
     expect(res.statusCode).toBe(405);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(dbState.updateCalls).toHaveLength(0);
+  });
+});
+
+describe('OAuth 回执页', () => {
+  it('成功页带品牌头、viewport 与账号', () => {
+    const html = renderOauthSuccess('alice-gh');
+    expect(html).toContain('data-brand="logo"');
+    expect(html).toContain('width=device-width');
+    expect(html).toContain('alice-gh');
+  });
+
+  it('login 里的 HTML 被转义', () => {
+    const html = renderOauthSuccess('<script>alert(1)</script>');
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('失败页同样带品牌头与错误提示', () => {
+    const html = renderOauthError('授权码兑换失败。');
+    expect(html).toContain('data-brand="logo"');
+    expect(html).toContain('p-banner err');
   });
 });

@@ -1,5 +1,4 @@
 import { eq, sql } from 'drizzle-orm';
-import { BRAND } from '../src/brand.js';
 import { SETKEY_TTL_MS, verifySetKeyToken } from '../src/agent/setkey-token.js';
 import {
   PRESETS,
@@ -13,10 +12,14 @@ import { kvCache } from '../src/db/schema.js';
 import { readBodyFields } from '../src/http/body.js';
 import {
   escapeHtml,
-  renderPage,
   sendHtml,
   type HtmlResponse,
 } from '../src/http/html.js';
+import {
+  renderAppPage,
+  renderMessagePage,
+  type MessageTone,
+} from '../src/ui/page.js';
 
 /**
  * 网页表单：填自己的 AI Key（GET 渲染 / POST 保存，凭证是 15 分钟一次性 token）。
@@ -26,6 +29,8 @@ import {
  * - 本文件不把请求体写进任何日志，错误页与回显一律不含 Key（重渲染时输入框清空）；
  * - 保存前用用户的 Key 试连一次，连不通就不落库；
  * - 同一 token 只能提交一次（jti 记进 kv_cache，TTL 与 token 同期）。
+ *
+ * 视觉：表单与回执统一走 src/ui/page.ts 与 .p-* 类；不加载第三方资源。
  */
 
 export interface SetKeyRequest {
@@ -83,24 +88,37 @@ async function markUsed(jti: string): Promise<void> {
   }
 }
 
-function messagePage(title: string, message: string, extra = ''): string {
-  return renderPage({
-    title,
-    body: `<div style="font-size:14px;line-height:1.7;color:#1f2328;">${message}</div>${extra}`,
-  });
+function messagePage(
+  title: string,
+  message: string,
+  extra = '',
+  tone: MessageTone = 'info',
+): string {
+  return renderMessagePage({ title, message, extraHtml: extra, tone });
 }
-
-const INPUT_STYLE =
-  'width:100%;box-sizing:border-box;padding:12px 14px;font-size:16px;border:1px solid #d0d7de;border-radius:8px;';
 
 function input(options: {
   name: string;
   value: string;
   type?: string;
   placeholder: string;
+  inputmode?: string;
 }): string {
-  return `<input name="${escapeHtml(options.name)}" type="${escapeHtml(options.type ?? 'text')}" value="${escapeHtml(options.value)}"
-    placeholder="${escapeHtml(options.placeholder)}" style="${INPUT_STYLE}">`;
+  const attrs = [
+    `class="p-input"`,
+    `name="${escapeHtml(options.name)}"`,
+    `type="${escapeHtml(options.type ?? 'text')}"`,
+    `value="${escapeHtml(options.value)}"`,
+    `placeholder="${escapeHtml(options.placeholder)}"`,
+    options.inputmode ? `inputmode="${escapeHtml(options.inputmode)}"` : '',
+    options.name === 'apiKey'
+      ? 'autocomplete="new-password"'
+      : 'autocomplete="off" autocorrect="off" autocapitalize="off"',
+    'spellcheck="false"',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return `<input ${attrs}>`;
 }
 
 /**
@@ -116,33 +134,36 @@ function formPage(options: {
   const action = `/api/set-key?t=${encodeURIComponent(options.token)}`;
   const presets = PRESETS.map(
     (preset: LlmPreset) =>
-      `<a href="${escapeHtml(`${action}&p=${preset.key}`)}" style="color:${BRAND.colors.accent};text-decoration:none;">${escapeHtml(preset.label)}</a>`,
-  ).join(' · ');
+      `<a class="p-chip" href="${escapeHtml(`${action}&p=${preset.key}`)}">${escapeHtml(preset.label)}</a>`,
+  ).join('');
   const error = options.error
-    ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:#ffebe9;color:#cf222e;font-size:14px;line-height:1.6;">${escapeHtml(options.error)}</div>`
+    ? `<div class="p-banner err" role="alert">${escapeHtml(options.error)}</div>`
     : '';
 
-  return renderPage({
+  return renderAppPage({
     title: '设置模型',
     body: `${error}
-    <p style="font-size:14px;line-height:1.7;color:#57606a;margin:0 0 16px;">
-      填写任意 OpenAI 兼容接口。Key 只用于你自己的互动请求，加密后存库，不会出现在聊天记录里。
-    </p>
-    <p style="font-size:14px;margin:0 0 16px;">一键填入：${presets}</p>
-    <form method="post" action="${escapeHtml(action)}">
-      <div style="margin-bottom:14px;">
-        <label style="display:block;font-size:14px;margin-bottom:6px;">接口地址（Base URL）</label>
-        ${input({ name: 'baseUrl', value: options.baseUrl, placeholder: 'https://api.deepseek.com/v1' })}
-      </div>
-      <div style="margin-bottom:14px;">
-        <label style="display:block;font-size:14px;margin-bottom:6px;">模型名</label>
+    <p class="p-lead">填写任意 OpenAI 兼容接口。Key 只用于你自己的互动请求，加密后存库，不会出现在聊天记录里。</p>
+    <div class="p-chips">${presets}</div>
+    <form method="post" action="${escapeHtml(action)}" class="p-mt">
+      <label class="p-field">
+        <span class="p-label">接口地址（Base URL）</span>
+        ${input({
+          name: 'baseUrl',
+          value: options.baseUrl,
+          placeholder: 'https://api.deepseek.com/v1',
+          inputmode: 'url',
+        })}
+      </label>
+      <label class="p-field">
+        <span class="p-label">模型名</span>
         ${input({ name: 'model', value: options.model, placeholder: 'deepseek-chat' })}
-      </div>
-      <div style="margin-bottom:18px;">
-        <label style="display:block;font-size:14px;margin-bottom:6px;">API Key</label>
+      </label>
+      <label class="p-field">
+        <span class="p-label">API Key</span>
         ${input({ name: 'apiKey', value: '', type: 'password', placeholder: 'sk-…' })}
-      </div>
-      <button type="submit" style="width:100%;padding:12px 20px;font-size:16px;border:0;border-radius:8px;background:${BRAND.colors.accent};color:#ffffff;font-weight:600;">保存</button>
+      </label>
+      <button class="p-btn block" type="submit">保存</button>
     </form>`,
   });
 }
@@ -167,13 +188,17 @@ export default async function handler(
 ): Promise<void> {
   const method = req.method ?? 'GET';
   if (method !== 'GET' && method !== 'POST') {
-    sendHtml(res, 405, messagePage('请求方式不支持', '本端点支持 GET / POST。'));
+    sendHtml(res, 405, messagePage('请求方式不支持', '本端点支持 GET / POST。', '', 'err'));
     return;
   }
 
   const token = firstParam(req.query, 't');
   if (!token) {
-    sendHtml(res, 400, messagePage('链接无效', '缺少设置参数，请回微信重新发「设置模型」。'));
+    sendHtml(
+      res,
+      400,
+      messagePage('链接无效', '缺少设置参数，请回微信重新发「设置模型」。', '', 'err'),
+    );
     return;
   }
   const claim = verifySetKeyToken(token);
@@ -181,7 +206,7 @@ export default async function handler(
     sendHtml(
       res,
       400,
-      messagePage('链接无效或已过期', '请回微信重新发「设置模型」获取新链接。'),
+      messagePage('链接无效或已过期', '请回微信重新发「设置模型」获取新链接。', '', 'err'),
     );
     return;
   }
@@ -189,7 +214,7 @@ export default async function handler(
     sendHtml(
       res,
       400,
-      messagePage('链接已使用', '这个链接已经用过了，请回微信重新发「设置模型」。'),
+      messagePage('链接已使用', '这个链接已经用过了，请回微信重新发「设置模型」。', '', 'err'),
     );
     return;
   }
@@ -244,7 +269,12 @@ export default async function handler(
     sendHtml(
       res,
       400,
-      messagePage('保存失败', '保存时出了点问题，请稍后重试或回微信重新发「设置模型」。'),
+      messagePage(
+        '保存失败',
+        '保存时出了点问题，请稍后重试或回微信重新发「设置模型」。',
+        '',
+        'err',
+      ),
     );
     return;
   }
@@ -255,8 +285,9 @@ export default async function handler(
     200,
     messagePage(
       '已保存',
-      '已保存。回到微信继续提问即可 —— 之后的互动使用你自己的 Key。',
-      `<div style="margin-top:18px;font-size:14px;color:#57606a;">想换掉或删除：回微信发「清除模型」。</div>`,
+      '回到微信继续提问即可 —— 之后的互动使用你自己的 Key。',
+      '<p class="p-hint">想换掉或删除：回微信发「清除模型」。</p>',
+      'ok',
     ),
   );
 }

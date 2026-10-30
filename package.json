@@ -10,6 +10,9 @@
   "scripts": {
     "test": "vitest run",
     "dev": "vercel dev",
+    "dev:panel": "tsx scripts/dev-panel.ts",
+    "email:preview": "tsx scripts/email-preview.ts",
+    "email:test": "tsx scripts/send-test-email.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:audit": "tsx scripts/db-audit.ts",

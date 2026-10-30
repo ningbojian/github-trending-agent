@@ -1,5 +1,4 @@
 import { and, eq, sql } from 'drizzle-orm';
-import { BRAND } from '../src/brand.js';
 import { db } from '../src/db/client.js';
 import { emailSubscribers } from '../src/db/schema.js';
 import { getDailySnapshot, selectEntriesForPreferences } from '../src/agent/digest-snapshot.js';
@@ -7,7 +6,8 @@ import { normalizeEmailPreferences } from '../src/email/preferences.js';
 import { renderDigestEmail } from '../src/email/render.js';
 import { sendEmail } from '../src/email/send.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
-import { escapeHtml, renderPage, sendHtml, type HtmlResponse } from '../src/http/html.js';
+import { escapeHtml, sendHtml, type HtmlResponse } from '../src/http/html.js';
+import { renderMessagePage, type MessageTone } from '../src/ui/page.js';
 
 /**
  * 邮箱确认端点（GET /api/email-confirm?t=…）。
@@ -34,11 +34,13 @@ function firstParam(
   return single == null || single === '' ? undefined : single;
 }
 
-function messagePage(title: string, message: string, extra = ''): string {
-  return renderPage({
-    title,
-    body: `<div style="font-size:14px;line-height:1.7;color:#1f2328;">${message}</div>${extra}`,
-  });
+function messagePage(
+  title: string,
+  message: string,
+  extra = '',
+  tone: MessageTone = 'info',
+): string {
+  return renderMessagePage({ title, message, extraHtml: extra, tone });
 }
 
 export default async function handler(
@@ -47,13 +49,13 @@ export default async function handler(
 ): Promise<void> {
   const method = req.method ?? 'GET';
   if (method !== 'GET') {
-    sendHtml(res, 405, messagePage('请求方式不支持', '本端点仅支持 GET。'));
+    sendHtml(res, 405, messagePage('请求方式不支持', '本端点仅支持 GET。', '', 'err'));
     return;
   }
 
   const token = firstParam(req.query, 't');
   if (!token) {
-    sendHtml(res, 400, messagePage('链接无效', '缺少确认参数，请重新订阅。'));
+    sendHtml(res, 400, messagePage('链接无效', '缺少确认参数，请重新订阅。', '', 'err'));
     return;
   }
 
@@ -64,7 +66,7 @@ export default async function handler(
       .where(eq(emailSubscribers.confirmToken, token))
   )[0];
   if (!row) {
-    sendHtml(res, 404, messagePage('链接无效或已使用', '请重新订阅。'));
+    sendHtml(res, 404, messagePage('链接无效或已使用', '请重新订阅。', '', 'err'));
     return;
   }
   if (
@@ -74,7 +76,7 @@ export default async function handler(
     sendHtml(
       res,
       400,
-      messagePage('确认链接已过期', '请返回订阅页重新提交邮箱。'),
+      messagePage('确认链接已过期', '请返回订阅页重新提交邮箱。', '', 'err'),
     );
     return;
   }
@@ -97,7 +99,7 @@ export default async function handler(
     )
     .returning({ id: emailSubscribers.id });
   if (claimed.length === 0) {
-    sendHtml(res, 404, messagePage('链接无效或已使用', '请重新订阅。'));
+    sendHtml(res, 404, messagePage('链接无效或已使用', '请重新订阅。', '', 'err'));
     return;
   }
 
@@ -105,9 +107,9 @@ export default async function handler(
   const preferences = normalizeEmailPreferences(row.preferences);
   const settings = `${baseUrl}/api/email-settings?t=${encodeURIComponent(row.unsubToken)}`;
   const unsubscribe = `${baseUrl}/api/email-unsubscribe?t=${encodeURIComponent(row.unsubToken)}`;
-  const links = `<div style="margin-top:18px;font-size:14px;line-height:1.8;">
-    <a href="${escapeHtml(settings)}" style="color:${BRAND.colors.link};">调整推送时间 / 频率</a><br>
-    <a href="${escapeHtml(unsubscribe)}" style="color:#656d76;">退订</a>
+  const links = `<div class="p-actions">
+    <a class="p-btn ghost" href="${escapeHtml(settings)}">调整推送时间 / 频率</a>
+    <a class="p-btn ghost" href="${escapeHtml(unsubscribe)}">退订</a>
   </div>`;
 
   let digestSent = false;
@@ -163,5 +165,5 @@ export default async function handler(
   const message = digestSent
     ? '订阅成功，今日简报已发到你的邮箱。'
     : '订阅成功。今日简报会在下次推送时间送达。';
-  sendHtml(res, 200, messagePage('订阅成功', message, links));
+  sendHtml(res, 200, messagePage('订阅成功', message, links, 'ok'));
 }

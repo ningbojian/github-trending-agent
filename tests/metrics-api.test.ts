@@ -206,6 +206,9 @@ describe('api/metrics 取数', () => {
     expect(res.body ?? '').toContain('度量');
     expect(res.body ?? '').not.toContain('<script>alert(1)</script>');
     expect(res.body ?? '').toContain('handleSearch');
+    // 表格只在卡片内横向滚动；瓦片走共享数字卡。
+    expect(res.body ?? '').toContain('p-table-wrap');
+    expect(res.body ?? '').toContain('p-stat-grid');
   });
 });
 

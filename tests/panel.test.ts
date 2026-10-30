@@ -306,6 +306,8 @@ describe('api/panel 视图', () => {
       expect(state.body).toContain('p-view-head');
       expect(state.body).toContain('p-mascot');
       expect(state.body).toContain('data-mood');
+      // 机器人脚本必须每个视图都注入：没有它，两颗贴纸会叠在中心点上。
+      expect(state.body).toContain('var orbs = [];');
     }
   });
 

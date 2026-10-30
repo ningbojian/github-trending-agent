@@ -123,22 +123,6 @@ function empty(text: string): string {
 }
 
 /**
- * 非总览视图的天气：只按 IP 取（不额外读订阅行——那会多一次 DB 查询，
- * 打乱渲染顺序）。总览仍按用户设置的城市取，那里本来就要读订阅行。
- * 失败了就当没有天气：机器人会显示云，不影响功能。
- */
-async function weatherForHeaders(
-  headers: PanelRequest['headers'],
-): Promise<Weather | null> {
-  try {
-    return await getWeatherForRequest(headers, AUTO_CITY, new Date());
-  } catch (err) {
-    console.error('panel weather failed:', err);
-    return null;
-  }
-}
-
-/**
  * 视图头：标题 + 一句状态 + 角落机器人。
  * 除总览（hero 自带机器人）外，每个视图都用它，保证每个功能里都有那张脸。
  */
@@ -170,7 +154,9 @@ function banner(notice?: string, error?: string): string {
 function page(title: string, token: string, view: string, body: string): string {
   return renderPage({
     title,
-    body: `<div class="panel">${nav(token, view)}${body}</div><script>${POINTER_SCRIPT}</script>`,
+    // 机器人脚本每个视图都要有：没有它，两颗贴纸会堆在同一个中心点上，
+    // 既不能拖也没有轨道——除总览外全是「叠起来」的静态版。
+    body: `<div class="panel">${nav(token, view)}${body}</div><script>${POINTER_SCRIPT}</script><script>${ROBOT_SCRIPT}</script>`,
     subtitle: '控制面板',
     styles: PANEL_STYLES,
     pageBg: PANEL_PAGE_BG,
@@ -316,22 +302,23 @@ async function renderOverview(
   const sub = await readSubscriber(userid);
   const prefs = normalizePreferences(sub?.preferences ?? {});
   const active = sub?.active ?? false;
-  const tracked = await listTracked(userid);
-  const archives = await readArchives(1);
-  const memoryCount = (await readProfile(userid))?.facts.length ?? 0;
-  let week: WeeklyStats | null = null;
-  try {
-    week = await readWeekStats(userid);
-  } catch (err) {
-    console.error('panel weekly stats failed:', err);
-  }
-  let weather: Weather | null = null;
-  try {
-    const citySlug = (sub?.preferences as { weatherCity?: unknown } | undefined)?.weatherCity;
-    weather = await getWeatherForRequest(headers, citySlug, new Date());
-  } catch (err) {
-    console.error('panel weather failed:', err);
-  }
+  const citySlug = (sub?.preferences as { weatherCity?: unknown } | undefined)?.weatherCity;
+  // 五个查询互不依赖：并行跑，别让「天气慢」把一个 DB 往返叠成五个。
+  const [tracked, archives, memoryCount, week, weather] = await Promise.all([
+    listTracked(userid),
+    readArchives(1),
+    readProfile(userid)
+      .then((profile) => profile?.facts.length ?? 0)
+      .catch(() => 0),
+    readWeekStats(userid).catch((err: unknown) => {
+      console.error('panel weekly stats failed:', err);
+      return null;
+    }),
+    getWeatherForRequest(headers, citySlug, new Date()).catch((err: unknown) => {
+      console.error('panel weather failed:', err);
+      return null;
+    }),
+  ]);
   const mood: RobotMood = notice ? 'happy' : error ? 'alert' : active ? 'idle' : 'sleepy';
 
   const cadence =
@@ -392,8 +379,7 @@ async function renderOverview(
     'overview',
     `${banner(notice, error)}${hero}${personalCard(sub, week)}${tiles}
      ${card('最近简报', recent)}
-     <p class="p-foot">${escapeHtml(ROBOT_ATTRIBUTION)}</p>
-     <script>${ROBOT_SCRIPT}</script>`,
+     <p class="p-foot">${escapeHtml(ROBOT_ATTRIBUTION)}</p>`,
   );
 }
 
@@ -613,17 +599,19 @@ async function renderFavorites(
   notice?: string,
   error?: string,
 ): Promise<string> {
-  const favRows = await db()
-    .select()
-    .from(favorites)
-    .where(eq(favorites.wecomUserid, userid));
+  const [favRows, binding] = await Promise.all([
+    db()
+      .select()
+      .from(favorites)
+      .where(eq(favorites.wecomUserid, userid)),
+    loadBindingAuth(userid),
+  ]);
   // 新收藏的排前面；createdAt 可能是 Date（PG timestamp 序列化）。
   const sorted = [...favRows].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
   const owned = new Set(sorted.map((row) => row.fullName.toLowerCase()));
   // 未绑定 GitHub 时收藏写不进来：机器人举牌子提示，而不是等用户点「取消」才发现。
-  const binding = await loadBindingAuth(userid);
   const mood: RobotMood = error
     ? 'alert'
     : notice
@@ -791,8 +779,10 @@ async function renderSettings(
   notice?: string,
   error?: string,
 ): Promise<string> {
-  const sub = await readSubscriber(userid);
-  const binding = await loadBindingAuth(userid);
+  const [sub, binding] = await Promise.all([
+    readSubscriber(userid),
+    loadBindingAuth(userid),
+  ]);
   const prefs = normalizePreferences(sub?.preferences ?? {});
   const languages = Array.isArray((sub?.preferences as { languages?: unknown })?.languages)
     ? (sub?.preferences as { languages: string[] }).languages.join(', ')
@@ -1000,7 +990,6 @@ export default async function handler(
 
   const userid = parsed.userid;
   const view = queryParam(req, 'view') || 'overview';
-  const weather = await weatherForHeaders(req.headers);
   const fields = method === 'POST' ? readBodyFields(req.body) : {};
   let notice: string | undefined;
   let error: string | undefined;
@@ -1038,7 +1027,7 @@ export default async function handler(
             ? '间隔需为 1–30 的整数'
             : null;
     if (validation !== null) {
-      sendHtml(res, 400, await renderSettings(userid, token, weather, undefined, validation));
+      sendHtml(res, 400, await renderSettings(userid, token, null, undefined, validation));
       return;
     }
     const weatherCityRaw = (fields.weatherCity ?? AUTO_CITY).trim();
@@ -1059,24 +1048,26 @@ export default async function handler(
     error = outcome.error;
   }
 
+  // 子视图不再为了天气球额外打一次 Open-Meteo：机器人照常显示，天气球退化成云。
+  // 总览仍按用户城市取（那里本来就要读订阅行）。
   if (view === 'tracking') {
-    sendHtml(res, 200, await renderTracking(userid, token, weather, notice, error));
+    sendHtml(res, 200, await renderTracking(userid, token, null, notice, error));
     return;
   }
   if (view === 'history') {
-    sendHtml(res, 200, await renderHistory(userid, token, queryParam(req, 'date'), weather));
+    sendHtml(res, 200, await renderHistory(userid, token, queryParam(req, 'date'), null));
     return;
   }
   if (view === 'favorites') {
-    sendHtml(res, 200, await renderFavorites(userid, token, queryParam(req, 'q'), weather, notice, error));
+    sendHtml(res, 200, await renderFavorites(userid, token, queryParam(req, 'q'), null, notice, error));
     return;
   }
   if (view === 'memory') {
-    sendHtml(res, 200, await renderMemory(userid, token, weather, notice, error));
+    sendHtml(res, 200, await renderMemory(userid, token, null, notice, error));
     return;
   }
   if (view === 'settings') {
-    sendHtml(res, 200, await renderSettings(userid, token, weather, notice, error));
+    sendHtml(res, 200, await renderSettings(userid, token, null, notice, error));
     return;
   }
   sendHtml(res, 200, await renderOverview(userid, token, req.headers, notice, error));

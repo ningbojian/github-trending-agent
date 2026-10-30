@@ -44,6 +44,12 @@ import {
 import { POINTER_SCRIPT } from '../src/ui/pointer.js';
 import { APP_FOOTER, APP_TEXT } from '../src/ui/tokens.js';
 import { renderRobotMascot, ROBOT_ATTRIBUTION, ROBOT_SCRIPT, type RobotMood, type RobotProp } from '../src/panel/robot.js';
+import {
+  bumpPanelDirty,
+  readPanelDirty,
+  readPanelHtml,
+  writePanelHtml,
+} from '../src/panel/cache.js';
 import { weatherForPanel } from '../src/panel/weather.js';
 import { AUTO_CITY, cityBySlug, WEATHER_CITIES } from '../src/weather/cities.js';
 import type { Weather } from '../src/weather/service.js';
@@ -234,7 +240,7 @@ function subscribedDays(createdAt: unknown, now: Date): number {
  * 不另算一套；没有数据时只说一句，不摆一排 0。
  */
 function personalCard(
-  sub: { createdAt?: unknown } | undefined,
+  sub: { createdAt?: unknown; preferences?: unknown } | undefined,
   week: WeeklyStats | null,
 ): string {
   if (sub === undefined) return '';
@@ -248,7 +254,8 @@ function personalCard(
   const less = week?.less ?? [];
 
   if (days === 0 && pushed === 0 && favorited === 0) {
-    return card('本周', empty('今天刚订阅。明天 9 点的简报是第一封。'));
+    const pushTime = normalizePreferences(sub.preferences ?? {}).pushTime;
+    return card('本周', empty(`今天刚订阅。下一次简报在 ${pushTime}。`));
   }
 
   let taste: string;
@@ -369,7 +376,7 @@ async function renderOverview(
         view: 'history',
         date: archives[0].date,
       })}">看看 ${escapeHtml(archives[0].date)} 的简报</a>`
-    : empty('今天还没有归档。等明天 9 点。');
+    : empty(`今天还没有归档。等 ${prefs.pushTime} 之后再看。`);
 
   return page(
     '总览',
@@ -495,7 +502,7 @@ async function renderHistory(
         </li>`,
         )
         .join('')}</ul>`
-    : empty('还没有归档。明天 9 点之后再来看。');
+    : empty('还没有归档。推送之后会出现在这里。');
 
   return page(
     '历史简报',
@@ -970,7 +977,10 @@ async function applyAction(
     }
     if (fields.action === 'resubscribe') {
       await mergePreferences(userid, {}, { active: true });
-      return { notice: '好，明天 9 点见。' };
+      // 推送时间可能刚改过（暂停期间也能改），提示必须跟着用户设置走，不能写死 9 点。
+      const sub = await readSubscriber(userid);
+      const { pushTime } = normalizePreferences(sub?.preferences ?? {});
+      return { notice: `好，已恢复推送。下次 ${pushTime} 见。` };
     }
   }
 
@@ -1001,11 +1011,35 @@ export default async function handler(
 
   const userid = parsed.userid;
   const view = queryParam(req, 'view') || 'overview';
+
+  // 30 秒短缓存：同一页面连点/返回直接回 HTML，连天气和 DB 都不用碰。
+  // 带查询参数的视图（搜索 q、历史 date）不缓存。
+  const noQuery =
+    queryParam(req, 'q') === '' && queryParam(req, 'date') === '';
+  const cacheable = method === 'GET' && noQuery;
+  const dirty = cacheable ? await readPanelDirty(userid) : '';
+  if (cacheable) {
+    const hit = await readPanelHtml(userid, parsed.version, view, dirty);
+    if (hit !== null) {
+      res.setHeader('x-panel-cache', 'hit');
+      sendHtml(res, 200, hit);
+      return;
+    }
+  }
+
   // 每次请求只取一次天气（服务层按城市缓存 3 小时），所有视图共用。
   const weather = await weatherForPanel(userid, req.headers);
   const fields = method === 'POST' ? readBodyFields(req.body) : {};
   let notice: string | undefined;
   let error: string | undefined;
+
+  const sendView = async (html: string): Promise<void> => {
+    if (cacheable) {
+      await writePanelHtml(userid, parsed.version, view, dirty, html);
+    }
+    res.setHeader('x-panel-cache', cacheable ? 'miss' : 'off');
+    sendHtml(res, 200, html);
+  };
 
   if (method === 'POST' && view === 'settings' && fields.action === 'reset') {
     const version = await bumpPanelVersion(userid);
@@ -1056,31 +1090,33 @@ export default async function handler(
     });
     notice = '改好了。';
   } else if (method === 'POST') {
-    const outcome = await applyAction(userid, view, fields);
-    notice = outcome.notice;
+    const outcome = await applyAction(userid, view, fields);    notice = outcome.notice;
     error = outcome.error;
   }
 
+  // 写操作后立刻让所有缓存页面失效（键里带 dirty，下一次 GET 必回源）。
+  if (method === 'POST') await bumpPanelDirty(userid);
+
   // 所有视图共用同一个天气结果（服务层 3 小时缓存），不再退化成云。
   if (view === 'tracking') {
-    sendHtml(res, 200, await renderTracking(userid, token, weather, notice, error));
+    await sendView(await renderTracking(userid, token, weather, notice, error));
     return;
   }
   if (view === 'history') {
-    sendHtml(res, 200, await renderHistory(userid, token, queryParam(req, 'date'), weather));
+    await sendView(await renderHistory(userid, token, queryParam(req, 'date'), weather));
     return;
   }
   if (view === 'favorites') {
-    sendHtml(res, 200, await renderFavorites(userid, token, queryParam(req, 'q'), weather, notice, error));
+    await sendView(await renderFavorites(userid, token, queryParam(req, 'q'), weather, notice, error));
     return;
   }
   if (view === 'memory') {
-    sendHtml(res, 200, await renderMemory(userid, token, weather, notice, error));
+    await sendView(await renderMemory(userid, token, weather, notice, error));
     return;
   }
   if (view === 'settings') {
-    sendHtml(res, 200, await renderSettings(userid, token, weather, notice, error));
+    await sendView(await renderSettings(userid, token, weather, notice, error));
     return;
   }
-  sendHtml(res, 200, await renderOverview(userid, token, weather, notice, error));
+  await sendView(await renderOverview(userid, token, weather, notice, error));
 }

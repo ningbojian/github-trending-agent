@@ -58,7 +58,7 @@ function faceSvg(mood: RobotMood): string {
     <path d="M-18 36 Q0 50 18 36" stroke="#0B1220" stroke-width="8" fill="none" stroke-linecap="round"/>`;
 }
 
-function robotSvg(mood: RobotMood, prop = ''): string {
+function robotSvg(mood: RobotMood): string {
   return `<svg class="p-robot-svg" viewBox="0 0 420 420" role="img" aria-label="今日小机器人">
   <defs>
     <radialGradient id="prBlobFill" cx="35%" cy="28%" r="78%">
@@ -96,7 +96,6 @@ function robotSvg(mood: RobotMood, prop = ''): string {
     </g>
     ${faceSvg(mood)}
   </g>
-  ${prop}
 </svg>`;
 }
 
@@ -111,51 +110,17 @@ export interface RobotOptions {
 
 export type RobotProp = 'search' | 'calendar' | 'star' | 'note' | 'gear';
 
-/** 手边的小道具：简单的线性 SVG，和机器人同一套青色。 */
-function propSvg(prop: RobotProp): string {
-  const accent = '#22D3EE';
-  switch (prop) {
-    case 'search':
-      return `<g transform="translate(306 316) rotate(-16)">
-        <circle cx="0" cy="0" r="21" fill="none" stroke="${accent}" stroke-width="9"/>
-        <rect x="15" y="15" width="10" height="30" rx="5" fill="${accent}" transform="rotate(45 20 20)"/>
-      </g>`;
-    case 'calendar':
-      return `<g transform="translate(292 300)">
-        <rect x="0" y="8" width="46" height="42" rx="8" fill="none" stroke="${accent}" stroke-width="7"/>
-        <rect x="0" y="8" width="46" height="13" rx="6" fill="${accent}"/>
-        <circle cx="12" cy="32" r="3" fill="${accent}"/>
-        <circle cx="24" cy="32" r="3" fill="${accent}"/>
-        <circle cx="36" cy="32" r="3" fill="${accent}"/>
-      </g>`;
-    case 'star':
-      return `<g transform="translate(306 316)">
-        <polygon points="0,-24 7,-8 24,-8 11,3 16,20 0,10 -16,20 -11,3 -24,-8 -7,-8"
-          fill="${accent}"/>
-      </g>`;
-    case 'note':
-      return `<g transform="translate(292 302)">
-        <rect x="0" y="0" width="44" height="46" rx="8" fill="none" stroke="${accent}" stroke-width="7"/>
-        <rect x="9" y="13" width="26" height="4" rx="2" fill="${accent}"/>
-        <rect x="9" y="23" width="20" height="4" rx="2" fill="${accent}"/>
-        <rect x="9" y="33" width="24" height="4" rx="2" fill="${accent}"/>
-      </g>`;
-    case 'gear':
-      return `<g transform="translate(306 316)">
-        <circle cx="0" cy="0" r="13" fill="none" stroke="${accent}" stroke-width="7"/>
-        <g fill="${accent}">
-          <rect x="-3" y="-27" width="6" height="9" rx="2"/>
-          <rect x="-3" y="18" width="6" height="9" rx="2"/>
-          <rect x="-27" y="-3" width="9" height="6" rx="2"/>
-          <rect x="18" y="-3" width="9" height="6" rx="2"/>
-          <rect x="-21" y="-21" width="6" height="9" rx="2" transform="rotate(45 -18 -16)"/>
-          <rect x="15" y="12" width="6" height="9" rx="2" transform="rotate(45 18 16)"/>
-          <rect x="-21" y="12" width="6" height="9" rx="2" transform="rotate(-45 -18 16)"/>
-          <rect x="15" y="-21" width="6" height="9" rx="2" transform="rotate(-45 18 -16)"/>
-        </g>
-      </g>`;
-  }
-}
+/**
+ * 视图道具：直接用仓库里已有的 Twemoji 贴纸，做成机器人手边的小徽章。
+ * 之前手画的线性 SVG 太小太丑——图形交给成品 emoji，机器人本体保持干净。
+ */
+const PROP_META: Record<RobotProp, { code: string; label: string }> = {
+  search: { code: '1f50d', label: '放大镜' },
+  calendar: { code: '1f4c5', label: '日历' },
+  star: { code: '2b50', label: '星星' },
+  note: { code: '1f4dd', label: '便签' },
+  gear: { code: '2699', label: '齿轮' },
+};
 
 export function renderRobotMascot(
   weather: Weather | null,
@@ -168,15 +133,20 @@ export function renderRobotMascot(
   const daySrc = `/docs/assets/emoji/${STICKER_CODES[day.sticker]}.svg`;
   const weatherSrc = `/docs/assets/emoji/${WEATHER_CODES[weatherIcon]}.svg`;
   const weatherLabel = weather === null ? '暂无天气' : `${weather.city} ${weather.temperature}°C`;
-  const prop = options.prop ? propSvg(options.prop) : '';
+  const prop = options.prop
+    ? `<div class="p-prop" role="img" aria-label="${PROP_META[options.prop].label}">
+        <img src="/docs/assets/emoji/${PROP_META[options.prop].code}.svg" alt="">
+      </div>`
+    : '';
   const say =
     options.say && options.say.trim() !== ''
       ? `<div class="p-robot-say" hidden>${escapeHtml(options.say.trim())}</div>`
       : '';
 
   return `<div class="p-mascot" data-robot-stage data-mood="${mood}">
-    ${robotSvg(mood, prop)}
+    ${robotSvg(mood)}
     ${say}
+    ${prop}
     <div class="p-orb" data-orb="day" role="img" aria-label="${escapeHtml(`今日贴纸：${day.name}`)}">
       <img src="${daySrc}" alt="">
     </div>

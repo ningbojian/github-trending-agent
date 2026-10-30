@@ -4,11 +4,18 @@ import { renderRobotMascot } from '../src/panel/robot';
 const NOW = new Date('2026-10-30T04:00:00.000Z');
 
 describe('renderRobotMascot', () => {
-  it('每个视图道具都渲染在机器人手边', () => {
-    for (const prop of ['search', 'calendar', 'star', 'note', 'gear'] as const) {
-      const html = renderRobotMascot(null, NOW, { prop });
-      expect(html).toContain('data-robot-stage');
-      expect(html.split('<path').length).toBeGreaterThan(3);
+  it('每个视图道具都渲染成 Twemoji 徽章', () => {
+    const codes = {
+      search: '1f50d',
+      calendar: '1f4c5',
+      star: '2b50',
+      note: '1f4dd',
+      gear: '2699',
+    } as const;
+    for (const [prop, code] of Object.entries(codes)) {
+      const html = renderRobotMascot(null, NOW, { prop: prop as keyof typeof codes });
+      expect(html).toContain('class="p-prop"');
+      expect(html).toContain(`/docs/assets/emoji/${code}.svg`);
     }
   });
 

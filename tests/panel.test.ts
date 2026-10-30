@@ -155,6 +155,14 @@ vi.mock('../src/panel/weather', () => ({
   weatherForPanel: panelWeatherMock.weatherForPanel,
 }));
 
+// 短缓存单独测（tests/panel-cache.test.ts）；面板行为测试里一律当未命中。
+vi.mock('../src/panel/cache', () => ({
+  readPanelDirty: async () => '',
+  bumpPanelDirty: async () => {},
+  readPanelHtml: async () => null,
+  writePanelHtml: async () => {},
+}));
+
 import handler from '../api/panel';
 import { signPanelToken } from '../src/panel/token';
 import { decideTextRoute } from '../src/wecom/route-decision';

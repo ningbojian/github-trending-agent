@@ -60,11 +60,16 @@ const PANEL_STYLES_DELTA = `
 .p-view-say{display:inline-block;max-width:100%;margin-top:5px;padding:3px 8px;
   border-radius:8px;background:var(--p-card);border:1px solid var(--p-line);
   font-size:12px;line-height:1.5;color:var(--p-text);}
-.p-view-head .p-mascot{flex:0 0 auto;width:54px;height:64px;}
+.p-view-head .p-mascot{flex:0 0 auto;width:88px;height:104px;}
+/* 视图道具：Twemoji 贴纸放进小圆徽章，挂在机器人手边。 */
+.p-prop{position:absolute;right:-4px;bottom:0;width:26px;height:26px;border-radius:50%;
+  background:var(--p-card);border:1px solid var(--p-line);display:flex;align-items:center;
+  justify-content:center;z-index:3;box-shadow:0 4px 12px -6px rgba(0,0,0,.6);}
+.p-prop img{width:16px;height:16px;display:block;}
 /* 点机器人弹出的功能提示：只在点按时出现，不挡正文。 */
-.p-robot-say{position:absolute;right:100%;bottom:4px;margin-right:8px;width:max-content;
-  max-width:170px;padding:6px 9px;border-radius:10px;background:var(--p-card);
-  border:1px solid var(--p-line);font-size:12px;line-height:1.5;color:var(--p-text);
+.p-robot-say{position:absolute;right:100%;bottom:8px;margin-right:8px;width:max-content;
+  max-width:200px;padding:7px 10px;border-radius:10px;background:var(--p-card);
+  border:1px solid var(--p-line);font-size:13px;line-height:1.5;color:var(--p-text);
   z-index:4;box-shadow:0 8px 20px -14px rgba(0,0,0,.7);}
 .p-robot-say[hidden]{display:none;}
 

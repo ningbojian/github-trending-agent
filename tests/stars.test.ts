@@ -127,6 +127,7 @@ vi.mock('../src/db/client', () => {
 import { encryptSecret } from '../src/github/oauth';
 import {
   AUTH_EXPIRED_REPLY,
+  deleteFavorite,
   EMPTY_FAVORITES_REPLY,
   EMPTY_SEARCH_CACHE_REPLY,
   FAVORITE_USAGE_REPLY,
@@ -305,6 +306,23 @@ describe('交互文案常量（字面量固定）', () => {
     expect(UNFAVORITE_USAGE_REPLY).toBe(
       '用法：「取消收藏 N」，N 为 1 起的数字，例如：取消收藏 1',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 收藏写路径导出：面板与聊天命令必须共用同一套读写
+// ---------------------------------------------------------------------------
+describe('deleteFavorite（面板复用的删除写路径）', () => {
+  it('按 wecom_userid + full_name 删除 favorites 行', async () => {
+    await deleteFavorite('alice', 'vercel/next.js');
+
+    expect(dbMock.deleteCalls).toHaveLength(1);
+    const del = dbMock.deleteCalls[0];
+    expect(del.table).toBe(favorites);
+    const compiled = compileQuery(del.condition);
+    expect(compiled.sql).toContain('"favorites"."wecom_userid"');
+    expect(compiled.sql).toContain('"favorites"."full_name"');
+    expect(compiled.params).toEqual(['alice', 'vercel/next.js']);
   });
 });
 

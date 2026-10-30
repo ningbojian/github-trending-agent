@@ -32,6 +32,38 @@ import { computeRepoHealth, type RepoHealth } from './repo-health.js';
 export const TOOL_MAX_TOP_N = 10;
 const DEFAULT_TOP_N = 10;
 
+/**
+ * 进模型前 `description` 的字符上限。
+ *
+ * 为什么需要：`RepoInfo.description` 直接来自 GitHub API，**没有长度限制**。
+ * 工具结果会被原样序列化进下一轮 prompt（`tool-loop.ts` 只计时，不裁剪），
+ * 所以一个把描述写成几万字符的仓库就能把上下文撑爆——不是恶意也会发生
+ * （有些仓库把整个 changelog 塞在 description 里）。200 字符足够认出这是
+ * 什么项目，超出部分对「这个仓库能干什么」没有增量信息。
+ */
+export const TOOL_DESCRIPTION_MAX_CHARS = 200;
+
+/**
+ * 按码点截断（中文一字算一个），超出补省略号。
+ * 省略号算在上限里：调用方要的是「结果不超过 max」，不是「正文不超过 max」。
+ */
+function clip(text: string, max: number): string {
+  const chars = Array.from(text);
+  if (chars.length <= max) return text;
+  return `${chars.slice(0, Math.max(0, max - 1)).join('')}…`;
+}
+
+/** 把会进 prompt 的仓库元数据收窄到可控大小。 */
+function narrowRepo(repo: RepoInfo): RepoInfo {
+  return {
+    ...repo,
+    description:
+      repo.description === null
+        ? null
+        : clip(repo.description, TOOL_DESCRIPTION_MAX_CHARS),
+  };
+}
+
 export type ToolFailure = 'invalid-repo' | 'not-found' | 'rate-limited' | 'missing-term' | 'error';
 
 export interface ToolError {
@@ -207,7 +239,15 @@ export async function toolDeepDiveRepo(
     if (!commitsResult.ok) notes.push('最近提交没取到，健康度按「没有提交时间」计算');
 
     const health = computeRepoHealth(repoResult.data, releases, commits, ctx.now());
-    return { ok: true, repo: repoResult.data, health, readme, releases, commits, notes };
+    return {
+      ok: true,
+      repo: narrowRepo(repoResult.data),
+      health,
+      readme,
+      releases,
+      commits,
+      notes,
+    };
   } catch (err) {
     console.warn('[tools] deep dive failed:', err instanceof Error ? err.message : err);
     return { ok: false, failure: 'error', message: '读取仓库时出错，请稍后再试' };
@@ -238,7 +278,7 @@ export async function toolRepoHealth(args: RepoArgs, ctx: ToolContext): Promise<
     if (!commitsResult.ok) notes.push('最近提交没取到，健康度按「没有提交时间」计算');
 
     const health = computeRepoHealth(repoResult.data, releases, commits, ctx.now());
-    return { ok: true, repo: repoResult.data, health, notes };
+    return { ok: true, repo: narrowRepo(repoResult.data), health, notes };
   } catch (err) {
     console.warn('[tools] repo health failed:', err instanceof Error ? err.message : err);
     return { ok: false, failure: 'error', message: '读取仓库时出错，请稍后再试' };

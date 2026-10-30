@@ -35,6 +35,11 @@ export function parseRepoRef(text: string): RepoRef | null {
   const owner = parts[0] ?? '';
   const rawName = parts[1] ?? '';
   const name = rawName.endsWith('.git') ? rawName.slice(0, -4) : rawName;
+  // `.` / `..` 能通过字符集校验，却会让下游拼出的 GitHub API 路径发生穿越
+  // （`/user/starred/../..`），必须在入口拒绝。
+  if (owner === '.' || owner === '..' || name === '.' || name === '..') {
+    return null;
+  }
   if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(name)) {
     return null;
   }

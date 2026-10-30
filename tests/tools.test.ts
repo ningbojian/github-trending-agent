@@ -149,6 +149,26 @@ describe('search_trending', () => {
 });
 
 describe('deep_dive_repo', () => {
+  it('超长 description 必须被截断——它是唯一没有上限的输入', async () => {
+    // RepoInfo.description 直接来自 GitHub API，没有长度限制。一个仓库把描述
+    // 写成几万字符，就能把下一轮 prompt 撑爆——而工具结果没有任何大小护栏
+    // （tool-loop 只计时不裁剪）。这里钉死「进模型前必须截断」。
+    const { client } = fakeGithub({
+      getRepo: async () => ({
+        ok: true,
+        data: { ...REPO, description: 'x'.repeat(20_000) },
+        cached: false,
+      }),
+    });
+    const result = await toolDeepDiveRepo({ repo: 'astral-sh/ruff' }, context(client));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.repo.description?.length).toBeLessThanOrEqual(200);
+      expect(JSON.stringify(result).length).toBeLessThan(20_000);
+    }
+  });
+
   it('成功时返回仓库、健康度、readme、最近发布与提交', async () => {
     const { client } = fakeGithub();
     const result = await toolDeepDiveRepo({ repo: 'astral-sh/ruff' }, context(client));
@@ -219,6 +239,20 @@ describe('repo_health', () => {
     }
     expect(calls.fetch).not.toContain('readme');
     expect(calls.fetch.sort()).toEqual(['commits', 'releases', 'repo']);
+  });
+
+  it('超长 description 同样要截断', async () => {
+    const { client } = fakeGithub({
+      getRepo: async () => ({
+        ok: true,
+        data: { ...REPO, description: 'y'.repeat(20_000) },
+        cached: false,
+      }),
+    });
+    const result = await toolRepoHealth({ repo: 'astral-sh/ruff' }, context(client));
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.repo.description?.length).toBeLessThanOrEqual(200);
   });
 
   it('非法引用 → invalid-repo', async () => {

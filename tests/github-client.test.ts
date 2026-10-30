@@ -110,6 +110,12 @@ describe('parseRepoRef — 仓库引用', () => {
     expect(parseRepoRef('')).toBeNull();
   });
 
+  it('拒绝 . / .. 路径段（下游拼 URL 会穿越）', () => {
+    expect(parseRepoRef('../..')).toBeNull();
+    expect(parseRepoRef('./react')).toBeNull();
+    expect(parseRepoRef('facebook/..')).toBeNull();
+  });
+
   it('拒绝非 github 链接', () => {
     expect(parseRepoRef('https://gitlab.com/facebook/react')).toBeNull();
   });
@@ -244,6 +250,21 @@ describe('GitHub 客户端 — readme / releases / commits', () => {
     const { client } = setup([response({ status: 404, json: {} })]);
     const result = await client.getReadme({ owner: 'ghost', name: 'repo' }, null);
     expect(result).toEqual({ ok: true, data: null, cached: false });
+  });
+
+  it('没有 readme 也要缓存命中——否则每次深挖都重新打 GitHub', async () => {
+    // 现状 bug：404 被写成 JSON null 进缓存，但 parseReadme 对非字符串返回
+    // undefined，「缓存里有值」和「缓存格式不认识」无法区分 → 每次都当未命中。
+    // 症状是「深挖一个没有 README 的仓库」每问一次就多一次 GitHub 请求。
+    const { client, calls } = setup([response({ status: 404, json: {} })]);
+    const ref = { owner: 'ghost', name: 'repo' };
+
+    const first = await client.getReadme(ref, null);
+    const second = await client.getReadme(ref, null);
+
+    expect(first).toEqual({ ok: true, data: null, cached: false });
+    expect(second).toEqual({ ok: true, data: null, cached: true });
+    expect(calls).toHaveLength(1);
   });
 
   it('releases 只保留工具要用的字段并缓存 6 小时', async () => {

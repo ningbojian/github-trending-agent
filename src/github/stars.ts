@@ -340,7 +340,7 @@ async function loadFavorites(
  * 必须取或而不是覆盖：先记 false（保证「别再推它」立刻生效），star 成功后再改 true；
  * 若某次 star 失败又把 true 写回去，之前同步成功的记录就被降级了。
  */
-async function upsertFavorite(
+export async function upsertFavorite(
   wecomUserid: string,
   fullName: string,
   starredOnGithub: boolean,
@@ -354,13 +354,59 @@ async function upsertFavorite(
     });
 }
 
-/** 删除收藏行（取消收藏成功后调用）。 */
-async function deleteFavorite(wecomUserid: string, fullName: string): Promise<void> {
+/**
+ * 删除收藏行（取消收藏成功后调用）。
+ * 导出给面板复用：面板的「取消收藏」必须与聊天命令走同一条写路径。
+ */
+export async function deleteFavorite(wecomUserid: string, fullName: string): Promise<void> {
   await db()
     .delete(favorites)
     .where(
       and(eq(favorites.wecomUserid, wecomUserid), eq(favorites.fullName, fullName)),
     );
+}
+
+/** 「收藏」写路径的结局（面板与聊天共用同一套文案映射）。 */
+export type FavoriteWriteResult = 'synced' | 'auth_failed' | 'sync_failed';
+
+/**
+ * 收藏一个已经确定 fullName 的仓库：先落本地行，再同步 GitHub star。
+ *
+ * 顺序不能反：网络/授权再出问题，「这个仓库以后别再推」这条信号也不能丢。
+ * 聊天里的「收藏 N」与面板里的「收藏」按钮都走这里，避免两处各写一遍。
+ */
+export async function favoriteRepo(
+  wecomUserid: string,
+  token: string,
+  fullName: string,
+): Promise<FavoriteWriteResult> {
+  await upsertFavorite(wecomUserid, fullName, false);
+  const result = await starRepo(token, fullName);
+  if (result === 'ok') {
+    await upsertFavorite(wecomUserid, fullName, true);
+    return 'synced';
+  }
+  return result === 'auth_failed' ? 'auth_failed' : 'sync_failed';
+}
+
+/** 「取消收藏」写路径的结局。 */
+export type UnfavoriteWriteResult = 'removed' | 'auth_failed' | 'failed';
+
+/**
+ * 取消一个已经确定 fullName 的收藏：GitHub 确认取消后才删本地行。
+ * 失败时保留本地行——GitHub 侧未确认，删了就会「以为取消、其实还 star 着」。
+ */
+export async function unfavoriteRepo(
+  wecomUserid: string,
+  token: string,
+  fullName: string,
+): Promise<UnfavoriteWriteResult> {
+  const result = await unstarRepo(token, fullName);
+  if (result === 'ok') {
+    await deleteFavorite(wecomUserid, fullName);
+    return 'removed';
+  }
+  return result === 'auth_failed' ? 'auth_failed' : 'failed';
 }
 
 // ---------------------------------------------------------------------------
@@ -430,19 +476,16 @@ export async function handleFavorite(msg: InboundMessage): Promise<void> {
     }
 
     // 先落库：网络/授权再出问题，「这个仓库以后别再推」这条信号也不会丢。
-    await upsertFavorite(msg.fromUserName, item.fullName, false);
-
-    const result = await starRepo(token, item.fullName);
+    const result = await favoriteRepo(msg.fromUserName, token, item.fullName);
     if (result === 'auth_failed') {
       await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
       return;
     }
-    if (result !== 'ok') {
+    if (result === 'sync_failed') {
       await sendWeComText(msg.fromUserName, STAR_SYNC_FAILED_REPLY);
       return;
     }
 
-    await upsertFavorite(msg.fromUserName, item.fullName, true);
     await sendWeComText(
       msg.fromUserName,
       `✅ 已收藏 ${item.fullName}，已同步到你的 GitHub`,
@@ -529,17 +572,16 @@ export async function handleUnfavorite(msg: InboundMessage): Promise<void> {
       return;
     }
 
-    const result = await unstarRepo(auth.token, fullName);
+    const result = await unfavoriteRepo(msg.fromUserName, auth.token, fullName);
     if (result === 'auth_failed') {
       await sendWeComText(msg.fromUserName, AUTH_EXPIRED_REPLY);
       return;
     }
-    if (result !== 'ok') {
+    if (result !== 'removed') {
       await sendWeComText(msg.fromUserName, UNSTAR_FAILURE_REPLY);
       return;
     }
 
-    await deleteFavorite(msg.fromUserName, fullName);
     await sendWeComText(msg.fromUserName, `已取消收藏 ${fullName}`);
   } catch (err) {
     console.error('handleUnfavorite failed:', err);

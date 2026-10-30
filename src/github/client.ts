@@ -160,7 +160,17 @@ function parseCommits(value: unknown): CommitInfo[] | undefined {
   });
 }
 
+/**
+ * 缓存值形状校验：不认识的形状当作**未命中**（`undefined`），
+ * 认识但没有 README（`null`）当作**命中且为空**。
+ *
+ * 这个区分是必需的：`cached()` 用 `cachedValue !== undefined` 判断是否命中，
+ * 若把 `null` 也返回 `undefined`，「确认这个仓库没有 README」这个事实就无法
+ * 被缓存——每次深挖都重新打一次 GitHub。症状很隐蔽：功能都正常，只是白花
+ * API 配额，而且仓库没有 README 的情况并不少见。
+ */
 function parseReadme(value: unknown): string | null | undefined {
+  if (value === null) return null;
   return typeof value === 'string' ? value : undefined;
 }
 

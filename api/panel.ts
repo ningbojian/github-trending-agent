@@ -43,7 +43,7 @@ import {
 } from '../src/panel/styles.js';
 import { POINTER_SCRIPT } from '../src/ui/pointer.js';
 import { APP_FOOTER, APP_TEXT } from '../src/ui/tokens.js';
-import { renderRobotMascot, ROBOT_ATTRIBUTION, ROBOT_SCRIPT, type RobotMood } from '../src/panel/robot.js';
+import { renderRobotMascot, ROBOT_ATTRIBUTION, ROBOT_SCRIPT, type RobotMood, type RobotProp } from '../src/panel/robot.js';
 import { weatherForPanel } from '../src/panel/weather.js';
 import { AUTO_CITY, cityBySlug, WEATHER_CITIES } from '../src/weather/cities.js';
 import type { Weather } from '../src/weather/service.js';
@@ -132,13 +132,15 @@ function viewHead(
   say: string,
   weather: Weather | null,
   mood: RobotMood = 'idle',
+  prop: RobotProp | null = null,
+  tip = '',
 ): string {
   return `<section class="p-card p-view-head">
     <div class="p-view-head-main">
       <div class="p-hero-label">${escapeHtml(title)}</div>
       <div class="p-view-say">${escapeHtml(say)}</div>
     </div>
-    ${renderRobotMascot(weather, new Date(), { mood })}
+    ${renderRobotMascot(weather, new Date(), { mood, prop, say: tip })}
   </section>`;
 }
 
@@ -415,6 +417,8 @@ async function renderTracking(
        tracked.length ? `${tracked.length} 个仓库 · 有变化我会说` : '还没跟踪仓库',
        weather,
        error ? 'alert' : notice ? 'happy' : 'idle',
+       'search',
+       '有 release 或 star 加速时，我会在这里说一声。',
      )}
      ${card('跟踪中', rows)}
      ${card(
@@ -501,6 +505,9 @@ async function renderHistory(
       '历史简报',
       archives.length ? `已归档 ${archives.length} 天` : '还没有归档',
       weather,
+      'idle',
+      'calendar',
+      '每天 9 点后的简报会归档在这里，保留 14 天。',
     )}${card('最近 14 天', list)}`,
   );
 }
@@ -684,6 +691,10 @@ async function renderFavorites(
        binding.kind === 'ok' ? `${sorted.length} 个收藏` : '还没绑定 GitHub',
        weather,
        mood,
+       'star',
+       binding.kind === 'ok'
+         ? '点「收藏」会同时 star 到你的 GitHub。'
+         : '先绑定 GitHub，我才能帮你收藏。',
      )}
      ${await githubBindingCard(userid, token, binding)}
      ${card('我的收藏', favList)}
@@ -735,6 +746,8 @@ async function renderMemory(
        facts.length ? `${facts.length} 条记忆` : '还没记下任何背景',
        weather,
        error ? 'alert' : notice ? 'happy' : 'idle',
+       'note',
+       '这些背景只用来改进措辞，不会决定推什么。',
      )}
      ${card(`我的记忆（${facts.length}/${PROFILE_MAX_FACTS}）`, list)}
      ${card(
@@ -822,6 +835,8 @@ async function renderSettings(
        `${prefs.pushTime} · ${prefs.intervalDays > 1 ? `每 ${prefs.intervalDays} 天` : '每天'} · ${prefs.digestCount} 条`,
        weather,
        error ? 'alert' : notice ? 'happy' : 'idle',
+       'gear',
+       '改完记得点「保存设置」。',
      )}
      ${card('状态', status)}
      ${await githubBindingCard(userid, token, binding)}

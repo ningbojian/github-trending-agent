@@ -61,6 +61,12 @@ const PANEL_STYLES_DELTA = `
   border-radius:8px;background:var(--p-card);border:1px solid var(--p-line);
   font-size:12px;line-height:1.5;color:var(--p-text);}
 .p-view-head .p-mascot{flex:0 0 auto;width:54px;height:64px;}
+/* 点机器人弹出的功能提示：只在点按时出现，不挡正文。 */
+.p-robot-say{position:absolute;right:100%;bottom:4px;margin-right:8px;width:max-content;
+  max-width:170px;padding:6px 9px;border-radius:10px;background:var(--p-card);
+  border:1px solid var(--p-line);font-size:12px;line-height:1.5;color:var(--p-text);
+  z-index:4;box-shadow:0 8px 20px -14px rgba(0,0,0,.7);}
+.p-robot-say[hidden]{display:none;}
 
 /* 总览主卡：状态、节奏、动作一次看完。 */
 .p-hero-card{position:relative;}

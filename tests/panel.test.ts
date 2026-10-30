@@ -323,6 +323,8 @@ describe('api/panel 视图', () => {
       expect(state.body).toContain('var orbs = [];');
       // 天气在 handler 里统一取一次，子页沿用同一结果（不退化成云）。
       expect(state.body).toContain('天气：北京');
+      // 点机器人说话：每个视图都有气泡文案。
+      expect(state.body).toContain('p-robot-say');
     }
   });
 

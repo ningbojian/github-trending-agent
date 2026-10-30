@@ -41,7 +41,7 @@ vi.mock('../src/wecom/api', () => ({
 
 // 搜索结果的卡片会写 search_caches（收藏 N 对齐）；本文件只断言「写了哪一批」。
 const digestMock = vi.hoisted(() => ({
-  saveRecentResults: vi.fn(async () => undefined),
+  saveRecentResults: vi.fn(async (_userid: string, _items: unknown) => undefined),
 }));
 vi.mock('../src/agent/digest', () => ({
   saveRecentResults: digestMock.saveRecentResults,

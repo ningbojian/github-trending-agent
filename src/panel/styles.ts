@@ -13,35 +13,37 @@ const PANEL_STYLES_DELTA = `
 .panel{font-size:15px;line-height:1.6;color:var(--p-text);}
 
 /* 面板信息密度更高：卡片、列表、表单、按钮统一收一档。 */
-.panel .p-card{padding:12px;margin:0 0 10px;}
+.panel .p-card{padding:12px;margin:0 0 8px;}
 /* 密度规则的 margin 简写会盖掉基类的 .p-card:last-child，这里补回来。 */
 .panel .p-card:last-child{margin-bottom:0;}
-.panel .p-card-title{margin:0 0 6px;}
-.p-chips{margin-top:8px;gap:4px;}
+.panel .p-card-title{margin:0 0 5px;}
+.p-chips{margin-top:6px;gap:4px;}
 .p-chip{padding:2px 7px;font-size:11px;}
 .p-actions{margin-top:8px;gap:8px;align-items:center;}
 .p-actions form{display:flex;}
-.p-actions .p-btn{height:40px;min-height:40px;min-width:88px;padding:0 14px;
-  font-size:14px;line-height:1;border-width:1px;border-style:solid;}
+.p-actions .p-btn{height:38px;min-height:38px;min-width:84px;padding:0 12px;
+  font-size:13px;line-height:1;border-width:1px;border-style:solid;}
 .p-actions .p-btn.ghost{border-color:rgba(255,255,255,.14);}
-.panel .p-btn{height:40px;min-height:40px;padding:0 14px;font-size:14px;line-height:1;}
+.panel .p-btn{height:38px;min-height:38px;padding:0 12px;font-size:13px;line-height:1;}
 .panel .p-btn.block{width:100%;}
-.panel .p-btn.danger{height:auto;min-height:32px;padding:4px 8px;font-size:13px;}
-.panel .p-btn.sm{height:34px;min-height:34px;padding:0 10px;font-size:12px;}
-.p-stats{margin:0 0 8px;}
-.p-stat{padding:8px 6px;}
-.p-stat strong{font-size:19px;}
-.p-grid{gap:8px;margin:0 0 10px;}
-.p-tile{padding:11px;}
-.p-tile-num{font-size:20px;}
-.p-row{padding:8px 0;}
-.p-empty{padding:12px 10px;}
-.p-banner{padding:8px 10px;margin:0 0 10px;}
-.p-field{margin:0 0 10px;}
-.p-label{margin:0 0 4px;}
-.p-input,.p-select{padding:9px 10px;min-height:40px;}
-.p-hint{margin-top:4px;}
-.p-foot{margin-top:10px;}
+.panel .p-btn.danger{height:auto;min-height:30px;padding:3px 8px;font-size:12px;}
+.panel .p-btn.sm{height:32px;min-height:32px;padding:0 9px;font-size:12px;}
+.p-stats{margin:0 0 8px;gap:6px;}
+.p-stat{padding:7px 6px;}
+.p-stat strong{font-size:18px;}
+.p-grid{gap:6px;margin:0 0 8px;}
+.p-tile{padding:9px;min-height:auto;}
+.p-tile-num{font-size:18px;}
+.p-tile-label{font-size:13px;}
+.p-tile-hint{font-size:11px;}
+.p-row{padding:7px 0;}
+.p-empty{padding:10px;}
+.p-banner{padding:7px 10px;margin:0 0 8px;}
+.p-field{margin:0 0 8px;}
+.p-label{margin:0 0 3px;}
+.p-input,.p-select{padding:8px 10px;min-height:38px;}
+.p-hint{margin-top:3px;}
+.p-foot{margin-top:8px;}
 
 /* 导航：横向可滚动的分段控件，当前页用浮起卡片。 */
 .panel-nav{display:flex;gap:3px;padding:3px;margin:0 0 12px;background:var(--p-soft);
@@ -55,12 +57,12 @@ const PANEL_STYLES_DELTA = `
   font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.25);}
 
 /* 视图头：标题 + 一句状态 + 角落机器人。除总览外每个视图都用它。 */
-.p-view-head{display:flex;align-items:center;gap:10px;padding:10px 12px;margin:0 0 10px;}
+.p-view-head{display:flex;align-items:center;gap:10px;padding:8px 12px;margin:0 0 8px;}
 .p-view-head-main{flex:1;min-width:0;}
-.p-view-say{display:inline-block;max-width:100%;margin-top:5px;padding:3px 8px;
+.p-view-say{display:inline-block;max-width:100%;margin-top:4px;padding:2px 8px;
   border-radius:8px;background:var(--p-card);border:1px solid var(--p-line);
-  font-size:12px;line-height:1.5;color:var(--p-text);}
-.p-view-head .p-mascot{flex:0 0 auto;width:88px;height:104px;}
+  font-size:12px;line-height:1.45;color:var(--p-text);}
+.p-view-head .p-mascot{flex:0 0 auto;width:80px;height:96px;}
 /* 视图道具：Twemoji 贴纸放进小圆徽章，挂在机器人手边。 */
 .p-prop{position:absolute;right:-4px;bottom:0;width:26px;height:26px;border-radius:50%;
   background:var(--p-card);border:1px solid var(--p-line);display:flex;align-items:center;
@@ -72,6 +74,8 @@ const PANEL_STYLES_DELTA = `
   border:1px solid var(--p-line);font-size:13px;line-height:1.5;color:var(--p-text);
   z-index:4;box-shadow:0 8px 20px -14px rgba(0,0,0,.7);}
 .p-robot-say[hidden]{display:none;}
+.p-robot-action{display:inline-block;margin-top:6px;color:var(--p-accent);
+  font-weight:600;text-decoration:none;}
 
 /* 总览主卡：状态、节奏、动作一次看完。 */
 .p-hero-card{position:relative;}
@@ -82,7 +86,7 @@ const PANEL_STYLES_DELTA = `
 .p-hero-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;}
 .p-hero-label{font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--p-muted);
   text-transform:uppercase;}
-.p-hero-time{font-size:21px;font-weight:700;line-height:1.2;margin:0;
+.p-hero-time{font-size:19px;font-weight:700;line-height:1.2;margin:0;
   letter-spacing:-.01em;}
 .p-hero-time.sm{font-size:16px;}
 .p-hero-sub{font-size:12px;color:var(--p-muted);margin-top:2px;}

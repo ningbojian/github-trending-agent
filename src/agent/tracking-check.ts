@@ -3,7 +3,8 @@ import { env } from '../config.js';
 import { db } from '../db/client.js';
 import { kvCache, subscribers, trackedItems, type TrackedCursor } from '../db/schema.js';
 import { createGithubClient, type ReleaseInfo, type RepoInfo } from '../github/client.js';
-import { sendWeComText } from '../wecom/api.js';
+import { sendWeComNews, sendWeComText } from '../wecom/api.js';
+import type { NewsArticle } from '../wecom/news.js';
 import { shanghaiToday } from './time.js';
 import {
   computeTrackedChanges,
@@ -30,6 +31,36 @@ const MARKER_TTL_MS = 48 * 60 * 60 * 1000;
  * 不要按「每条 6 秒」累加——那样跟踪 8–10 个仓库的人会被整人跳过。
  */
 const PER_USER_BUDGET_MS = 6_000;
+
+/**
+ * 跟踪变化也走卡片：只要推送里带仓库和链接，就用 news（和每日简报同一形态）。
+ * 从 `facts` 前缀（owner/repo：...）取仓库名拼 GitHub 链接；取不到就不给链接。
+ */
+function changesToArticles(changes: TrackedChange[]): NewsArticle[] {
+  return changes.slice(0, 8).map((change) => {
+    const match = change.facts.match(/^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)[：:]/);
+    const fullName = match?.[1] ?? '';
+    return {
+      title: clipBytes(fullName === '' ? '跟踪变化' : `${fullName} 有变化`, 120),
+      description: clipBytes(change.facts, 480),
+      url:
+        fullName === ''
+          ? 'https://github.com/trending'
+          : `https://github.com/${fullName}`,
+    };
+  });
+}
+
+/** 按字节截断（中文按字符算），补省略号。 */
+function clipBytes(text: string, max: number): string {
+  if (Buffer.byteLength(text, 'utf8') <= max) return text;
+  let out = '';
+  for (const char of text) {
+    if (Buffer.byteLength(`${out}${char}`, 'utf8') > max - 3) break;
+    out += char;
+  }
+  return `${out}...`;
+}
 
 export interface PushTrackedOptions {
   now?: Date;
@@ -200,7 +231,13 @@ export async function pushTrackedChanges(
     try {
       // 先写 marker（at-most-once）：发送失败宁可丢这一次，也不重复。
       await markNoticeSent(userid, date, now);
-      await sendWeComText(userid, text);
+      try {
+        // 带仓库链接的推送统一用卡片；被拒再退回文本。
+        await sendWeComNews(userid, changesToArticles(changes));
+      } catch (err) {
+        console.warn('tracking news failed, fallback to text:', err);
+        await sendWeComText(userid, text);
+      }
       for (const item of items) {
         const snapshot = checkedSnapshots.get(item.id);
         if (!snapshot) continue;

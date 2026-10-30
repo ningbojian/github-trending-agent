@@ -167,13 +167,14 @@ function viewHead(
   mood: RobotMood = 'idle',
   prop: RobotProp | null = null,
   tip = '',
+  action?: { href: string; label: string },
 ): string {
   return `<section class="p-card p-view-head">
     <div class="p-view-head-main">
       <div class="p-hero-label">${escapeHtml(title)}</div>
       <div class="p-view-say">${escapeHtml(say)}</div>
     </div>
-    ${renderRobotMascot(weather, new Date(), { mood, prop, say: tip })}
+    ${renderRobotMascot(weather, new Date(), { mood, prop, say: tip, action })}
   </section>`;
 }
 
@@ -352,7 +353,8 @@ async function renderOverview(
     }),
     readDailySnapshotCache().catch(() => null),
   ]);
-  const insight = snapshot ? dailyInsight(snapshot.items) : '';
+  const insightItems = snapshot ? snapshot.items.slice(0, prefs.digestCount) : [];
+  const insight = dailyInsight(insightItems);
   const mood: RobotMood = notice ? 'happy' : error ? 'alert' : active ? 'idle' : 'sleepy';
 
   const cadence =
@@ -375,10 +377,7 @@ async function renderOverview(
       <a class="p-btn" href="${href(token, { view: 'settings' })}">调整设置</a>
       ${subscriptionToggle(token, 'overview', sub !== undefined, active)}
     </div>
-    ${renderRobotMascot(weather, new Date(), {
-      mood,
-      say: insight || '捏我试试；两颗贴纸可以拖。',
-    })}
+    ${renderRobotMascot(weather, new Date(), { mood })}
   </section>`;
 
   const tiles = `<div class="p-grid">
@@ -404,19 +403,11 @@ async function renderOverview(
     </a>
   </div>`;
 
-  const recent = archives[0]
-    ? `<a class="p-btn ghost" href="${href(token, {
-        view: 'history',
-        date: archives[0].date,
-      })}">看看 ${escapeHtml(archives[0].date)} 的简报</a>`
-    : empty(`今天还没有归档。等 ${prefs.pushTime} 之后再看。`);
-
   return page(
     '总览',
     token,
     'overview',
     `${banner(notice, error)}${hero}${personalCard(sub, week)}${tiles}
-     ${card('最近简报', recent)}
      <p class="p-foot">${escapeHtml(ROBOT_ATTRIBUTION)}</p>`,
   );
 }
@@ -459,6 +450,7 @@ async function renderTracking(
        error ? 'alert' : notice ? 'happy' : 'idle',
        'search',
        '有 release 或 star 加速时，我会在这里说一声。',
+       { href: href(token, { view: 'checkup' }), label: '给跟踪的仓库做体检' },
      )}
      ${card('跟踪中', rows)}
      ${card(
@@ -548,6 +540,9 @@ async function renderHistory(
       'idle',
       'calendar',
       '每天 9 点后的简报会归档在这里，保留 14 天。',
+      archives[0]
+        ? { href: href(token, { view: 'history', date: archives[0].date }), label: '看最近一天的简报' }
+        : undefined,
     )}${card('最近 14 天', list)}`,
   );
 }
@@ -835,6 +830,7 @@ async function renderFavorites(
        binding.kind === 'ok'
          ? '点「收藏」会同时 star 到你的 GitHub。'
          : '先绑定 GitHub，我才能帮你收藏。',
+       { href: href(token, { view: 'checkup' }), label: '给一个仓库做体检' },
      )}
      ${await githubBindingCard(userid, token, binding)}
      ${card('我的收藏', favList)}
@@ -1016,7 +1012,7 @@ async function renderSettings(
            <span class="p-hint">自动只到城市级；不准时手动选一个。</span>
          </label>`,
       )}
-      <button class="p-btn block" type="submit">保存设置</button>
+      ${card('保存', '<button class="p-btn block" type="submit">保存设置</button>')}
      </form>
      ${card(
        'AI Key',

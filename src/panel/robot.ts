@@ -106,6 +106,8 @@ export interface RobotOptions {
   prop?: RobotProp | null;
   /** 点一下机器人时弹出的气泡文案；不传就没有气泡。 */
   say?: string;
+  /** 气泡里的主操作（让机器人真的能干活，而不只是说话）。 */
+  action?: { href: string; label: string };
 }
 
 export type RobotProp = 'search' | 'calendar' | 'star' | 'note' | 'gear';
@@ -140,7 +142,11 @@ export function renderRobotMascot(
     : '';
   const say =
     options.say && options.say.trim() !== ''
-      ? `<div class="p-robot-say" hidden>${escapeHtml(options.say.trim())}</div>`
+      ? `<div class="p-robot-say" hidden>${escapeHtml(options.say.trim())}${
+          options.action
+            ? `<a class="p-robot-action" href="${escapeHtml(options.action.href)}">${escapeHtml(options.action.label)}</a>`
+            : ''
+        }</div>`
       : '';
 
   return `<div class="p-mascot" data-robot-stage data-mood="${mood}">

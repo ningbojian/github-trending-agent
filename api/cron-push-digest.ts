@@ -7,6 +7,8 @@ import { pushEmailDigests } from '../src/email/push.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
 import { refreshWeComMemberCount } from '../src/wecom/capacity.js';
 import { env } from '../src/config.js';
+import { db } from '../src/db/client.js';
+import { kvCache } from '../src/db/schema.js';
 
 /**
  * 定时推送每日简报端点（Vercel Node function）。
@@ -44,6 +46,24 @@ function sendJson(res: CronResponse, status: number, body: unknown): void {
   res.status(status).send(JSON.stringify(body));
 }
 
+/**
+ * 心跳：每次触发都写一行 `cron:last-run:v1`（3 天 TTL）。
+ * 排障用——「今天为什么没收到推送」时先看它：有没有触发、这次算出了什么。
+ * 失败静默：心跳不能影响推送本身。
+ */
+async function recordHeartbeat(value: Record<string, unknown>): Promise<void> {
+  try {
+    const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+    const key = 'cron:last-run:v1';
+    await db()
+      .insert(kvCache)
+      .values({ key, value, expiresAt })
+      .onConflictDoUpdate({ target: kvCache.key, set: { value, expiresAt } });
+  } catch (err) {
+    console.warn('cron heartbeat failed:', err);
+  }
+}
+
 export default async function handler(
   req: CronRequest,
   res: CronResponse,
@@ -60,8 +80,8 @@ export default async function handler(
     return;
   }
 
+  const startedAt = Date.now();
   try {
-    const startedAt = Date.now();
     // 每小时顺带刷新成员数缓存（落地页名额门控用；失败不影响推送）。
     await refreshWeComMemberCount();
     // 当天快照只构建一次：企微与邮件两个渠道共用同一轮模型产出。
@@ -94,11 +114,26 @@ export default async function handler(
     // 每周复盘：自身按「周一 10 点后 + 本周未发」幂等，每小时的 tick 都能安全调用。
     // 它永远不会抛（内部逐人隔离），所以不会把每日推送的成功响应变成 500。
     const weekly = await pushWeeklyReviews();
+    await recordHeartbeat({
+      at: new Date().toISOString(),
+      ok: true,
+      ms: Date.now() - startedAt,
+      wecom,
+      email,
+      weekly,
+      tracking,
+    });
     sendJson(res, 200, { ...wecom, email, weekly, tracking });
   } catch (err) {
     console.error('cron-push-digest failed:', err);
     // detail 供 Bearer 鉴权后的调用方排障（端点不公开，不引入暴露面）
     const detail = err instanceof Error ? err.message : String(err);
+    await recordHeartbeat({
+      at: new Date().toISOString(),
+      ok: false,
+      ms: Date.now() - startedAt,
+      error: detail,
+    });
     sendJson(res, 500, { error: 'push failed', detail });
   }
 }

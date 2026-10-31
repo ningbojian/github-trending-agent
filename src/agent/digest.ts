@@ -473,6 +473,8 @@ export interface PushDigestsOptions {
    * 留出快照构建、周复盘与收尾的余量。
    */
   budgetMs?: number;
+  /** 只处理这一个用户（漏跑自愈用）；缺省处理全部 active 订阅者。 */
+  onlyUserId?: string;
   /** 注入时钟（单测用）。 */
   clock?: () => number;
 }
@@ -588,6 +590,48 @@ export async function markDigestSent(wecomUserid: string): Promise<void> {
  * 发送成功后写 search_caches（「收藏 N」引用刚收到的简报）；
  * 发送失败不写缓存——绝不让序号指向用户没收到的列表。
  */
+/**
+ * 漏跑自愈：调度器没触发时，用户任意一条消息都能补发今天的简报。
+ *
+ * 为什么需要：cron 依赖 GitHub Actions 排程，实测会整段漏跑；而用户设置的
+ * 推送时间一旦晚于最后一次成功触发，当天就永远收不到。这里在入站消息上做
+ * 一次「今天该发但没发」的检查，命中就走与定时推送完全相同的发送链路
+ * （claim / news / search_caches / lastSentAt 都在 pushDigests 里）。
+ *
+ * 没到点、当天已发、已暂停、间隔未到 → 直接返回，单次成本只有一条 select。
+ */
+export async function catchUpDigestIfDue(
+  wecomUserid: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const row = (
+    await db()
+      .select()
+      .from(subscribers)
+      .where(eq(subscribers.wecomUserid, wecomUserid))
+      .limit(1)
+  )[0];
+  if (!row?.active) return false;
+
+  const prefs = normalizePreferences(row.preferences);
+  if (shanghaiMinutes(now) < pushTimeMinutes(prefs.pushTime)) return false;
+  if (
+    !eligibleForPush(
+      row.lastDigestAt ? new Date(row.lastDigestAt) : null,
+      prefs.intervalDays,
+      shanghaiToday(now),
+    )
+  ) {
+    return false;
+  }
+
+  const result = await pushDigests(now, {
+    onlyUserId: wecomUserid,
+    budgetMs: 60_000,
+  });
+  return result.sent > 0;
+}
+
 export async function pushDigests(
   now: Date = new Date(),
   options: PushDigestsOptions = {},
@@ -595,10 +639,14 @@ export async function pushDigests(
   const budgetMs = options.budgetMs ?? PUSH_BUDGET_MS;
   const clock = options.clock ?? Date.now;
   const startedAt = clock();
-  const rows = await db()
+  const rows = (await db()
     .select()
     .from(subscribers)
-    .where(eq(subscribers.active, true));
+    .where(eq(subscribers.active, true))).filter(
+    (row) =>
+      options.onlyUserId === undefined ||
+      row.wecomUserid === options.onlyUserId,
+  );
 
   // 当日快照只构建/读取一次，两个渠道共用；失败返回 null → 逐订阅者回退。
   const snapshot = await getDailySnapshot(now);

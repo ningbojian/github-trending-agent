@@ -54,6 +54,7 @@ import {
   handleUntrack,
 } from './tracking-commands.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
+import { catchUpDigestIfDue } from '../agent/digest.js';
 import {
   RATE_LIMIT_REPLY,
   checkQuota,
@@ -278,6 +279,16 @@ export function resetQuotaChecker(): void {
   quotaChecker = (userid) => checkQuota(userid);
 }
 
+/** 漏跑自愈：默认真的检查并补发；测试注入 no-op，避免触库。 */
+export type DigestCatchUp = (userid: string) => Promise<boolean>;
+let digestCatchUp: DigestCatchUp = (userid) => catchUpDigestIfDue(userid);
+export function registerDigestCatchUp(fn: DigestCatchUp): void {
+  digestCatchUp = fn;
+}
+export function resetDigestCatchUp(): void {
+  digestCatchUp = (userid) => catchUpDigestIfDue(userid);
+}
+
 /** 手动要今天简报的说法（精确匹配，避免把「每日推送设置」之类吞进来）。 */
 const TODAY_DIGEST_COMMANDS = new Set([
   '每日推送',
@@ -330,6 +341,17 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
 
   // Task 13：首条消息自动开通；ensureSubscriber 内部 fail-open（DB 错误返回 false）。
   const isNew = await ensureSubscriber(msg);
+  // 漏跑自愈：调度器没触发时，用户发任何一条消息都能补发今天的简报。
+  // 新用户已经由礼包发过首日简报，跳过这一检查。
+  if (!isNew) {
+    try {
+      if (await digestCatchUp(msg.fromUserName)) {
+        note('digest-catchup', 'ok');
+      }
+    } catch (err) {
+      console.warn('digest catch-up failed:', err);
+    }
+  }
   if (isNew) {
     try {
       // Task 6：礼包 = 欢迎语 + 首日简报；必须先于原消息回复（「收藏 N」缓存顺序）。

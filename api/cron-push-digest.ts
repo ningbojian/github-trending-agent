@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { PUSH_BUDGET_MS, pushDigests } from '../src/agent/digest.js';
+import { anyDigestDue } from '../src/agent/digest-due.js';
 import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
 import { getDailyObservations } from '../src/agent/observation.js';
 import { pushTrackedChanges } from '../src/agent/tracking-check.js';
@@ -90,23 +91,33 @@ export default async function handler(
 
   const startedAt = Date.now();
   try {
-    // 每小时顺带刷新成员数缓存（落地页名额门控用；失败不影响推送）。
-    await refreshWeComMemberCount();
-    // 当天快照只构建一次：企微与邮件两个渠道共用同一轮模型产出。
-    const snapshot = await getDailySnapshot();
-    // 观察：仍生成并写入 archive（面板历史用），但**不再推送到微信**；
-    // 快照已经耗掉太多时间就跳过，保证简报预算。
-    if (Date.now() - startedAt < 30_000) {
-      try {
-        await getDailyObservations(snapshot);
-      } catch (err) {
-        console.error('[cron] observations failed:', err);
+    const now = new Date();
+    // 没人到点就早退：否则每 5 分钟触发都会重建快照（摘要/短句，实测 ~220s）
+    // 并跑一次观察——纯粹浪费模型额度与函数时长。
+    const due = await anyDigestDue(now);
+
+    let snapshot: Awaited<ReturnType<typeof getDailySnapshot>> = null;
+    let wecom = { sent: 0, skipped: 0, failed: 0 };
+    if (due) {
+      // 顺带刷新成员数缓存（落地页名额门控用；失败不影响推送）。
+      await refreshWeComMemberCount();
+      // 当天快照只构建一次：企微与邮件两个渠道共用同一轮模型产出。
+      snapshot = await getDailySnapshot(now);
+      // 观察：仍生成并写入 archive（面板历史用），但**不再推送到微信**；
+      // 快照已经耗掉太多时间就跳过，保证简报预算。
+      if (Date.now() - startedAt < 30_000) {
+        try {
+          await getDailyObservations(snapshot);
+        } catch (err) {
+          console.error('[cron] observations failed:', err);
+        }
       }
+      const remaining = 285_000 - (Date.now() - startedAt);
+      wecom = await pushDigests(now, {
+        budgetMs: Math.max(30_000, Math.min(PUSH_BUDGET_MS, remaining)),
+      });
     }
-    const remaining = 285_000 - (Date.now() - startedAt);
-    const wecom = await pushDigests(undefined, {
-      budgetMs: Math.max(30_000, Math.min(PUSH_BUDGET_MS, remaining)),
-    });
+
     // 跟踪检查：只处理 20 小时未检查的项；失败只记日志，不影响每日推送。
     const tracking = await pushTrackedChanges({
       budgetMs: Math.min(45_000, Math.max(0, 285_000 - (Date.now() - startedAt))),
@@ -115,23 +126,27 @@ export default async function handler(
       return { sent: 0, skipped: 0, failed: 0, checked: 0 };
     });
     // cron 没有用户请求头，显式把站点根地址传进邮件推送（否则链接会回落 localhost）。
-    const email = await pushEmailDigests({
-      snapshot,
-      baseUrl: resolveBaseUrl(req.headers),
-    });
-    // 每周复盘：自身按「周一 10 点后 + 本周未发」幂等，每小时的 tick 都能安全调用。
+    const email =
+      due && snapshot !== null
+        ? await pushEmailDigests({
+            snapshot,
+            baseUrl: resolveBaseUrl(req.headers),
+          })
+        : { sent: 0, skipped: 0, failed: 0 };
+    // 每周复盘：自身按「周一 10 点后 + 本周未发」幂等，每次 tick 都能安全调用。
     // 它永远不会抛（内部逐人隔离），所以不会把每日推送的成功响应变成 500。
     const weekly = await pushWeeklyReviews();
     await recordHeartbeat({
       at: new Date().toISOString(),
       ok: true,
+      due,
       ms: Date.now() - startedAt,
       wecom,
       email,
       weekly,
       tracking,
     });
-    sendJson(res, 200, { ...wecom, email, weekly, tracking });
+    sendJson(res, 200, { due, ...wecom, email, weekly, tracking });
   } catch (err) {
     console.error('cron-push-digest failed:', err);
     // detail 供 Bearer 鉴权后的调用方排障（端点不公开，不引入暴露面）

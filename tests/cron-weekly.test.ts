@@ -23,6 +23,10 @@ vi.mock('../src/agent/tracking-check', () => ({
 vi.mock('../src/agent/digest-snapshot', () => ({
   getDailySnapshot: async () => ({ date: '2026-10-26', items: [] }),
 }));
+// 「有没有人到点」的检查单独测；cron 编排测试里固定当作有人到点。
+vi.mock('../src/agent/digest-due', () => ({
+  anyDigestDue: async () => true,
+}));
 vi.mock('../src/email/push', () => ({
   pushEmailDigests: async () => ({ sent: 1, skipped: 0, failed: 0 }),
 }));

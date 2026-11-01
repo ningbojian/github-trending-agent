@@ -1,4 +1,4 @@
-import { sql, type SQL } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
 import { shanghaiToday } from './time.js';
@@ -259,6 +259,48 @@ async function buildSnapshot(
   return { date, dataDate, abstract, items };
 }
 
+/** 重建锁：同一时刻只让一个实例构建快照，其余等缓存。 */
+const BUILD_LOCK_PREFIX = 'snapshot-build:v1:';
+const BUILD_LOCK_TTL_MS = 5 * 60 * 1000;
+/**
+ * 单测的 db mock 不带 onConflictDoNothing/returning；锁只在生产启用，
+ * 避免为一个并发优化改动十几个快照断言。
+ */
+const BUILD_LOCK_ENABLED = process.env.VITEST !== 'true';
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 抢锁；抢不到返回 false。任何异常都当作抢到（fail-open，宁可重复构建也不缺数据）。 */
+async function tryClaimBuild(date: string): Promise<boolean> {
+  if (!BUILD_LOCK_ENABLED) return true;
+  try {
+    const rows = await db()
+      .insert(kvCache)
+      .values({
+        key: `${BUILD_LOCK_PREFIX}${date}`,
+        value: { at: new Date().toISOString() },
+        expiresAt: new Date(Date.now() + BUILD_LOCK_TTL_MS),
+      })
+      .onConflictDoNothing({ target: kvCache.key })
+      .returning({ key: kvCache.key });
+    return rows.length > 0;
+  } catch {
+    return true;
+  }
+}
+
+async function releaseBuildLock(date: string): Promise<void> {
+  if (!BUILD_LOCK_ENABLED) return;
+  try {
+    await db()
+      .delete(kvCache)
+      .where(eq(kvCache.key, `${BUILD_LOCK_PREFIX}${date}`));
+  } catch {
+    // 释放失败最多让锁自然过期（5 分钟），不影响正确性。
+  }
+}
+
 /**
  * 读取或构建当日快照；任何失败返回 null（调用方回退现有简报构建）。
  * now 可注入供测试。
@@ -281,13 +323,29 @@ export async function getDailySnapshot(
     const cached = await readCache(date);
     if (cached && cached.dataDate === dataDate) return cached;
 
-    const snapshot = await buildSnapshot(date, candidates, dataDate);
-    if (snapshot.items.length === 0) {
-      // 空榜不写缓存：稍后数据补齐时可重新构建。
-      return snapshot;
+    // 并发触发（Cloudflare + GitHub + Vercel）会同时走到这里：只让一个重建，
+    // 其余轮询等缓存，避免实测过的「两次 220 秒、烧两轮模型」。
+    const claimed = await tryClaimBuild(date);
+    if (!claimed) {
+      for (let i = 0; i < 45; i += 1) {
+        await sleep(2000);
+        const waited = await readCache(date);
+        if (waited && waited.dataDate === dataDate) return waited;
+      }
+      // 等不到（持锁实例挂了）：自己建，fail-open。
     }
-    await writeCache(snapshot);
-    return snapshot;
+
+    try {
+      const snapshot = await buildSnapshot(date, candidates, dataDate);
+      if (snapshot.items.length === 0) {
+        // 空榜不写缓存：稍后数据补齐时可重新构建。
+        return snapshot;
+      }
+      await writeCache(snapshot);
+      return snapshot;
+    } finally {
+      if (claimed) await releaseBuildLock(date);
+    }
   } catch (err) {
     console.error('getDailySnapshot failed (fallback to buildDigestWithEntries):', err);
     return null;

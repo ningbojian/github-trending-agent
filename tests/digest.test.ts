@@ -24,6 +24,11 @@ vi.mock('../src/agent/observation', () => ({
   getDailyObservations: observationMock.getDailyObservations,
 }));
 
+// 「有没有人到点」单独测；cron 编排测试里固定当作有人到点。
+vi.mock('../src/agent/digest-due', () => ({
+  anyDigestDue: async () => true,
+}));
+
 const summaryMock = vi.hoisted(() => ({
   loadRepoSummaries: vi.fn(),
 }));

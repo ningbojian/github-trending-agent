@@ -127,7 +127,7 @@ export default async function handler(
     });
     // cron 没有用户请求头，显式把站点根地址传进邮件推送（否则链接会回落 localhost）。
     const email =
-      due && snapshot !== null
+      due
         ? await pushEmailDigests({
             snapshot,
             baseUrl: resolveBaseUrl(req.headers),
@@ -146,7 +146,7 @@ export default async function handler(
       weekly,
       tracking,
     });
-    sendJson(res, 200, { due, ...wecom, email, weekly, tracking });
+    sendJson(res, 200, { ...wecom, email, weekly, tracking });
   } catch (err) {
     console.error('cron-push-digest failed:', err);
     // detail 供 Bearer 鉴权后的调用方排障（端点不公开，不引入暴露面）

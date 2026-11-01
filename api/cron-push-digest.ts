@@ -47,14 +47,21 @@ function sendJson(res: CronResponse, status: number, body: unknown): void {
 }
 
 /**
- * 心跳：每次触发都写一行 `cron:last-run:v1`（3 天 TTL）。
- * 排障用——「今天为什么没收到推送」时先看它：有没有触发、这次算出了什么。
+ * 心跳：每次触发都往 `cron:last-run:v1` 里追加一条（保留最近 20 次，3 天 TTL）。
+ * 排障用——「今天为什么没收到推送」时先看它：有没有触发、每次算出了什么。
  * 失败静默：心跳不能影响推送本身。
  */
-async function recordHeartbeat(value: Record<string, unknown>): Promise<void> {
+async function recordHeartbeat(entry: Record<string, unknown>): Promise<void> {
   try {
-    const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
     const key = 'cron:last-run:v1';
+    const rows = await db()
+      .select({ value: kvCache.value })
+      .from(kvCache)
+      .where(eq(kvCache.key, key));
+    const prev = rows[0]?.value as { runs?: unknown[] } | undefined;
+    const runs = Array.isArray(prev?.runs) ? prev.runs : [];
+    const value = { runs: [entry, ...runs].slice(0, 20) };
+    const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
     await db()
       .insert(kvCache)
       .values({ key, value, expiresAt })

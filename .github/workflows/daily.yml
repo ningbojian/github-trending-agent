@@ -79,7 +79,9 @@ jobs:
           # Cloudflare 对源站有约 100 秒超时：快照重建 + 观察生成较慢时会返回 524，
           # 但 Vercel 函数通常仍在后台跑完（本次实测快照已写入、HF 已入库）。
           # 524 只记 warning，不让整条管线变红；401/500 等仍按失败处理。
-          CODE=$(curl -sS --max-time 180 -o digest-resp.json -w "%{http_code}" -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
+          # 180s 不够：快照重建（摘要 + 短句）实测能到 ~220s，超时会让整条管线假红。
+          # 函数上限 300s，这里给 280s；拿到响应后再判断状态码。
+          CODE=$(curl -sS --max-time 280 -o digest-resp.json -w "%{http_code}" -X POST "https://${VERCEL_URL}/api/cron-push-digest" \
             -H "Authorization: Bearer ${CRON_SECRET}")
           echo "HTTP ${CODE}"
           cat digest-resp.json 2>/dev/null || true; echo

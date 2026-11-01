@@ -15,8 +15,12 @@ describe('Vercel 配置', () => {
       readFileSync(new URL('../vercel.json', import.meta.url), 'utf8'),
     ) as { crons?: Array<{ path: string; schedule: string }> };
 
+    // 两个每天一次的 cron：北京 09:00 与 10:00。
+    // GitHub Actions 的定时触发实测会整段漏跑；这两个时刻不依赖 Actions，
+    // 覆盖默认 09:00 与常见的 10:00 设置。其它时间靠 GitHub/自愈兜底。
     expect(config.crons).toEqual([
       { path: '/api/cron-push-digest', schedule: '0 1 * * *' },
+      { path: '/api/cron-push-digest', schedule: '0 2 * * *' },
     ]);
   });
 

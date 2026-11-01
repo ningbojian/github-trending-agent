@@ -1,3 +1,4 @@
+import { eq } from 'drizzle-orm';
 import { PUSH_BUDGET_MS, pushDigests } from '../src/agent/digest.js';
 import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
 import { getDailyObservations } from '../src/agent/observation.js';

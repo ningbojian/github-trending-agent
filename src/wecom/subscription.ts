@@ -8,6 +8,7 @@
  */
 
 import { formatSubscriptionSummary } from '../agent/subscription-summary.js';
+import { directionLabel } from '../agent/directions.js';
 import { readSubscription, removeSubscriptionTerm } from '../agent/subscription-store.js';
 import { sendWeComText } from './api.js';
 import type { InboundMessage } from './router.js';
@@ -74,15 +75,22 @@ export async function handleCancelSubscriptionTerm(msg: InboundMessage): Promise
     if (!result.removed) {
       await sendWeComText(
         msg.fromUserName,
-        `订阅关键词里没有「${term}」。发「我的订阅」看看当前设置。`,
+        `订阅里没有「${term}」（方向或关键词）。发「我的订阅」看看当前设置。`,
       );
       return;
     }
+    const parts: string[] = [];
+    if (result.topics.length > 0) {
+      parts.push(`当前方向：${result.topics.map(directionLabel).join('、')}`);
+    }
+    if (result.keywords.length > 0) {
+      parts.push(`当前关键词：${result.keywords.join('、')}`);
+    }
     const tail =
-      result.keywords.length > 0
-        ? `当前关键词：${result.keywords.join('、')}。`
-        : '当前没有偏好关键词，之后按全站热榜推荐。';
-    await sendWeComText(msg.fromUserName, `✅ 已从订阅关键词里移除「${term}」。${tail}`);
+      parts.length > 0
+        ? `${parts.join('；')}。`
+        : '当前没有偏好，之后按全站热榜推荐。';
+    await sendWeComText(msg.fromUserName, `✅ 已移除「${term}」。${tail}`);
   } catch (err) {
     console.error('handleCancelSubscriptionTerm failed:', err);
     try {

@@ -26,7 +26,7 @@ const state = vi.hoisted(() => ({
   markerReadError: false,
   markerWriteError: false,
   sendError: false,
-  removed: { removed: true, keywords: [] as string[] },
+  removed: { removed: true, keywords: [] as string[], topics: [] as string[] },
   removeError: false,
   removeCalls: [] as string[],
 }));
@@ -134,7 +134,7 @@ beforeEach(() => {
   state.markerReadError = false;
   state.markerWriteError = false;
   state.sendError = false;
-  state.removed = { removed: true, keywords: [] };
+  state.removed = { removed: true, keywords: [], topics: [] };
   state.removeError = false;
   state.removeCalls = [];
   vi.mocked(sendWeComText).mockClear();
@@ -328,17 +328,17 @@ describe('maybePromptConflict', () => {
 
 describe('「取消订阅 <关键词>」', () => {
   it('删掉关键词并回执当前剩余', async () => {
-    state.removed = { removed: true, keywords: ['python'] };
+    state.removed = { removed: true, keywords: ['python'], topics: [] };
 
     await handleCancelSubscriptionTerm(message('取消订阅 rpa'));
 
     expect(state.removeCalls).toEqual(['rpa']);
-    expect(sentTexts()[0]).toContain('已从订阅关键词里移除「rpa」');
+    expect(sentTexts()[0]).toContain('已移除「rpa」');
     expect(sentTexts()[0]).toContain('python');
   });
 
   it('删完最后一个词 → 明确说明回到全站热榜', async () => {
-    state.removed = { removed: true, keywords: [] };
+    state.removed = { removed: true, keywords: [], topics: [] };
 
     await handleCancelSubscriptionTerm(message('取消订阅 rpa'));
 
@@ -346,7 +346,7 @@ describe('「取消订阅 <关键词>」', () => {
   });
 
   it('词不在订阅里 → 不写库的提示（handler 不报成功）', async () => {
-    state.removed = { removed: false, keywords: ['python'] };
+    state.removed = { removed: false, keywords: ['python'], topics: [] };
 
     await handleCancelSubscriptionTerm(message('取消订阅 rpa'));
 

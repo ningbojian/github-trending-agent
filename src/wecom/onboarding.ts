@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { MAX_INTERVAL_DAYS } from '../agent/digest.js';
 import { mergePreferences } from '../agent/subscription-store.js';
+import { directionLabel, splitDirectionTokens } from '../agent/directions.js';
 import { db } from '../db/client.js';
 import { subscribers } from '../db/schema.js';
 import { sendWeComText } from './api.js';
@@ -115,7 +116,7 @@ export const HELP_MESSAGE = [
   '【简报】订阅决定「推什么、何时推」',
   '· 每日简报：加入即自动开通（默认 09:00 北京时间）；退订随时停止',
   '· 我的订阅：查看当前设置',
-  '· 订阅 <偏好>：设置语言/关键词，如「订阅 python,ai」',
+  '· 订阅 <偏好>：按方向/关键词，如「订阅 agent,前端」',
   '· 取消订阅 <关键词>：只去掉一个词，不退订',
   '· 条数：回「条数 N」设置条数（1–8，只影响简报）',
   '· 推送时间：每天 09:00（北京时间）或 HH:MM',
@@ -218,8 +219,13 @@ function parseKeywords(rest: string): string[] {
     .filter((token) => token.length > 0);
 }
 
-function subscribedReply(keywords: string[]): string {
-  return `${SUBSCRIBE_REPLY_PREFIX}${keywords.join('、')}${SUBSCRIBE_REPLY_SUFFIX}`;
+function subscribedReply(topics: string[], keywords: string[]): string {
+  if (topics.length === 0) {
+    return `${SUBSCRIBE_REPLY_PREFIX}${keywords.join('、')}${SUBSCRIBE_REPLY_SUFFIX}`;
+  }
+  const parts = [`方向：${topics.map(directionLabel).join('、')}`];
+  if (keywords.length > 0) parts.push(`关键词：${keywords.join('、')}`);
+  return `✅ 已订阅每日简报，${parts.join('；')}。之后按这些偏好推送。`;
 }
 
 /**
@@ -243,12 +249,14 @@ export async function handleSubscribe(msg: InboundMessage): Promise<void> {
       await sendWeComText(msg.fromUserName, SUBSCRIBE_USAGE_REPLY);
       return;
     }
+    // 认得出的词进「方向」（agent / 前端 / 数据库…），认不出的原样留作关键词。
+    const { topics, keywords } = splitDirectionTokens(tokens);
     await mergePreferences(
       msg.fromUserName,
-      { languages: [], keywords: tokens },
+      { languages: [], topics, keywords },
       { active: true },
     );
-    await sendWeComText(msg.fromUserName, subscribedReply(tokens));
+    await sendWeComText(msg.fromUserName, subscribedReply(topics, keywords));
   } catch (err) {
     console.error('handleSubscribe failed:', err);
     try {

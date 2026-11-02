@@ -69,6 +69,8 @@ export const subscribers = pgTable(
       .$type<{
         languages: string[];
         keywords: string[];
+        /** 订阅方向（directions.ts 的 key：agent / frontend / …）。 */
+        topics?: string[];
         digestCount?: number;
         /** 每日推送时间「HH:MM」（北京时间；缺省按 09:00）。 */
         pushTime?: string;
@@ -119,6 +121,8 @@ export const emailSubscribers = pgTable(
         digestCount: number;
         languages: string[];
         keywords: string[];
+        /** 订阅方向（directions.ts 的 key）。 */
+        topics?: string[];
       }>()
       .notNull()
       .default(

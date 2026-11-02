@@ -698,6 +698,7 @@ describe('/api/email-settings', () => {
         intervalDays: 3,
         digestCount: 5,
         languages: ['python', 'rust'],
+        topics: [],
         keywords: ['ai', '开发效率'],
       },
     });

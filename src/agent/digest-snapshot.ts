@@ -2,6 +2,7 @@ import { eq, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
 import { shanghaiToday } from './time.js';
+import { filterByDirections, directionByAlias } from './directions.js';
 import { loadAbstractSafe } from './abstract.js';
 import { loadRepoShortSummaries, loadRepoSummaries } from './repo-summary.js';
 
@@ -394,13 +395,27 @@ function matchesKeyword(item: DigestSnapshotItem, keyword: string): boolean {
  */
 export function selectEntriesForPreferences(
   items: DigestSnapshotItem[],
-  preferences: { languages?: unknown; keywords?: unknown; digestCount?: unknown },
+  preferences: {
+    languages?: unknown;
+    keywords?: unknown;
+    topics?: unknown;
+    digestCount?: unknown;
+  },
   defaultCount = 10,
   accept?: (item: DigestSnapshotItem) => boolean,
 ): DigestSnapshotItem[] {
   const languages = normalizeList(preferences.languages);
   const keywords = normalizeKeywords(preferences.keywords);
   const digestCount = normalizeCount(preferences.digestCount, defaultCount);
+  const topics = Array.isArray(preferences.topics)
+    ? [
+        ...new Set(
+          preferences.topics
+            .map((topic) => directionByAlias(String(topic))?.key)
+            .filter((key): key is string => key !== undefined),
+        ),
+      ]
+    : [];
 
   const filtered =
     languages.length === 0
@@ -410,10 +425,13 @@ export function selectEntriesForPreferences(
           return language !== undefined && language !== '' && languages.includes(language);
         });
 
+  // 方向过滤：命中任一方向即保留；一个都没命中时退回原列表（宁可放宽，也不发空简报）。
+  const byTopic = filterByDirections(filtered, topics);
+
   const ranked =
     keywords.length === 0
-      ? filtered
-      : [...filtered].sort(
+      ? byTopic
+      : [...byTopic].sort(
           (a, b) =>
             Number(keywords.some((keyword) => matchesKeyword(b, keyword))) -
             Number(keywords.some((keyword) => matchesKeyword(a, keyword))),

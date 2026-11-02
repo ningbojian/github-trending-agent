@@ -1,4 +1,5 @@
 import { SCRAPER_LANGUAGES } from '../config.js';
+import { directionByAlias } from '../agent/directions.js';
 
 /**
  * 邮箱订阅者偏好：字段校验与默认值（设置页写入、推送读取共用）。
@@ -33,6 +34,8 @@ export interface EmailPreferences {
   digestCount: number;
   languages: string[];
   keywords: string[];
+  /** 订阅方向（directions.ts 的 key）。 */
+  topics: string[];
 }
 
 const KEYWORD_PUNCT_RE = /[。！？!?；;，,、()（）]/g;
@@ -100,7 +103,22 @@ export function normalizeEmailPreferences(value: unknown): EmailPreferences {
     digestCount,
     languages: normalizeEmailLanguages(raw.languages),
     keywords: normalizeEmailKeywords(raw.keywords),
+    topics: normalizeEmailTopics((raw as { topics?: unknown }).topics),
   };
+}
+
+/** 方向：只保留已知 key；认不出的一律丢弃（表单只提交白名单值）。 */
+export function normalizeEmailTopics(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    const direction = directionByAlias(String(item));
+    if (!direction || seen.has(direction.key)) continue;
+    seen.add(direction.key);
+    out.push(direction.key);
+  }
+  return out;
 }
 
 /** 设置页写入校验：非法值返回字段级错误（不回显内部细节）。 */
@@ -109,6 +127,7 @@ export function validateEmailPreferencesInput(fields: {
   intervalDays?: string;
   digestCount?: string;
   languages?: string[];
+  topics?: string[];
   keywords?: string;
 }): { ok: true; preferences: EmailPreferences } | { ok: false; error: string } {
   const pushTime = fields.pushTime ?? EMAIL_DEFAULT_PUSH_TIME;
@@ -130,6 +149,7 @@ export function validateEmailPreferencesInput(fields: {
       intervalDays,
       digestCount,
       languages: normalizeEmailLanguages(fields.languages ?? []),
+      topics: normalizeEmailTopics(fields.topics ?? []),
       keywords: normalizeEmailKeywords(fields.keywords ?? ''),
     },
   };

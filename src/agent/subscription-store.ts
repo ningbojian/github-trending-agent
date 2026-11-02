@@ -14,6 +14,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { subscribers } from '../db/schema.js';
+import { directionByAlias } from './directions.js';
 
 /** 库里 preferences 的列类型（含确定字段；运行时可能还有历史遗留键）。 */
 type StoredPreferences = typeof subscribers.$inferSelect.preferences;
@@ -90,17 +91,30 @@ export async function mergePreferences(
 export async function removeSubscriptionTerm(
   wecomUserid: string,
   term: string,
-): Promise<{ removed: boolean; keywords: string[] }> {
+): Promise<{ removed: boolean; keywords: string[]; topics: string[] }> {
   const current = await readSubscription(wecomUserid);
   const raw = current?.preferences.keywords;
   const keywords = Array.isArray(raw)
     ? raw.map((item) => String(item).trim()).filter(Boolean)
     : [];
+  const rawTopics = current?.preferences.topics;
+  const topics = Array.isArray(rawTopics)
+    ? rawTopics.map((item) => String(item).trim().toLowerCase()).filter(Boolean)
+    : [];
   const target = term.trim().toLowerCase();
+
+  // 先看是不是方向：是就移除方向，否则按关键词处理。
+  const direction = directionByAlias(target);
+  if (direction && topics.includes(direction.key)) {
+    const remainingTopics = topics.filter((topic) => topic !== direction.key);
+    await mergePreferences(wecomUserid, { topics: remainingTopics });
+    return { removed: true, keywords, topics: remainingTopics };
+  }
+
   const remaining = keywords.filter((keyword) => keyword.toLowerCase() !== target);
   if (remaining.length === keywords.length) {
-    return { removed: false, keywords };
+    return { removed: false, keywords, topics };
   }
   await mergePreferences(wecomUserid, { keywords: remaining });
-  return { removed: true, keywords: remaining };
+  return { removed: true, keywords: remaining, topics };
 }

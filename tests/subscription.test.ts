@@ -164,6 +164,7 @@ describe('removeSubscriptionTerm', () => {
     await expect(removeSubscriptionTerm('u1', 'ai')).resolves.toEqual({
       removed: true,
       keywords: ['python'],
+      topics: [],
     });
     expect(dbMock.updates[0]).toEqual({
       preferences: { languages: ['go'], keywords: ['python'], digestCount: 6 },
@@ -177,6 +178,7 @@ describe('removeSubscriptionTerm', () => {
     await expect(removeSubscriptionTerm('u1', 'rust')).resolves.toEqual({
       removed: false,
       keywords: ['python'],
+      topics: [],
     });
     expect(dbMock.updates).toEqual([]);
   });
@@ -185,6 +187,7 @@ describe('removeSubscriptionTerm', () => {
     await expect(removeSubscriptionTerm('u1', 'ai')).resolves.toEqual({
       removed: false,
       keywords: [],
+      topics: [],
     });
     expect(dbMock.updates).toEqual([]);
   });

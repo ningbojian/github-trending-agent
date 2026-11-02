@@ -99,6 +99,7 @@ describe('normalizeEmailPreferences', () => {
       intervalDays: 1,
       digestCount: 15,
       languages: [],
+      topics: [],
       keywords: [],
     });
   });
@@ -138,6 +139,7 @@ describe('validateEmailPreferencesInput', () => {
         intervalDays: 1,
         digestCount: 15,
         languages: [],
+        topics: [],
         keywords: [],
       },
     });
@@ -176,6 +178,7 @@ describe('validateEmailPreferencesInput', () => {
         intervalDays: 3,
         digestCount: 5,
         languages: ['python', 'rust'],
+        topics: [],
         keywords: ['ai', '开发效率'],
       },
     });

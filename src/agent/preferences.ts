@@ -8,6 +8,8 @@
  * 全部是纯函数/常量：不碰 DB、不读 env。
  */
 
+import { directionByAlias } from './directions.js';
+
 /** 简报默认条数（用户未设置 digestCount 时）。8 = 企微 news 一条的上限。 */
 export const DEFAULT_DIGEST_COUNT = 8;
 /** 简报条数下限（「条数 N」指令在 handler 层拦截 0/负数；此处 clamp 兜底脏数据）。 */
@@ -31,6 +33,7 @@ const KEYWORD_PUNCT_RE = /[。！？!?；;，,、()（）]/g;
 export interface PreferencesInput {
   languages?: unknown;
   keywords?: unknown;
+  topics?: unknown;
   digestCount?: unknown;
   pushTime?: unknown;
   intervalDays?: unknown;
@@ -40,6 +43,8 @@ export interface PreferencesInput {
 export interface NormalizedPreferences {
   languages: string[];
   keywords: string[];
+  /** 订阅方向（directions.ts 的 key，如 agent / frontend）。 */
+  topics: string[];
   digestCount: number;
   pushTime: string;
   intervalDays: number;
@@ -82,9 +87,18 @@ export function normalizePreferences(preferences: PreferencesInput): NormalizedP
     rawInterval <= MAX_INTERVAL_DAYS
       ? rawInterval
       : 1;
+  // 方向：只保留能映射到已知方向的 key（脏数据/旧关键词一律丢弃）。
+  const topics: string[] = [];
+  if (Array.isArray(preferences.topics)) {
+    for (const raw of preferences.topics) {
+      const direction = directionByAlias(String(raw));
+      if (direction && !topics.includes(direction.key)) topics.push(direction.key);
+    }
+  }
   return {
     languages: list(preferences.languages),
     keywords: keywordList(preferences.keywords),
+    topics,
     digestCount,
     pushTime,
     intervalDays,

@@ -30,9 +30,10 @@ import {
   type BindingAuth,
 } from '../src/github/stars.js';
 import { readDailySnapshotCache, type DigestSnapshotItem } from '../src/agent/digest-snapshot.js';
+import { DIRECTIONS } from '../src/agent/directions.js';
 import { clearUserLlm } from '../src/agent/user-llm.js';
 import { buildAuthorizeUrl } from '../src/github/oauth.js';
-import { readBodyFields } from '../src/http/body.js';
+import { readBodyFields, readBodyFieldsAll } from '../src/http/body.js';
 import {
   escapeHtml,
   renderPage,
@@ -943,6 +944,14 @@ async function renderSettings(
   const keywords = Array.isArray((sub?.preferences as { keywords?: unknown })?.keywords)
     ? (sub?.preferences as { keywords: string[] }).keywords.join(', ')
     : '';
+  const rawTopics = (sub?.preferences as { topics?: unknown } | undefined)?.topics;
+  const selectedTopics = Array.isArray(rawTopics) ? rawTopics.map(String) : [];
+  const topicChecks = DIRECTIONS.map(
+    (direction) =>
+      `<label class="p-check"><input type="checkbox" name="topics" value="${escapeHtml(direction.key)}"${
+        selectedTopics.includes(direction.key) ? ' checked' : ''
+      }> ${escapeHtml(direction.label)}</label>`,
+  ).join('');
   const active = sub?.active ?? false;
   const rawWeatherCity = (
     sub?.preferences as { weatherCity?: unknown } | undefined
@@ -1002,7 +1011,11 @@ async function renderSettings(
       )}
       ${card(
         '偏好',
-        `<label class="p-field">
+        `<div class="p-field">
+           <span class="p-label">关注方向（可多选，不选 = 全部）</span>
+           <div class="p-checks">${topicChecks}</div>
+         </div>
+         <label class="p-field">
            <span class="p-label">语言（逗号分隔，留空为全部）</span>
            <input class="p-input" name="languages" value="${escapeHtml(languages)}" placeholder="python, rust">
          </label>
@@ -1198,6 +1211,7 @@ export default async function handler(
   // 每次请求只取一次天气（服务层按城市缓存 3 小时），所有视图共用。
   const weather = await weatherForPanel(userid, req.headers);
   const fields = method === 'POST' ? readBodyFields(req.body) : {};
+  const fieldsAll = method === 'POST' ? readBodyFieldsAll(req.body) : {};
   let notice: string | undefined;
   let error: string | undefined;
 
@@ -1254,6 +1268,7 @@ export default async function handler(
       pushTime,
       digestCount,
       intervalDays,
+      topics: (fieldsAll.topics ?? []).map(String),
       languages: splitList(fields.languages ?? ''),
       keywords: splitList(fields.keywords ?? ''),
       weatherCity,

@@ -8,6 +8,7 @@
  */
 
 import { normalizePreferences, type PreferencesInput } from './preferences.js';
+import { directionLabel } from './directions.js';
 import type { SubscriptionPreferences } from './subscription-store.js';
 
 /** 原始值里的字符串列表（展示用；脏数据 → 空数组）。 */
@@ -43,6 +44,9 @@ export function formatSubscriptionSummary(
       ? `· 偏好关键词：${keywords.join('、')}`
       : '· 偏好关键词：未设置（按全站热榜推荐）',
   ];
+  if (normalized.topics.length > 0) {
+    lines.push(`· 关注方向：${normalized.topics.map(directionLabel).join('、')}`);
+  }
   if (languages.length > 0) {
     lines.push(`· 语言过滤：${languages.join('、')}`);
   }

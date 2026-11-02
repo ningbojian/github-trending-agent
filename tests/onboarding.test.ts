@@ -351,7 +351,7 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
     const update = dbMock.updateCalls[0]!;
     expect(update.table).toBe(subscribers);
     expect(update.values).toMatchObject({
-      preferences: { languages: [], keywords: ['python', 'ai', 'llm'] },
+      preferences: { languages: [], topics: ['agent'], keywords: ['python'] },
     });
     const compiled = compileQuery(update.condition);
     expect(compiled.sql).toContain('"subscribers"."wecom_userid"');
@@ -361,8 +361,7 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     expect(content).toContain('已订阅');
     expect(content).toContain('python');
-    expect(content).toContain('ai');
-    expect(content).toContain('llm');
+    expect(content).toContain('AI / Agent');
   });
 
   it('退订后再订阅（active=false + 旧偏好）→ 同时写 preferences 与 active: true，恢复每日简报', async () => {
@@ -375,7 +374,7 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
     const update = dbMock.updateCalls[0]!;
     expect(update.table).toBe(subscribers);
     expect(update.values).toEqual({
-      preferences: { languages: [], keywords: ['python', 'ai'] },
+      preferences: { languages: [], topics: ['agent'], keywords: ['python'] },
       active: true,
     });
     const compiled = compileQuery(update.condition);
@@ -387,7 +386,7 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
     expect(content).toContain('已订阅');
     expect(content).toContain('python');
-    expect(content).toContain('ai');
+    expect(content).toContain('AI / Agent');
   });
 
   it('分隔符规则：中英文逗号、顿号、空格混合 + 多余空白 → 全部拆分并 trim', async () => {
@@ -395,7 +394,7 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
 
     const update = dbMock.updateCalls[0]!;
     expect(update.values).toMatchObject({
-      preferences: { languages: [], keywords: ['python', 'rust', 'go', 'web'] },
+      preferences: { languages: [], topics: ['frontend'], keywords: ['python', 'rust', 'go'] },
     });
   });
 
@@ -405,10 +404,10 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
 
     expect(dbMock.updateCalls).toHaveLength(2);
     expect(dbMock.updateCalls[0]?.values).toMatchObject({
-      preferences: { languages: [], keywords: ['python', 'ai', 'llm', 'rust'] },
+      preferences: { languages: [], topics: ['agent'], keywords: ['python', 'rust'] },
     });
     expect(dbMock.updateCalls[1]?.values).toMatchObject({
-      preferences: { languages: [], keywords: ['go', 'web', 'cli'] },
+      preferences: { languages: [], topics: ['frontend', 'devtools'], keywords: ['go'] },
     });
   });
 
@@ -417,7 +416,7 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
 
     expect(dbMock.updateCalls).toHaveLength(1);
     expect(dbMock.updateCalls[0]?.values).toMatchObject({
-      preferences: { languages: [], keywords: ['AI'] },
+      preferences: { languages: [], topics: ['agent'], keywords: [] },
     });
   });
 
@@ -426,7 +425,7 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
 
     expect(dbMock.updateCalls).toHaveLength(1);
     expect(dbMock.updateCalls[0]?.values).toMatchObject({
-      preferences: { languages: [], keywords: ['node生态', 'cli'] },
+      preferences: { languages: [], topics: ['devtools'], keywords: ['node生态'] },
     });
   });
 
@@ -446,7 +445,7 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
 
     expect(dbMock.updateCalls).toHaveLength(2);
     expect(dbMock.updateCalls[1]?.values).toMatchObject({
-      preferences: { languages: [], keywords: ['llm'] },
+      preferences: { languages: [], topics: ['agent'], keywords: [] },
     });
   });
 

@@ -14,6 +14,7 @@ import { readBodyFields, readBodyFieldsAll } from '../src/http/body.js';
 import { escapeHtml, sendHtml, type HtmlResponse } from '../src/http/html.js';
 import { renderAppPage, renderMessagePage } from '../src/ui/page.js';
 import { SCRAPER_LANGUAGES } from '../src/config.js';
+import { DIRECTIONS } from '../src/agent/directions.js';
 
 /**
  * 邮箱订阅设置（GET 表单 / POST 保存，凭证是长期有效的 unsubToken）。
@@ -82,6 +83,14 @@ function form(options: {
     ? '<div class="p-banner warn">当前处于退订状态，保存设置不会自动恢复订阅。</div>'
     : '';
 
+  const topics = DIRECTIONS.map(
+    (direction) =>
+      `<label class="p-check">
+        <input type="checkbox" name="topics" value="${escapeHtml(direction.key)}"${preferences.topics.includes(direction.key) ? ' checked' : ''}>
+        ${escapeHtml(direction.label)}
+      </label>`,
+  ).join('');
+
   const languages = (SCRAPER_LANGUAGES as readonly string[])
     .map(
       (slug) =>
@@ -130,6 +139,11 @@ function form(options: {
       </div>
       <div class="p-field">
         <span class="p-label">关注方向（不选 = 全部）</span>
+        <div class="p-checks">${topics}</div>
+        <span class="p-hint">按主题筛项目，比只看语言更贴近你在做的事。</span>
+      </div>
+      <div class="p-field">
+        <span class="p-label">语言（不选 = 全部语言）</span>
         <div class="p-checks">${languages}</div>
       </div>
       <div class="p-field">
@@ -211,6 +225,7 @@ export default async function handler(
     intervalDays: fields.intervalDays,
     digestCount: fields.digestCount,
     languages: all.languages ?? [],
+    topics: all.topics ?? [],
     keywords: fields.keywords,
   });
   if (!validated.ok) {

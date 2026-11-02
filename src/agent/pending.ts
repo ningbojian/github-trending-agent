@@ -26,7 +26,13 @@ export interface PendingProfileSuggestion {
   at: string;
 }
 
-export type Pending = PendingProfileSuggestion | PendingSubscribeKeyword;
+export type Pending = PendingProfileSuggestion | PendingSubscribeKeyword | PendingUnsubscribe;
+
+/** 「退订」后的二次确认：下一条必须是「确认退订」才真正写库。 */
+export interface PendingUnsubscribe {
+  kind: 'unsubscribe-confirm';
+  at: string;
+}
 
 /** 裸「订阅」后的单槽追问：下一条消息要补上的关键词。 */
 export interface PendingSubscribeKeyword {
@@ -42,6 +48,9 @@ function isPending(value: unknown): value is Pending {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
   if (candidate.kind === 'subscribe-keyword') {
+    return typeof candidate.at === 'string';
+  }
+  if (candidate.kind === 'unsubscribe-confirm') {
     return typeof candidate.at === 'string';
   }
   return (

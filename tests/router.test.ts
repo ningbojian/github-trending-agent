@@ -160,6 +160,14 @@ describe('routeMessage 分发', () => {
     expect(traceMock.notes.some(([name]) => name === 'handler')).toBe(true);
   });
 
+  it('没有待确认时发「确认退订」→ 提示先发「退订」', async () => {
+    await routeMessage(makeMsg({ content: '确认退订' }));
+    expect(sendWeComText).toHaveBeenCalledWith(
+      'alice',
+      expect.stringContaining('没有待确认的退订'),
+    );
+  });
+
   it('content 为「帮助」→ helpHandler', async () => {
     await routeMessage(makeMsg({ content: '帮助' }));
     expect(helpHandler).toHaveBeenCalledTimes(1);

@@ -80,7 +80,13 @@ const dbMock = vi.hoisted(() => ({
 vi.mock('../src/db/client', () => {
   /** 可 await 的 select 流水线（模拟 drizzle thenable builder）。 */
   function selectPipeline() {
-    const pipeline = {
+    const pipeline: {
+      then: (
+        onFulfilled?: (value: Record<string, unknown>[]) => unknown,
+        onRejected?: (reason: unknown) => unknown,
+      ) => unknown;
+      limit?: () => typeof pipeline;
+    } = {
       then: (
         onFulfilled?: (value: Record<string, unknown>[]) => unknown,
         onRejected?: (reason: unknown) => unknown,
@@ -95,6 +101,7 @@ vi.mock('../src/db/client', () => {
         );
       },
     };
+    pipeline.limit = () => pipeline;
     return pipeline;
   }
 
@@ -136,6 +143,7 @@ import {
   handlePushInterval,
   handlePushTime,
   handleSubscribe,
+  handleConfirmUnsubscribe,
   handleUnsubscribe,
   HELP_MESSAGE,
   HELP_SHORT_MESSAGE,
@@ -520,21 +528,13 @@ describe('handleSubscribe（订阅 <偏好> → 写 preferences）', () => {
 // 退订命令
 // ---------------------------------------------------------------------------
 describe('handleUnsubscribe（退订 → active=false）', () => {
-  it('「退订」→ 写 active=false（仅此字段）+ 中文确认，不触碰绑定/收藏/偏好', async () => {
+  it('「退订」→ 不写库，先回确认提示并记待办', async () => {
     await handleUnsubscribe(makeMsg({ content: '退订' }));
 
-    expect(dbMock.updateCalls).toHaveLength(1);
-    const update = dbMock.updateCalls[0]!;
-    expect(update.table).toBe(subscribers);
-    expect(update.values).toEqual({ active: false });
-    const compiled = compileQuery(update.condition);
-    expect(compiled.sql).toContain('"subscribers"."wecom_userid"');
-    expect(compiled.params).toContain('alice');
-
+    expect(dbMock.updateCalls).toHaveLength(0);
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
-    expect(content).toContain('退订');
-    expect(content).toContain('不再推送');
+    expect(content).toContain('确认退订');
   });
 
   it('「退订」为精确匹配：其他内容直接调用 → 静默返回，不写库不回复', async () => {
@@ -552,7 +552,7 @@ describe('handleUnsubscribe（退订 → active=false）', () => {
       handleUnsubscribe(makeMsg({ content: '退订' })),
     ).resolves.toBeUndefined();
 
-    expect(dbMock.updateCalls).toHaveLength(1); // 写库已完成，仅发送失败
+    expect(dbMock.updateCalls).toHaveLength(0); // 确认链路不写库
     expect(console.error).toHaveBeenCalledWith(
       'handleUnsubscribe failed:',
       expect.objectContaining({ message: 'wecom down' }),
@@ -573,27 +573,21 @@ describe('handleUnsubscribe（退订 → active=false）', () => {
     expect(searchHandler).not.toHaveBeenCalled();
   });
 
-  it('端到端：「退订。」（尾标点）经真实 handleUnsubscribe 也写 active=false（router 归一化后不再静默）', async () => {
+  it('端到端：「退订。」（尾标点）经真实 handleUnsubscribe 只回确认，不写库', async () => {
     dbMock.selectQueue.push([existingSub()]);
     resetHandlers();
     registerHandlers({ unsubscribe: handleUnsubscribe });
 
     await routeMessage(makeMsg({ content: '退订。' }));
 
-    expect(dbMock.updateCalls).toHaveLength(1);
-    expect(dbMock.updateCalls[0]?.values).toEqual({ active: false });
+    expect(dbMock.updateCalls).toHaveLength(0);
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const [, content] = apiMock.sendWeComText.mock.calls[0] as [string, string];
-    expect(content).toContain('已退订');
+    expect(content).toContain('确认退订');
   });
 
-  it('退订写 active=false + 按 wecom_userid 定位（配合 digest 已固化的 active=true 过滤 → 该用户被 pushDigests 跳过）', async () => {
-    dbMock.selectQueue.push([existingSub()]);
-    // 走完整链路：router「退订」→ 真实 handleUnsubscribe → 写库。
-    resetHandlers();
-    registerHandlers({ unsubscribe: handleUnsubscribe });
-
-    await routeMessage(makeMsg({ content: '退订' }));
+  it('「确认退订」→ 写 active=false 并按 wecom_userid 定位', async () => {
+    await handleConfirmUnsubscribe(makeMsg({ content: '确认退订' }));
 
     expect(dbMock.updateCalls).toHaveLength(1);
     const update = dbMock.updateCalls[0]!;
@@ -602,8 +596,6 @@ describe('handleUnsubscribe（退订 → active=false）', () => {
     const compiled = compileQuery(update.condition);
     expect(compiled.sql).toContain('"subscribers"."wecom_userid"');
     expect(compiled.params).toContain('alice');
-    // digest.ts 的 pushDigests 固化 WHERE active = true（tests/digest.test.ts 已钉），
-    // active=false 写入后该订阅者即被排除。
   });
 });
 

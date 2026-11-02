@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { MAX_INTERVAL_DAYS } from '../agent/digest.js';
 import { mergePreferences } from '../agent/subscription-store.js';
 import { directionLabel, splitDirectionTokens } from '../agent/directions.js';
+import { setPending } from '../agent/pending.js';
 import { db } from '../db/client.js';
 import { subscribers } from '../db/schema.js';
 import { sendWeComText } from './api.js';
@@ -268,21 +269,40 @@ export async function handleSubscribe(msg: InboundMessage): Promise<void> {
   }
 }
 
+export const UNSUBSCRIBE_CONFIRM_REPLY =
+  '确定要退订每日简报吗？回复「确认退订」停止推送；回复其他内容保持不变。';
+export const UNSUBSCRIBE_NOTHING_REPLY =
+  '没有待确认的退订。发「退订」会先让你确认一次。';
+export const UNSUBSCRIBE_ALREADY_REPLY =
+  '你已经是退订状态。发「订阅 <方向或关键词>」可以恢复每日简报。';
+
 /**
  * 「退订」handler（精确匹配）：
- * - 写 active=false（仅此字段；GitHub 绑定与收藏原样保留）→ 中文确认
- * - digest.ts 的 pushDigests 固化 WHERE active = true，退订即停止每日简报
+ * - **不直接写库**：先记一个 5 分钟的待确认状态，回一句确认提示；
+ *   用户回「确认退订」才真正停止推送（防误触）。
+ * - 已经是退订状态 → 直接说明，不再走确认。
  */
 export async function handleUnsubscribe(msg: InboundMessage): Promise<void> {
   try {
     if (msg.content.trim() !== '退订') {
       return;
     }
-    await db()
-      .update(subscribers)
-      .set({ active: false })
-      .where(eq(subscribers.wecomUserid, msg.fromUserName));
-    await sendWeComText(msg.fromUserName, UNSUBSCRIBE_REPLY);
+    const row = (
+      await db()
+        .select()
+        .from(subscribers)
+        .where(eq(subscribers.wecomUserid, msg.fromUserName))
+        .limit(1)
+    )[0];
+    if (row !== undefined && row.active === false) {
+      await sendWeComText(msg.fromUserName, UNSUBSCRIBE_ALREADY_REPLY);
+      return;
+    }
+    await setPending(msg.fromUserName, {
+      kind: 'unsubscribe-confirm',
+      at: new Date().toISOString(),
+    });
+    await sendWeComText(msg.fromUserName, UNSUBSCRIBE_CONFIRM_REPLY);
   } catch (err) {
     console.error('handleUnsubscribe failed:', err);
     try {
@@ -290,6 +310,24 @@ export async function handleUnsubscribe(msg: InboundMessage): Promise<void> {
     } catch (fallbackErr) {
       // 吞掉兜底发送失败：仅记日志，不重试（防递归）。
       console.error('unsubscribe fallback reply failed:', fallbackErr);
+    }
+  }
+}
+
+/** 「确认退订」：真正写 active=false。只在有待确认状态时由 router 调用。 */
+export async function handleConfirmUnsubscribe(msg: InboundMessage): Promise<void> {
+  try {
+    await db()
+      .update(subscribers)
+      .set({ active: false })
+      .where(eq(subscribers.wecomUserid, msg.fromUserName));
+    await sendWeComText(msg.fromUserName, UNSUBSCRIBE_REPLY);
+  } catch (err) {
+    console.error('handleConfirmUnsubscribe failed:', err);
+    try {
+      await sendWeComText(msg.fromUserName, UNSUBSCRIBE_FAILURE_REPLY);
+    } catch {
+      // 同上：兜底失败只记日志。
     }
   }
 }

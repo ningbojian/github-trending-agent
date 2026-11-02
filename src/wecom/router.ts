@@ -23,12 +23,14 @@ import {
 } from './llm-settings.js';
 import {
   ensureSubscriber,
+  handleConfirmUnsubscribe,
   handleDigestCount,
   handleHelp,
   handlePushInterval,
   handlePushTime,
   handleSubscribe,
   handleUnsubscribe,
+  UNSUBSCRIBE_NOTHING_REPLY,
 } from './onboarding.js';
 import { sendWeComText } from './api.js';
 import { handleSearch } from './reply.js';
@@ -401,6 +403,14 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
           normalized,
         );
       }
+    } else if (pending.kind === 'unsubscribe-confirm') {
+      if (normalized.content === '确认退订') {
+        note('pending-consumed', 'unsubscribe-confirm');
+        return dispatchSafely(handleConfirmUnsubscribe, normalized);
+      }
+      // 其它任何内容 = 放弃退订，按新消息处理。
+      await clearPending(msg.fromUserName);
+      note('pending-clear', 'unsubscribe-cancelled');
     } else {
       // 「对/不」对订阅追问没有意义：当作新消息，不把「对」订阅成关键词。
       const term =
@@ -416,6 +426,14 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
     }
     await clearPending(msg.fromUserName);
     note('pending-clear', 'superseded');
+  }
+
+  // 没有待确认状态时的「确认退订」：说清楚要先发「退订」。
+  if (normalized.content === '确认退订') {
+    return dispatchSafely(
+      (m) => sendWeComText(m.fromUserName, UNSUBSCRIBE_NOTHING_REPLY),
+      normalized,
+    );
   }
 
   if (decision.kind === 'usage') {

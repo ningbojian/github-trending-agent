@@ -45,6 +45,7 @@ import {
 import { sendWelcomeFlow } from './welcome.js';
 import { handleMyPanel } from './panel-link.js';
 import { handleTodayDigest } from './today-digest.js';
+import { handleMoreDigest } from './more-digest.js';
 import {
   MY_TRACKING_EMPTY_REPLY,
   TRACK_USAGE_REPLY,
@@ -298,6 +299,9 @@ const TODAY_DIGEST_COMMANDS = new Set([
   '今天的推送',
 ]);
 
+/** 「更多」：主推送之后接着看下一批。 */
+const MORE_DIGEST_COMMANDS = new Set(['更多', '再来一批', '还有吗']);
+
 export async function routeMessage(msg: InboundMessage): Promise<void> {
   // 整个分发过程一条 trace：下游任意位置 note() 都挂到这次调用上。
   // 放在这里而不是各个 handler 里，是为了让「哪条命令」与「后续几步」在同一条记录里。
@@ -376,6 +380,11 @@ async function routeMessageInner(msg: InboundMessage): Promise<void> {
   if (TODAY_DIGEST_COMMANDS.has(normalized.content)) {
     note('route', 'today-digest');
     return dispatchSafely(handleTodayDigest, normalized);
+  }
+  // 已经收到主推送，还想看下一批。
+  if (MORE_DIGEST_COMMANDS.has(normalized.content)) {
+    note('route', 'more-digest');
+    return dispatchSafely(handleMoreDigest, normalized);
   }
 
   // 多轮状态只消费「整条消息就是待办要的那个答复」：系统刚问过「要我记住吗」

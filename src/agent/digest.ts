@@ -23,6 +23,7 @@ import { DEFAULT_DIGEST_COUNT, normalizePreferences } from './preferences.js';
 import { loadRepoSummaries } from './repo-summary.js';
 import { normalizeRepoName } from './repo-name.js';
 import { loadUserSignalsStrict, rankByTaste, type UserSignals } from './taste.js';
+import { readBatch, takeMoreHint } from './digest-batch.js';
 import { calendarDaysBetween, shanghaiHHMM, shanghaiMinutes, shanghaiToday } from './time.js';
 
 /**
@@ -634,6 +635,78 @@ export async function catchUpDigestIfDue(
   return result.sent > 0;
 }
 
+/**
+ * 「更多」：从当日候选池里接着取下一批（最多 8 条）。
+ *
+ * 与主推送共用全部筛选：口味排序、增长门槛、收藏过滤、7 天历史去重，
+ * 再排除今天已经额外发过的（当日游标）。返回剩余候选数，用于提示「还有 N 个」。
+ */
+export interface ExtraDigestResult {
+  articles: NewsArticle[];
+  entries: { fullName: string }[];
+  remaining: number;
+}
+
+export async function buildExtraDigest(
+  wecomUserid: string,
+  options: { limit?: number; now?: Date } = {},
+): Promise<ExtraDigestResult | null> {
+  const now = options.now ?? new Date();
+  const limit = Math.min(
+    Math.max(1, Math.floor(options.limit ?? NEWS_MAX_ARTICLES)),
+    NEWS_MAX_ARTICLES,
+  );
+  const sub = (
+    await db()
+      .select()
+      .from(subscribers)
+      .where(eq(subscribers.wecomUserid, wecomUserid))
+      .limit(1)
+  )[0];
+  if (!sub || !sub.active) return null;
+
+  const snapshot = await getDailySnapshot(now);
+  if (!snapshot) return null;
+
+  const [signals, history, batch] = await Promise.all([
+    loadUserSignalsStrict(wecomUserid, now),
+    readPushHistory(wecomUserid, now),
+    readBatch(wecomUserid, now),
+  ]);
+  const shown = new Set(batch.shown.map(normalizeRepoName));
+  const pool = rankByTaste(
+    applyHardFilters(snapshot.items, { signals, history, now }),
+    signals,
+  )
+    .filter((item) => passesGrowth(item))
+    .filter((item) => !shown.has(normalizeRepoName(item.fullName)));
+
+  const picked = pool.slice(0, limit);
+  if (picked.length === 0) {
+    return { articles: [], entries: [], remaining: 0 };
+  }
+
+  const byName = new Map(snapshot.items.map((item) => [item.fullName, item]));
+  const articles = buildNewsArticles(
+    picked.map((item) => ({
+      fullName: item.fullName,
+      stars: item.stars,
+      starsDelta: item.starsDelta,
+      isNew: item.isNew,
+      language: item.language,
+      summary: item.summary,
+      short: item.short,
+    })),
+    { htmlUrlOf: (entry) => byName.get(entry.fullName)?.htmlUrl },
+  );
+
+  return {
+    articles,
+    entries: picked.map((item) => ({ fullName: item.fullName })),
+    remaining: pool.length - picked.length,
+  };
+}
+
 export async function pushDigests(
   now: Date = new Date(),
   options: PushDigestsOptions = {},
@@ -827,6 +900,20 @@ export async function pushDigests(
         if (content === null) throw new Error('digest content missing');
         await sendWeComText(sub.wecomUserid, content);
         note('send', `ok ${Buffer.byteLength(content, 'utf8')} 字节`);
+      }
+      // 每周提示一次「可以回『更多』」：news 卡片没有位置放这句话，
+      // 不提示的话大部分用户永远不知道还有后续批次。
+      if (articles !== null && newsSource !== null) {
+        const extra =
+          newsSource.pool.filter((item) => passesGrowth(item)).length -
+          entries.length;
+        if (extra > 0 && (await takeMoreHint(sub.wecomUserid, now))) {
+          await sendWeComText(
+            sub.wecomUserid,
+            `还想看更多？回「更多」接着看（每天最多 3 批，今天还有 ${extra} 个候选）。`,
+          );
+          note('more-hint', `${extra} 个候选`);
+        }
       }
       sent += 1;
       await recordPush(

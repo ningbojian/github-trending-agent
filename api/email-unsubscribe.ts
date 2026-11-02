@@ -37,6 +37,25 @@ function donePage(baseUrl: string): string {
   });
 }
 
+/**
+ * 确认页：GET 不写库，只渲染一个「确认退订」按钮。
+ * 邮件页脚的链接点开先到这里，避免误触一下就直接退订。
+ */
+function confirmPage(baseUrl: string, token: string): string {
+  const action = `${baseUrl}/api/email-unsubscribe?t=${encodeURIComponent(token)}&confirm=1`;
+  return renderMessagePage({
+    title: '确认退订',
+    message: '确定不再接收每日简报吗？',
+    tone: 'warn',
+    extraHtml: `<div class="p-actions">
+      <form method="post" action="${escapeHtml(action)}">
+        <button class="p-btn ghost" type="submit">确认退订</button>
+      </form>
+      <a class="p-btn" href="${escapeHtml(`${baseUrl}/api/email-settings?t=${encodeURIComponent(token)}`)}">保留订阅</a>
+    </div>`,
+  });
+}
+
 export default async function handler(
   req: UnsubscribeRequest,
   res: HtmlResponse,
@@ -59,9 +78,12 @@ export default async function handler(
   const token = firstParam(req.query, 't');
 
   if (method === 'POST') {
-    // RFC 8058 一键退订：未知 token 也回 200，避免信息泄露；
-    // 但写库失败必须回 5xx——报 200 会让邮件服务商认为退订已完成而不再重试，
-    // 用户却仍在收信。
+    // 两种 POST：
+    // - 我们自己的确认表单（?confirm=1）→ 退订后渲染「已退订」页
+    // - RFC 8058 一键退订（邮件客户端）→ 纯文本 OK，不能要求二次确认
+    const fromConfirmForm = firstParam(req.query, 'confirm') === '1';
+    // 未知 token 也回 200，避免信息泄露；但写库失败必须回 5xx——
+    // 报 200 会让邮件服务商认为退订已完成而不再重试，用户却仍在收信。
     let failed = false;
     if (token) {
       try {
@@ -74,8 +96,17 @@ export default async function handler(
         failed = true;
       }
     }
+    if (failed) {
+      res.setHeader('content-type', 'text/plain; charset=utf-8');
+      res.status(500).send('temporarily unavailable');
+      return;
+    }
+    if (fromConfirmForm) {
+      sendHtml(res, 200, donePage(baseUrl));
+      return;
+    }
     res.setHeader('content-type', 'text/plain; charset=utf-8');
-    res.status(failed ? 500 : 200).send(failed ? 'temporarily unavailable' : 'OK');
+    res.status(200).send('OK');
     return;
   }
 
@@ -107,12 +138,10 @@ export default async function handler(
     return;
   }
 
+  // GET 不写库：页脚链接先到确认页，避免误触一下就直接退订。
   if (row.active) {
-    await db()
-      .update(emailSubscribers)
-      .set({ active: false })
-      .where(eq(emailSubscribers.id, row.id));
+    sendHtml(res, 200, confirmPage(baseUrl, token));
+    return;
   }
-
   sendHtml(res, 200, donePage(baseUrl));
 }

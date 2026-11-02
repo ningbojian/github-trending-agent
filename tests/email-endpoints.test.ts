@@ -734,15 +734,24 @@ describe('/api/email-unsubscribe', () => {
     expect(dbState.updateCalls).toHaveLength(0);
   });
 
-  it('deactivates an active subscriber', async () => {
+  it('GET 只渲染确认页，POST 确认后才退订', async () => {
     dbState.emailRows = [emailRow()];
-    const res = mockRes();
+    const confirm = mockRes();
     await unsubscribeHandler(
       { method: 'GET', query: { t: 'unsub-token' } } as never,
-      res as never,
+      confirm as never,
     );
-    expect(res.statusCode).toBe(200);
-    expect(res.body).toContain('已不再收到');
+    expect(confirm.statusCode).toBe(200);
+    expect(confirm.body).toContain('确认退订');
+    expect(dbState.updateCalls).toHaveLength(0);
+
+    const done = mockRes();
+    await unsubscribeHandler(
+      { method: 'POST', query: { t: 'unsub-token', confirm: '1' } } as never,
+      done as never,
+    );
+    expect(done.statusCode).toBe(200);
+    expect(done.body).toContain('已不再收到');
     expect(dbState.updateCalls[0].values).toEqual({ active: false });
   });
 

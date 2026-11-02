@@ -329,7 +329,11 @@ function subscriptionToggle(
   const action = active ? 'unsubscribe' : 'resubscribe';
   const label = active ? '暂停推送' : '恢复推送';
   const style = active ? 'p-btn ghost' : 'p-btn';
-  return `<form method="post" action="${href(token, { view })}">
+  // 暂停是不可撤销操作的入口（要手动恢复），二次确认一次。
+  const confirmAttr = active
+    ? ` onsubmit="return confirm('确定暂停每日推送吗？收藏、跟踪和设置都会保留，可以随时恢复。')"`
+    : '';
+  return `<form method="post" action="${href(token, { view })}"${confirmAttr}>
     <input type="hidden" name="action" value="${action}">
     <button class="${style}" type="submit">${label}</button>
   </form>`;

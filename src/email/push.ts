@@ -244,6 +244,7 @@ export async function pushEmailDigests(
         pushTime: preferences.pushTime,
         abstract: snapshot.abstract,
         items,
+        poolSize: snapshot.items.length,
         baseUrl,
         unsubToken: row.unsubToken,
       });

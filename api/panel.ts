@@ -137,7 +137,7 @@ function empty(text: string): string {
  * 今日洞察：从当日快照缓存里算一句真话（不调模型、不猜）。
  * 没有任何快照时返回空串，机器人气泡退回默认文案。
  */
-function dailyInsight(items: DigestSnapshotItem[]): string {
+function dailyInsight(items: DigestSnapshotItem[], poolSize = 0): string {
   if (items.length === 0) return '';
   const fresh = items.filter((item) => item.isNew).length;
   const top = [...items].sort((a, b) => b.starsDelta - a.starsDelta)[0];
@@ -148,10 +148,14 @@ function dailyInsight(items: DigestSnapshotItem[]): string {
     }
   }
   const topLanguage = [...languages.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-  const parts = [
-    `今天 ${items.length} 个项目，${fresh} 个新上榜`,
-    `涨得最快 ${top.fullName}（+${top.starsDelta}）`,
-  ];
+  const parts =
+    poolSize > items.length
+      ? [
+          `候选 ${poolSize} 个，按你的偏好筛出 ${items.length} 个`,
+          `${fresh} 个新上榜`,
+        ]
+      : [`今天 ${items.length} 个项目，${fresh} 个新上榜`];
+  parts.push(`涨得最快 ${top.fullName}（+${top.starsDelta}）`);
   if (topLanguage) parts.push(`主力语言 ${topLanguage}`);
   return parts.join('；');
 }
@@ -354,7 +358,7 @@ async function renderOverview(
     readDailySnapshotCache().catch(() => null),
   ]);
   const insightItems = snapshot ? snapshot.items.slice(0, prefs.digestCount) : [];
-  const insight = dailyInsight(insightItems);
+  const insight = dailyInsight(insightItems, snapshot?.items.length ?? 0);
   const mood: RobotMood = notice ? 'happy' : error ? 'alert' : active ? 'idle' : 'sleepy';
 
   const cadence =
@@ -1232,11 +1236,13 @@ export default async function handler(
     const validation =
       !PUSH_TIME_RE.test(pushTime)
         ? '推送时间需为 HH:MM（北京时间），例如 09:00'
-        : !Number.isInteger(digestCount) || digestCount < 1 || digestCount > 8
-          ? '条数需为 1–8 的整数'
-          : !Number.isInteger(intervalDays) || intervalDays < 1 || intervalDays > 30
-            ? '间隔需为 1–30 的整数'
-            : null;
+        : pushTime < '09:00'
+          ? '榜单每天 08:30 才更新，推送时间最早 09:00'
+          : !Number.isInteger(digestCount) || digestCount < 1 || digestCount > 8
+            ? '条数需为 1–8 的整数'
+            : !Number.isInteger(intervalDays) || intervalDays < 1 || intervalDays > 30
+              ? '间隔需为 1–30 的整数'
+              : null;
     if (validation !== null) {
       sendHtml(res, 400, await renderSettings(userid, token, null, undefined, validation));
       return;

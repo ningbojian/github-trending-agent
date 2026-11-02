@@ -475,6 +475,8 @@ export interface PushDigestsOptions {
   budgetMs?: number;
   /** 只处理这一个用户（漏跑自愈用）；缺省处理全部 active 订阅者。 */
   onlyUserId?: string;
+  /** 忽略「还没到推送时间」的门控（用户手动要简报时用）；间隔与当日已发仍然生效。 */
+  ignorePushTime?: boolean;
   /** 注入时钟（单测用）。 */
   clock?: () => number;
 }
@@ -676,7 +678,7 @@ export async function pushDigests(
     let claimed = false;
     try {
       const { pushTime, intervalDays } = normalizePreferences(sub.preferences);
-      if (nowMinutes < pushTimeMinutes(pushTime)) {
+      if (!options.ignorePushTime && nowMinutes < pushTimeMinutes(pushTime)) {
         skipped += 1;
         continue;
       }

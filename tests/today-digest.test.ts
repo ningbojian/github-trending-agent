@@ -1,40 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const digestMock = vi.hoisted(() => ({
-  buildDigestForSubscriber: vi.fn(async () => '文本版简报'),
-  buildDigestNewsFromSnapshot: vi.fn(async () => ({
-    articles: [{ title: 'a' }],
-    entries: [{ fullName: 'a/b' }],
+  pushDigests: vi.fn(async (_now?: Date, _options?: unknown) => ({
+    sent: 1,
+    skipped: 0,
+    failed: 0,
   })),
-  saveRecentResults: vi.fn(async () => undefined),
 }));
-vi.mock('../src/agent/digest', () => digestMock);
+vi.mock('../src/agent/digest', () => ({
+  PUSH_BUDGET_MS: 240_000,
+  pushDigests: digestMock.pushDigests,
+}));
 
-const snapshotMock = vi.hoisted(() => ({
-  getDailySnapshot: vi.fn(
-    async (): Promise<{ date: string; items: unknown[] } | null> => ({
-      date: '2026-10-30',
-      items: [],
+const dbMock = vi.hoisted(() => ({
+  rows: [] as Array<Record<string, unknown>>,
+  fail: false,
+}));
+vi.mock('../src/db/client', () => ({
+  db: () => ({
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => {
+            if (dbMock.fail) throw new Error('db down');
+            return [...dbMock.rows];
+          },
+        }),
+      }),
     }),
-  ),
-}));
-vi.mock('../src/agent/digest-snapshot', () => ({
-  getDailySnapshot: snapshotMock.getDailySnapshot,
-}));
-
-const subMock = vi.hoisted(() => ({
-  readSubscription: vi.fn(async () => ({ preferences: {} })),
-}));
-vi.mock('../src/agent/subscription-store', () => ({
-  readSubscription: subMock.readSubscription,
+  }),
 }));
 
 const apiMock = vi.hoisted(() => ({
-  sendWeComNews: vi.fn(async (_to: string, _articles: unknown) => undefined),
   sendWeComText: vi.fn(async (_to: string, _text: string) => undefined),
+  sendWeComNews: vi.fn(async () => undefined),
 }));
 vi.mock('../src/wecom/api', () => apiMock);
-
 vi.mock('../src/obs/trace', () => ({ note: () => {} }));
 
 import { handleTodayDigest } from '../src/wecom/today-digest';
@@ -43,46 +44,64 @@ const MSG = { fromUserName: 'alice' } as never;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  digestMock.buildDigestForSubscriber.mockResolvedValue('文本版简报');
-  digestMock.buildDigestNewsFromSnapshot.mockResolvedValue({
-    articles: [{ title: 'a' }],
-    entries: [{ fullName: 'a/b' }],
-  });
-  snapshotMock.getDailySnapshot.mockResolvedValue({ date: '2026-10-30', items: [] });
-  apiMock.sendWeComNews.mockResolvedValue(undefined);
-  apiMock.sendWeComText.mockResolvedValue(undefined);
+  dbMock.rows = [];
+  dbMock.fail = false;
+  digestMock.pushDigests.mockResolvedValue({ sent: 1, skipped: 0, failed: 0 });
 });
 
 describe('handleTodayDigest', () => {
-  it('有快照 → 发 news 卡片，并写 search_caches（收藏 N 才对得上）', async () => {
+  it('没订阅 → 提示先订阅，不触发推送', async () => {
     await handleTodayDigest(MSG);
-    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
+    expect(digestMock.pushDigests).not.toHaveBeenCalled();
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('先发「订阅」');
+  });
+
+  it('已退订 → 提示恢复方式', async () => {
+    dbMock.rows = [{ preferences: {}, active: false, lastDigestAt: null }];
+    await handleTodayDigest(MSG);
+    expect(digestMock.pushDigests).not.toHaveBeenCalled();
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('退订状态');
+  });
+
+  it('今天已经发过 → 告知时间，不再重复发', async () => {
+    dbMock.rows = [
+      {
+        preferences: { pushTime: '10:00' },
+        active: true,
+        lastDigestAt: new Date('2026-11-02T02:15:00.000Z'), // 北京 10:15
+      },
+    ];
+    await handleTodayDigest(MSG);
+    expect(digestMock.pushDigests).not.toHaveBeenCalled();
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('10:15');
+  });
+
+  it('未发过 → 走 pushDigests，忽略推送时间但不绕过去重', async () => {
+    dbMock.rows = [
+      {
+        preferences: { pushTime: '10:00' },
+        active: true,
+        lastDigestAt: new Date('2026-11-01T02:15:00.000Z'),
+      },
+    ];
+    await handleTodayDigest(MSG);
+    expect(digestMock.pushDigests).toHaveBeenCalledWith(
+      expect.any(Date),
+      expect.objectContaining({ onlyUserId: 'alice', ignorePushTime: true }),
+    );
     expect(apiMock.sendWeComText).not.toHaveBeenCalled();
-    expect(digestMock.saveRecentResults).toHaveBeenCalledWith('alice', [
-      { fullName: 'a/b' },
-    ]);
   });
 
-  it('news 被拒 → 退回纯文本，不静默', async () => {
-    apiMock.sendWeComNews.mockRejectedValueOnce(new Error('errcode 40008'));
+  it('没有可发条目 → 明确说一声', async () => {
+    dbMock.rows = [{ preferences: {}, active: true, lastDigestAt: null }];
+    digestMock.pushDigests.mockResolvedValue({ sent: 0, skipped: 1, failed: 0 });
     await handleTodayDigest(MSG);
-    expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', '文本版简报');
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('没有可发的新项目');
   });
 
-  it('没有快照 → 直接发文本', async () => {
-    snapshotMock.getDailySnapshot.mockResolvedValueOnce(null);
+  it('查询异常 → 兜底文本，不抛错', async () => {
+    dbMock.fail = true;
     await handleTodayDigest(MSG);
-    expect(apiMock.sendWeComNews).not.toHaveBeenCalled();
-    expect(apiMock.sendWeComText).toHaveBeenCalledWith('alice', '文本版简报');
-  });
-
-  it('当日没有可发条目 → 明确说一声，不发明细', async () => {
-    digestMock.buildDigestNewsFromSnapshot.mockResolvedValueOnce({
-      articles: [],
-      entries: [],
-    });
-    await handleTodayDigest(MSG);
-    expect(apiMock.sendWeComNews).not.toHaveBeenCalled();
-    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('还没有可发的榜单');
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('暂时取不到');
   });
 });

@@ -824,15 +824,22 @@ describe('handlePushTime（每天 H 点 / 推送时间 HH:MM → 简报推送时
     expect(content).toContain('北京时间');
   });
 
-  it('「每天八点」（中文数字、无空格）→ pushTime="08:00"', async () => {
+  it('「每天九点」（中文数字、无空格）→ pushTime="09:00"', async () => {
     dbMock.selectQueue.push([subRow({ languages: [], keywords: [] })]);
 
-    await handlePushTime(makeMsg({ content: '每天八点' }));
+    await handlePushTime(makeMsg({ content: '每天九点' }));
 
     expect(dbMock.updateCalls).toHaveLength(1);
     expect(dbMock.updateCalls[0]?.values).toMatchObject({
-      preferences: { languages: [], keywords: [], pushTime: '08:00' },
+      preferences: { languages: [], keywords: [], pushTime: '09:00' },
     });
+  });
+
+  it('早于 09:00 → 拒绝并说明原因（榜单 08:30 才更新）', async () => {
+    await handlePushTime(makeMsg({ content: '每天八点' }));
+
+    expect(dbMock.updateCalls).toHaveLength(0);
+    expect(String(apiMock.sendWeComText.mock.calls[0]?.[1])).toContain('最早 09:00');
   });
 
   it('「推送时间 25:99」（越界）→ 用法提示，不写库', async () => {

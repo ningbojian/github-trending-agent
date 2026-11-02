@@ -61,6 +61,10 @@ export const DIGEST_COUNT_FAILURE_REPLY = '条数设置失败，请稍后再试'
 /** 「每天 H 点」/「推送时间 HH:MM」确认文案（回执必须注明北京时间）。 */
 export const PUSH_TIME_REPLY_PREFIX = '✅ 简报推送时间已设为 ';
 export const PUSH_TIME_REPLY_SUFFIX = '（北京时间）';
+/** 榜单每天 08:30 才抓取；早于这个时间推送只能拿到昨天的候选池。 */
+export const EARLIEST_PUSH_TIME = '09:00';
+export const PUSH_TIME_TOO_EARLY_REPLY =
+  '榜单每天早上 08:30 才更新，推送时间最早 09:00。原设置未改动，可以发「每天 9 点」。';
 
 /** 「每天 …」/「推送时间 …」用法/非法输入提示（不写库）。 */
 export const PUSH_TIME_USAGE_REPLY =
@@ -389,6 +393,11 @@ export async function handlePushTime(msg: InboundMessage): Promise<void> {
       minute = parsedMinute;
     }
     const pushTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+    // 早于 09:00 时当天数据还没抓（08:30 才开始），推出来的是昨天的池子。
+    if (pushTime < EARLIEST_PUSH_TIME) {
+      await sendWeComText(msg.fromUserName, PUSH_TIME_TOO_EARLY_REPLY);
+      return;
+    }
     await mergePreferences(msg.fromUserName, { pushTime });
     await sendWeComText(
       msg.fromUserName,

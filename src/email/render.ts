@@ -43,6 +43,8 @@ export interface DigestEmailInput {
   pushTime: string;
   abstract: string | null;
   items: DigestSnapshotItem[];
+  /** 当日候选池大小（筛出前）；用来解释「为什么只有这几条」。 */
+  poolSize?: number;
   /** 站点根地址（无尾斜杠），用于设置/退订链接。 */
   baseUrl: string;
   unsubToken: string;
@@ -101,7 +103,7 @@ function renderItemHtml(index: number, item: DigestSnapshotItem, last: boolean):
 
 /** 渲染邮件（HTML + 纯文本双版本）。 */
 export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
-  const { date, pushTime, abstract, items, baseUrl, unsubToken } = input;
+  const { date, pushTime, abstract, items, baseUrl, unsubToken, poolSize } = input;
   const subject = emailSubject(date);
   const settings = settingsUrl(baseUrl, unsubToken);
   const unsubscribe = unsubscribeUrl(baseUrl, unsubToken);
@@ -136,6 +138,11 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
           <td style="padding:12px 16px 0;">
             <div style="font-size:13px;line-height:1.6;color:${EMAIL.muted};">你好，这是今天的 GitHub 热榜简报。</div>
             ${
+              typeof poolSize === 'number' && poolSize > items.length
+                ? `<div style="margin-top:3px;font-size:12px;line-height:1.5;color:${EMAIL.faint};">今天从 ${poolSize} 个候选里筛出 ${items.length} 个。</div>`
+                : ''
+            }
+            ${
               abstract
                 ? `<div style="margin-top:8px;padding:9px 12px;background:${EMAIL.abstractBg};border-left:2px solid ${EMAIL.accent};border-radius:6px;font-size:13px;line-height:1.6;color:${EMAIL.abstractText};">${escapeHtml(abstract)}</div>`
                 : ''
@@ -169,6 +176,9 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
 
   const textLines = [
     `你好，这是今天的 GitHub 热榜简报（${date}）。`,
+    ...(typeof poolSize === 'number' && poolSize > items.length
+      ? [`今天从 ${poolSize} 个候选里筛出 ${items.length} 个。`]
+      : []),
     '',
     ...(abstract ? [abstract, ''] : []),
     ...items.flatMap((item, index) => {

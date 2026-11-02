@@ -68,6 +68,12 @@ describe('renderDigestEmail — HTML', () => {
     expect(html).toContain('今日 1 个热榜项目：owner/repo');
   });
 
+  it('explains how many candidates were filtered down', () => {
+    const { html, text } = renderDigestEmail({ ...BASE, poolSize: 120 });
+    expect(html).toContain('从 120 个候选里筛出 1 个');
+    expect(text).toContain('从 120 个候选里筛出 1 个');
+  });
+
   it('omits the abstract block when the snapshot has no abstract', () => {
     const { html, text } = renderDigestEmail({ ...BASE, abstract: null });
     expect(html).not.toContain(BASE.abstract);

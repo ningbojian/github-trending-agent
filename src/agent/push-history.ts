@@ -29,8 +29,8 @@ export const DEDUP_DAYS = 7;
 
 const DAY_MS = 24 * 3600 * 1000;
 
-function historyKey(userid: string): string {
-  return `pushed:${userid}`;
+function historyKey(scope: string): string {
+  return `pushed:${scope}`;
 }
 
 function parseHistory(value: unknown): PushHistory | null {
@@ -52,15 +52,15 @@ function parseHistory(value: unknown): PushHistory | null {
 }
 
 /** 读不到（无行 / 超期 / 坏值 / DB 出错）一律 null：当天不做去重。 */
-export async function readPushHistory(
-  userid: string,
+export async function readHistory(
+  scope: string,
   now: Date = new Date(),
 ): Promise<PushHistory | null> {
   try {
     const rows = await db()
       .select({ value: kvCache.value, expiresAt: kvCache.expiresAt })
       .from(kvCache)
-      .where(eq(kvCache.key, historyKey(userid)))
+      .where(eq(kvCache.key, historyKey(scope)))
       .limit(1);
     const row = rows[0];
     if (!row) return null;
@@ -72,6 +72,14 @@ export async function readPushHistory(
   }
 }
 
+/** 企微用户的历史（`pushed:<userid>`）。 */
+export async function readPushHistory(
+  userid: string,
+  now: Date = new Date(),
+): Promise<PushHistory | null> {
+  return readHistory(userid, now);
+}
+
 /**
  * 记下这次发了什么。**总是**刷新 lastSentAt（空列表也刷）：
  * 静默补助需要知道「上次说话是哪天」，否则会天天补一句。
@@ -81,8 +89,33 @@ export async function recordPush(
   fullNames: string[],
   now: Date = new Date(),
 ): Promise<void> {
+  return writeHistory(userid, fullNames, now);
+}
+
+/** 记下这次给某个邮箱订阅者发了什么（`pushed:email:<id>`，与企微 userid 隔离）。 */
+export async function recordEmailPush(
+  emailId: number,
+  fullNames: string[],
+  now: Date = new Date(),
+): Promise<void> {
+  return writeHistory(`email:${emailId}`, fullNames, now);
+}
+
+/** 邮箱订阅者的历史（独立身份，不能和企微 userid 共用键）。 */
+export async function readEmailPushHistory(
+  emailId: number,
+  now: Date = new Date(),
+): Promise<PushHistory | null> {
+  return readHistory(`email:${emailId}`, now);
+}
+
+async function writeHistory(
+  scope: string,
+  fullNames: string[],
+  now: Date = new Date(),
+): Promise<void> {
   try {
-    const previous = await readPushHistory(userid, now);
+    const previous = await readHistory(scope, now);
     const at = now.toISOString();
     const merged = new Map<string, string>();
     for (const fullName of fullNames) merged.set(fullName, at);
@@ -97,7 +130,7 @@ export async function recordPush(
     await db()
       .insert(kvCache)
       .values({
-        key: historyKey(userid),
+        key: historyKey(scope),
         value: { items, lastSentAt: at },
         expiresAt: new Date(now.getTime() + PUSH_HISTORY_TTL_MS),
       })

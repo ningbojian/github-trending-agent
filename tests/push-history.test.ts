@@ -35,7 +35,9 @@ import {
   PUSH_HISTORY_MAX,
   PUSH_HISTORY_TTL_MS,
   pushedRecently,
+  readEmailPushHistory,
   readPushHistory,
+  recordEmailPush,
   recordPush,
   type PushHistory,
 } from '../src/agent/push-history';
@@ -178,5 +180,44 @@ describe('pushedRecently', () => {
     const h = history([['Owner/Repo', 2]]);
     expect(pushedRecently(h, 'owner/repo', NOW)).toBe(true);
     expect(pushedRecently(h, 'owner/repo2', NOW)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 邮箱订阅者：独立身份，独立历史键（pushed:email:<id>）
+// ---------------------------------------------------------------------------
+describe('邮箱推送历史', () => {
+  it('recordEmailPush 写 pushed:email:<id>，不会和企微 userid 撞键', async () => {
+    await recordEmailPush(42, ['a/b'], NOW);
+    expect(dbMock.insertValues[0]!.key).toBe('pushed:email:42');
+    expect(dbMock.insertValues[0]!.value).toMatchObject({
+      items: [{ fullName: 'a/b', at: NOW.toISOString() }],
+      lastSentAt: NOW.toISOString(),
+    });
+  });
+
+  it('readEmailPushHistory 解析同一份历史', async () => {
+    dbMock.rows = [
+      {
+        value: {
+          items: [{ fullName: 'a/b', at: NOW.toISOString() }],
+          lastSentAt: NOW.toISOString(),
+        },
+        expiresAt: new Date(NOW.getTime() + 1000),
+      },
+    ];
+    await expect(readEmailPushHistory(42, NOW)).resolves.toMatchObject({
+      items: [{ fullName: 'a/b' }],
+    });
+  });
+
+  it('过期历史不会被读到', async () => {
+    dbMock.rows = [
+      {
+        value: { items: [{ fullName: 'a/b', at: NOW.toISOString() }], lastSentAt: null },
+        expiresAt: new Date(NOW.getTime() - 1),
+      },
+    ];
+    await expect(readEmailPushHistory(42, NOW)).resolves.toBeNull();
   });
 });

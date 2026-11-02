@@ -8,6 +8,11 @@ import {
   type DigestSnapshot,
 } from '../agent/digest-snapshot.js';
 import { normalizeEmailPreferences } from './preferences.js';
+import {
+  pushedRecently,
+  readEmailPushHistory,
+  recordEmailPush,
+} from '../agent/push-history.js';
 import { renderDigestEmail } from './render.js';
 import { emailConfigured, sendEmail } from './send.js';
 import { resolveBaseUrl } from './tokens.js';
@@ -209,11 +214,23 @@ export async function pushEmailDigests(
         skipped += 1;
         continue;
       }
-      const items = selectEntriesForPreferences(
+      // 与企微同一套 7 天去重：每个邮箱订阅者有自己的推送历史。
+      // 全被去重掉时退回原始选择——宁可重复，也不要「今天没有邮件」。
+      const history = await readEmailPushHistory(row.id, now);
+      const fresh = selectEntriesForPreferences(
         snapshot.items,
         preferences,
         preferences.digestCount,
+        (item) => !pushedRecently(history, item.fullName, now),
       );
+      const items =
+        fresh.length > 0
+          ? fresh
+          : selectEntriesForPreferences(
+              snapshot.items,
+              preferences,
+              preferences.digestCount,
+            );
       if (items.length === 0) {
         await rollbackClaim(row.id, row.lastSentAt ?? null, {
           failed: false,
@@ -243,6 +260,12 @@ export async function pushEmailDigests(
       sent += 1;
       remaining -= 1;
       runRemaining -= 1;
+      // 发送成功才记历史：失败回滚后下次重试不该被自己「去重」掉。
+      await recordEmailPush(
+        row.id,
+        items.map((item) => item.fullName),
+        now,
+      );
       await bumpDailySent(today);
       if (row.consecutiveFailures !== 0) {
         await resetFailures(row.id);

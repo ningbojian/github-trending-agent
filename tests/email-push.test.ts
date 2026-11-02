@@ -346,9 +346,12 @@ describe('pushEmailDigests — sending', () => {
         '<https://agent.example.com/api/email-unsubscribe?t=unsub-token>',
       'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
     });
-    // 全局日计数写入 kv_cache。
-    expect(dbState.insertCalls[0].key).toBe('email_digest_sent:2026-10-25');
-    expect(dbState.insertCalls[0].value).toEqual({ count: 1 });
+    // 全局日计数写入 kv_cache（现在还会先写一条推送历史，按 key 找计数那条）。
+    const daily = dbState.insertCalls.find((call) =>
+      String(call.key).startsWith('email_digest_sent'),
+    );
+    expect(daily?.key).toBe('email_digest_sent:2026-10-25');
+    expect(daily?.value).toEqual({ count: 1 });
   });
 
   it('selects entries per subscriber（语言过滤 + 条数）', async () => {

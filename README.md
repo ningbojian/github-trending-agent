@@ -1,12 +1,12 @@
 <!-- profile-agent:readme:start -->
 🇨🇳 [中文](README.md) · 🇺🇸 [English](README.en.md)
-基于企业微信自建应用实现对话式 GitHub Trending 检索 Agent：GitHub Actions 每日抓取热榜并调用 GitHub 官方 API 补全 topics 标签，聊天窗口内支持自然语言检索、收藏与取消收藏（同步 star 到 GitHub 账号）。
+基于企业微信自建应用实现对话式 GitHub Trending 检索 Agent：GitHub Actions 每日抓取热榜并调用 GitHub 官方 API 补全 topics 标签，聊天窗口内支持自然语言检索、收藏与取消收藏（同步 star 到 GitHub 账号），以及用聊天指令管理长期记忆。
 
 - **每日热榜抓取与补全**：`.github/workflows/daily.yml` 每天 UTC 00:30（北京时间 08:30）跑 `src/scraper/run-scraper.ts` 抓取 Trending 页面入库，随后 `src/github/run-enrich.ts` 调 GitHub 官方 API 补全 topics 标签（**先入库、后补全**）
-- **双模式交互与查询解析缓存**：被动定时推送 top10 简报（LLM 故障时降级为纯模板，仓库列表始终送达）；主动发送自然语言（如「本周 rust 的 ai 项目」）由 `src/agent/parse-query.ts` 解析查询条件进行多维度过滤；`src/agent/query-cache.ts` 对解析结果做 30 天缓存，key 带 `parse:v1:` 版本前缀，命中时不调用模型，过期、坏值或读库失败均按未命中处理
-- **OAuth 收藏同步与最近检索缓存**：`src/github/oauth.ts` 完成 GitHub 授权（scope 仅 public_repo）后，可在聊天中「收藏 N / 取消收藏 N」，自动同步 star 到用户账号，并支持「我的收藏」列表；`src/agent/recent-results.ts` 抽出最近一次检索缓存，供「收藏 N」与「感兴趣/不感兴趣」共用，并区分「没搜过」与「搜过但结果为空」
-- **企业微信接入完整、双触达渠道**：`src/wecom/crypto.ts` 实现回调加解密，`src/wecom/router.ts` 分发指令（搜索、收藏、绑定、订阅偏好、退订、帮助），`src/wecom/onboarding.ts` 首条消息自动开通订阅；用户在个人微信里启用「企业微信插件」即可每天收简报并直接提问（无需安装企业微信 App）；`/api/join` 落地页提供企微加入引导 + 邮箱备用入口（Resend，双重确认、不截断、可退订）
-- **数据与工程化**：Drizzle ORM + SQL 迁移（`drizzle/`）管理用户、订阅、搜索结果、收藏与运行日志；请求级 trace 与工具调用流水落 `agent_runs` / `tool_calls`，`/api/metrics` 报出成功率、延迟分位、路由分布与 token 用量；`evals/` 98 条金标 + CI 回归门禁，规则改坏会让流水线变红；`tests/` 覆盖解析、检索、回调、加解密、查询缓存、最近检索等核心逻辑的 Vitest 用例
+- **双模式交互、规则前置与查询解析缓存**：被动定时推送 top10 简报（LLM 故障时降级为纯模板，仓库列表始终送达）；主动发送自然语言（如「本周 rust 的 ai 项目」）由 `src/agent/parse-query.ts` 解析查询条件进行多维度过滤；路由先用 `src/wecom/route-decision.ts` 与 `src/agent/intent.ts` 做零模型判定，只有「深挖 owner/repo」「这个项目靠不靠谱」等才进入工具循环（最多 3 步）；`src/agent/query-cache.ts` 对解析结果做 30 天缓存，key 带 `parse:v1:` 版本前缀，命中时不调用模型，过期、坏值或读库失败均按未命中处理
+- **OAuth 收藏同步、最近检索缓存与长期记忆**：`src/github/oauth.ts` 完成 GitHub 授权（scope 仅 public_repo）后，可在聊天中「收藏 N / 取消收藏 N」，自动同步 star 到用户账号，并支持「我的收藏」列表；`src/agent/recent-results.ts` 抽出最近一次检索缓存，供「收藏 N」与「感兴趣/不感兴趣」共用，并区分「没搜过」与「搜过但结果为空」；`src/wecom/memory.ts` 解析并回执「记住 / 忘掉 / 我的记忆」，支持「忘掉 全部」清空，记忆最多 20 条、每条 100 字（180 天 TTL），只影响措辞，不参与排序或是否推送，写入与查看都是 kv 操作，不消耗模型额度，没配 Key 的用户也能用，重复、已满或存储失败都会如实提示
+- **企业微信接入完整、双触达渠道**：`src/wecom/crypto.ts` 实现回调加解密，`src/wecom/router.ts` 分发指令（搜索、收藏、绑定、订阅偏好、退订、帮助、记忆），`src/wecom/onboarding.ts` 首条消息自动开通订阅；用户在个人微信里启用「企业微信插件」即可每天收简报并直接提问（无需安装企业微信 App）；`/api/join` 落地页提供企微加入引导 + 邮箱备用入口（Resend，双重确认、不截断、可退订）
+- **数据与工程化**：Drizzle ORM + SQL 迁移（`drizzle/`）管理用户、订阅、搜索结果、收藏与运行日志；请求级 trace 与工具调用流水落 `agent_runs` / `tool_calls`，`/api/metrics` 报出成功率、延迟分位、路由分布与 token 用量；`evals/` 98 条金标 + CI 回归门禁，规则改坏会让流水线变红；`tests/` 覆盖解析、检索、回调、加解密、查询缓存、最近检索与长期记忆等核心逻辑的 Vitest 用例
 
 部署与联调步骤见 [docs/deploy.md](docs/deploy.md)。
 <!-- profile-agent:readme:end -->

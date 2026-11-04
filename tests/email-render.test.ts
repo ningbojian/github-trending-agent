@@ -74,6 +74,20 @@ describe('renderDigestEmail — HTML', () => {
     expect(text).toContain('从 120 个候选里筛出 1 个');
   });
 
+  it('adds a stats strip and growth bars without external images', () => {
+    const { html, text } = renderDigestEmail({
+      ...BASE,
+      poolSize: 100,
+      items: [item({ starsDelta: 500 }), item({ fullName: 'b/c', starsDelta: 100 })],
+    });
+    expect(html).toContain('今日候选');
+    expect(html).toContain('总涨幅');
+    // 涨幅条：table + bgcolor，不引入任何图片。
+    expect(html).toContain('bgcolor="#22D3EE"');
+    expect(html).not.toContain('<img');
+    expect(text).toContain('总涨幅');
+  });
+
   it('omits the abstract block when the snapshot has no abstract', () => {
     const { html, text } = renderDigestEmail({ ...BASE, abstract: null });
     expect(html).not.toContain(BASE.abstract);

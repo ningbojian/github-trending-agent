@@ -83,20 +83,40 @@ function pill(text: string, tone: 'default' | 'growth' = 'default'): string {
   return `<span style="display:inline-block;background:${bg};border:1px solid ${border};border-radius:999px;padding:1px 7px;margin:0 4px 2px 0;font-size:11px;line-height:1.5;color:${fg};">${text}</span>`;
 }
 
-/** 单条：序号与仓库名一行，徽章一行，简介一行——比原来拆成四行紧一档。 */
-function renderItemHtml(index: number, item: DigestSnapshotItem, last: boolean): string {
+/** 单条：序号徽章与仓库名一行，徽章一行，涨幅条一行，简介一行。 */
+function renderItemHtml(
+  index: number,
+  item: DigestSnapshotItem,
+  last: boolean,
+  maxDelta: number,
+): string {
   const badges = [pill(`★ ${formatNumber(item.stars)}`)];
   if (item.starsDelta > 0) badges.push(pill(`+${formatNumber(item.starsDelta)} 今日`, 'growth'));
   if (item.isNew) badges.push(pill('新上榜', 'growth'));
   const url = item.htmlUrl || `https://github.com/${item.fullName}`;
   const summary = item.summary?.trim();
+  // 涨幅条：按本批最大涨幅归一化；纯 table 宽度，Gmail/QQ 都能画。
+  const pct =
+    maxDelta > 0 && item.starsDelta > 0
+      ? Math.max(6, Math.round((item.starsDelta / maxDelta) * 100))
+      : 0;
+  const bar =
+    pct > 0
+      ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">
+          <tr>
+            <td width="${pct}%" height="4" bgcolor="${EMAIL.accent}" style="border-radius:2px;font-size:0;line-height:0;">&nbsp;</td>
+            <td width="${100 - pct}%" height="4" bgcolor="#222C38" style="border-radius:2px;font-size:0;line-height:0;">&nbsp;</td>
+          </tr>
+        </table>`
+      : '';
   return `<tr>
   <td style="padding:8px 0;${last ? '' : `border-bottom:1px solid ${EMAIL.divider};`}">
     <div style="font-size:14px;line-height:1.4;">
-      <span style="color:${EMAIL.faint};font-size:12px;margin-right:6px;">#${index}</span><a href="${escapeHtml(url)}" style="color:${EMAIL.accent};text-decoration:none;font-family:${BRAND.monoFontFamily};font-size:14px;font-weight:600;">${escapeHtml(item.fullName)}</a>
+      <span style="display:inline-block;min-width:22px;padding:1px 6px;margin-right:6px;border-radius:6px;background:${EMAIL.pillBg};border:1px solid ${EMAIL.pillBorder};color:${EMAIL.faint};font-size:11px;text-align:center;">#${index}</span><a href="${escapeHtml(url)}" style="color:${EMAIL.accent};text-decoration:none;font-family:${BRAND.monoFontFamily};font-size:14px;font-weight:600;">${escapeHtml(item.fullName)}</a>
     </div>
     <div style="margin-top:2px;">${badges.join('')}</div>
-    ${summary ? `<div style="margin-top:3px;font-size:13px;line-height:1.55;color:${EMAIL.summary};">${escapeHtml(summary)}</div>` : ''}
+    ${bar}
+    ${summary ? `<div style="margin-top:4px;font-size:13px;line-height:1.55;color:${EMAIL.summary};">${escapeHtml(summary)}</div>` : ''}
   </td>
 </tr>`;
 }
@@ -112,6 +132,40 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
     items.length > 0
       ? `今日 ${items.length} 个热榜项目：${items.slice(0, 3).map((item) => item.fullName).join('、')}`
       : '今日暂无热榜项目';
+
+  // 顶部数据条与每条涨幅条的归一化基准。
+  const candidateCount =
+    typeof poolSize === 'number' && poolSize > 0 ? poolSize : items.length;
+  const freshCount = items.filter((item) => item.isNew).length;
+  const totalDelta = items.reduce(
+    (sum, item) => sum + Math.max(0, item.starsDelta),
+    0,
+  );
+  const maxDelta = items.reduce(
+    (max, item) => Math.max(max, item.starsDelta),
+    0,
+  );
+  const stats =
+    items.length > 0
+      ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:9px;">
+          <tr>
+            <td width="32%" align="center" style="background:${EMAIL.abstractBg};border-radius:8px;padding:7px 4px;">
+              <div style="font-size:11px;color:${EMAIL.muted};">今日候选</div>
+              <div style="font-size:17px;font-weight:700;color:${EMAIL.text};">${candidateCount}</div>
+            </td>
+            <td width="4"></td>
+            <td width="32%" align="center" style="background:${EMAIL.abstractBg};border-radius:8px;padding:7px 4px;">
+              <div style="font-size:11px;color:${EMAIL.muted};">新上榜</div>
+              <div style="font-size:17px;font-weight:700;color:${EMAIL.text};">${freshCount}</div>
+            </td>
+            <td width="4"></td>
+            <td width="32%" align="center" style="background:${EMAIL.abstractBg};border-radius:8px;padding:7px 4px;">
+              <div style="font-size:11px;color:${EMAIL.muted};">总涨幅</div>
+              <div style="font-size:17px;font-weight:700;color:${EMAIL.accent};">+${formatNumber(totalDelta)}</div>
+            </td>
+          </tr>
+        </table>`
+      : '';
 
   const html = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -147,12 +201,13 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
                 ? `<div style="margin-top:8px;padding:9px 12px;background:${EMAIL.abstractBg};border-left:2px solid ${EMAIL.accent};border-radius:6px;font-size:13px;line-height:1.6;color:${EMAIL.abstractText};">${escapeHtml(abstract)}</div>`
                 : ''
             }
+            ${stats}
           </td>
         </tr>
         <tr>
           <td style="padding:4px 16px 0;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-              ${items.map((item, index) => renderItemHtml(index + 1, item, index === items.length - 1)).join('\n')}
+              ${items.map((item, index) => renderItemHtml(index + 1, item, index === items.length - 1, maxDelta)).join('\n')}
             </table>
           </td>
         </tr>
@@ -178,6 +233,9 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
     `你好，这是今天的 GitHub 热榜简报（${date}）。`,
     ...(typeof poolSize === 'number' && poolSize > items.length
       ? [`今天从 ${poolSize} 个候选里筛出 ${items.length} 个。`]
+      : []),
+    ...(items.length > 0
+      ? [`今日 ${items.length} 项 · 新上榜 ${freshCount} · 总涨幅 +${formatNumber(totalDelta)}`]
       : []),
     '',
     ...(abstract ? [abstract, ''] : []),

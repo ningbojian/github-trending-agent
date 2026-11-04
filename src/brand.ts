@@ -89,12 +89,13 @@ export const BRAND = {
 
 /**
  * 品牌图标：深底上的「气泡机器人」——对话气泡做头，长出天线、圆眼与微笑。
- * - 只用 <path>/<rect>/<circle>，无文字、无外链；24px 与圆形裁切下都能认出；
+ * - 只用 <path>/<rect>/<circle>，**透明背景**（网页品牌头与 favicon 直接抠图使用，
+ *   不再垫深色方块）；24px 与圆形裁切下都能认出；
  * - 落地页内联使用，不产生额外请求；源文件在 docs/assets/icon.svg，
  *   企微后台用的 750px PNG 由同一造型导出（docs/assets/icon-750.png）。
  * - 邮件刻意不使用图片：外链图片会被客户端屏蔽并影响送达率。
  */
-export const BRAND_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="40" height="40" role="img" aria-hidden="true" data-brand="logo"><defs><linearGradient id="brandGrad" gradientUnits="userSpaceOnUse" x1="112" y1="150" x2="400" y2="380"><stop offset="0" stop-color="#3B82F6"/><stop offset="1" stop-color="#2563EB"/></linearGradient></defs><rect width="512" height="512" fill="#0B1220"/><g transform="rotate(-5 256 268)"><circle cx="256" cy="88" r="27" fill="#22D3EE" opacity="0.18"/><rect x="248" y="96" width="16" height="60" rx="8" fill="#3B82F6"/><circle cx="256" cy="88" r="19" fill="#22D3EE"/><path d="M176 348 L150 416 Q147 426 161 419 L246 378 Z" fill="url(#brandGrad)"/><rect x="112" y="150" width="288" height="230" rx="70" fill="url(#brandGrad)"/><circle cx="204" cy="252" r="29" fill="#ffffff"/><circle cx="308" cy="252" r="29" fill="#ffffff"/><circle cx="204" cy="259" r="13" fill="#0B1220"/><circle cx="308" cy="259" r="13" fill="#0B1220"/><path d="M214 316 Q256 342 298 316" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/></g></svg>`;
+export const BRAND_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="40" height="40" role="img" aria-hidden="true" data-brand="logo"><defs><linearGradient id="brandGrad" gradientUnits="userSpaceOnUse" x1="112" y1="150" x2="400" y2="380"><stop offset="0" stop-color="#3B82F6"/><stop offset="1" stop-color="#2563EB"/></linearGradient></defs><g transform="rotate(-5 256 268)"><circle cx="256" cy="88" r="27" fill="#22D3EE" opacity="0.18"/><rect x="248" y="96" width="16" height="60" rx="8" fill="#3B82F6"/><circle cx="256" cy="88" r="19" fill="#22D3EE"/><path d="M176 348 L150 416 Q147 426 161 419 L246 378 Z" fill="url(#brandGrad)"/><rect x="112" y="150" width="288" height="230" rx="70" fill="url(#brandGrad)"/><circle cx="204" cy="252" r="29" fill="#ffffff"/><circle cx="308" cy="252" r="29" fill="#ffffff"/><circle cx="204" cy="259" r="13" fill="#0B1220"/><circle cx="308" cy="259" r="13" fill="#0B1220"/><path d="M214 316 Q256 342 298 316" fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/></g></svg>`;
 
 /** favicon：同一图形的 data URI（内联，无静态文件依赖）。 */
 export const BRAND_FAVICON = `data:image/svg+xml,${encodeURIComponent(BRAND_ICON_SVG)}`;

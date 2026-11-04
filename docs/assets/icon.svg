@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="t d">
   <title id="t">GitHub 热榜 · 每日简报</title>
-  <desc id="d">深海军蓝底上的蓝青色机器人头像：圆眼、微笑与一根天线，轮廓同时是一枚对话气泡。</desc>
+  <desc id="d">透明底上的蓝青色机器人头像：圆眼、微笑与一根天线，轮廓同时是一枚对话气泡。</desc>
   <!--
     原创品牌图标：仅由几何图形构成，不含任何第三方商标、字体或图库素材。
     概念是「气泡机器人」——对话气泡做头（产品每天在微信里跟你说话），
@@ -14,7 +14,6 @@
       <stop offset="1" stop-color="#2563EB"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" fill="#0B1220"/>
   <g transform="rotate(-5 256 268)">
     <circle cx="256" cy="88" r="27" fill="#22D3EE" opacity="0.18"/>
     <rect x="248" y="96" width="16" height="60" rx="8" fill="#3B82F6"/>

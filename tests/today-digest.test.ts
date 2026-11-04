@@ -64,11 +64,22 @@ describe('handleTodayDigest', () => {
   });
 
   it('今天已经发过 → 告知时间，不再重复发', async () => {
+    // 用「北京今天 10:15」构造时间戳，避免测试依赖跑的那一天。
+    const beijing = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const lastToday = new Date(
+      Date.UTC(
+        beijing.getUTCFullYear(),
+        beijing.getUTCMonth(),
+        beijing.getUTCDate(),
+        2,
+        15,
+      ),
+    );
     dbMock.rows = [
       {
         preferences: { pushTime: '10:00' },
         active: true,
-        lastDigestAt: new Date('2026-11-02T02:15:00.000Z'), // 北京 10:15
+        lastDigestAt: lastToday,
       },
     ];
     await handleTodayDigest(MSG);

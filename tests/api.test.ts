@@ -278,3 +278,34 @@ describe('postMessage 重试（网络异常 / HTTP 5xx 重试一次；业务 err
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('getWeComAccessTokenForSecret — 通讯录同步 Secret', () => {
+  it('用传入的 secret 取 token，并写到独立缓存键', async () => {
+    dbState.selectRows = [];
+    dbState.insertValues = [];
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          errcode: 0,
+          access_token: 'contacts-token',
+          expires_in: 7200,
+        }),
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const api = await loadApiWithEnv();
+    await expect(
+      api.getWeComAccessTokenForSecret('contacts-secret', 'wecom_contacts_access_token'),
+    ).resolves.toBe('contacts-token');
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      'corpsecret=contacts-secret',
+    );
+    expect(dbState.insertValues[0]).toMatchObject({
+      key: 'wecom_contacts_access_token',
+      value: { token: 'contacts-token' },
+    });
+  });
+});

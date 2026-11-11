@@ -21,14 +21,15 @@ interface MemoryCache {
   expiresAt: number;
 }
 
-let memoryCache: MemoryCache | undefined;
+/** 按缓存键区分：应用 Secret 与通讯录同步 Secret 各有独立 token。 */
+const memoryCaches = new Map<string, MemoryCache>();
 /** 进行中的取 token 操作：并发冷启动共享同一次 gettoken，避免打爆企微应用级配额。 */
-let inflight: Promise<MemoryCache> | undefined;
+const inflightTokens = new Map<string, Promise<MemoryCache>>();
 
 /** 测试隔离用：清空进程内 token 缓存与 in-flight 备忘。 */
 export function resetAccessTokenCache(): void {
-  memoryCache = undefined;
-  inflight = undefined;
+  memoryCaches.clear();
+  inflightTokens.clear();
 }
 
 interface TokenResponse {
@@ -38,11 +39,11 @@ interface TokenResponse {
   expires_in?: number;
 }
 
-async function fetchAccessTokenFromWeCom(): Promise<MemoryCache> {
+async function fetchAccessTokenFromWeCom(secret: string): Promise<MemoryCache> {
   const url =
     'https://qyapi.weixin.qq.com/cgi-bin/gettoken' +
     `?corpid=${encodeURIComponent(env.WECOM_CORP_ID)}` +
-    `&corpsecret=${encodeURIComponent(env.WECOM_SECRET)}`;
+    `&corpsecret=${encodeURIComponent(secret)}`;
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`gettoken HTTP ${res.status}`);
@@ -66,22 +67,42 @@ function isFresh(entry: MemoryCache): boolean {
  * 失败后清空备忘以便下次调用重试。
  */
 export async function getWeComAccessToken(): Promise<string> {
-  if (memoryCache && isFresh(memoryCache)) {
-    return memoryCache.token;
-  }
-
-  inflight ??= resolveAccessToken().finally(() => {
-    inflight = undefined;
-  });
-
-  return (await inflight).token;
+  return getWeComAccessTokenForSecret(env.WECOM_SECRET, TOKEN_CACHE_KEY);
 }
 
-async function resolveAccessToken(): Promise<MemoryCache> {
+/**
+ * 用指定 Secret 取 token。通讯录同步 Secret 与应用 Secret 是两套权限，
+ * `corp/get_join_qrcode` 必须用前者（官方文档：须拥有通讯录管理权限，
+ * 使用通讯录同步的 Secret），因此需要独立缓存键，不能复用应用 token。
+ */
+export async function getWeComAccessTokenForSecret(
+  secret: string,
+  cacheKey: string,
+): Promise<string> {
+  const cached = memoryCaches.get(cacheKey);
+  if (cached && isFresh(cached)) {
+    return cached.token;
+  }
+
+  let pending = inflightTokens.get(cacheKey);
+  if (!pending) {
+    pending = resolveAccessToken(secret, cacheKey).finally(() => {
+      inflightTokens.delete(cacheKey);
+    });
+    inflightTokens.set(cacheKey, pending);
+  }
+
+  return (await pending).token;
+}
+
+async function resolveAccessToken(
+  secret: string,
+  cacheKey: string,
+): Promise<MemoryCache> {
   const rows = await db()
     .select()
     .from(kvCache)
-    .where(eq(kvCache.key, TOKEN_CACHE_KEY));
+    .where(eq(kvCache.key, cacheKey));
   const row = rows[0];
   if (row) {
     const value = row.value as { token?: unknown };
@@ -91,18 +112,18 @@ async function resolveAccessToken(): Promise<MemoryCache> {
         expiresAt: new Date(row.expiresAt).getTime(),
       };
       if (isFresh(entry)) {
-        memoryCache = entry;
+        memoryCaches.set(cacheKey, entry);
         return entry;
       }
     }
   }
 
-  const fresh = await fetchAccessTokenFromWeCom();
-  memoryCache = fresh;
+  const fresh = await fetchAccessTokenFromWeCom(secret);
+  memoryCaches.set(cacheKey, fresh);
   await db()
     .insert(kvCache)
     .values({
-      key: TOKEN_CACHE_KEY,
+      key: cacheKey,
       value: { token: fresh.token },
       expiresAt: new Date(fresh.expiresAt),
     })

@@ -149,7 +149,10 @@ export default async function handler(
 
   const accepting = await isWeComAccepting();
   const envJoinQr = process.env.WECOM_JOIN_QR_URL?.trim();
-  const joinQrUrl = envJoinQr || (await getJoinQrUrl()) || undefined;
+  const joinQrUrl =
+    envJoinQr ||
+    (await getJoinQrUrl(new Date(), process.env.WECOM_CONTACTS_SECRET?.trim())) ||
+    undefined;
   const html = renderJoinPage({
     accepting,
     emailReady: emailConfigured(),

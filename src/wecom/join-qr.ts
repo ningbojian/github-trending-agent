@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
-import { getWeComAccessToken } from './api.js';
+import { getWeComAccessToken, getWeComAccessTokenForSecret } from './api.js';
 
 /**
  * 企业微信「加入企业」二维码（best-effort）。
@@ -62,9 +62,16 @@ async function readCache(): Promise<ValidCache | null> {
   }
 }
 
-async function fetchJoinQr(): Promise<string | null> {
+async function fetchJoinQr(contactsSecret?: string): Promise<string | null> {
   try {
-    const token = await getWeComAccessToken();
+    // 官方权限说明：须拥有通讯录管理权限，使用通讯录同步的 Secret。
+    // 没有配置时退回应用 token（多数企业会因权限不足失败，页面再降级）。
+    const token = contactsSecret
+      ? await getWeComAccessTokenForSecret(
+          contactsSecret,
+          'wecom_contacts_access_token',
+        )
+      : await getWeComAccessToken();
     const url =
       'https://qyapi.weixin.qq.com/cgi-bin/corp/get_join_qrcode' +
       `?access_token=${encodeURIComponent(token)}&size_type=3`;
@@ -104,7 +111,10 @@ async function writeCache(url: string, now: Date): Promise<void> {
 }
 
 /** 返回当前可用的加入企业二维码图片 URL；没有任何可用码时返回 null。 */
-export async function getJoinQrUrl(now: Date = new Date()): Promise<string | null> {
+export async function getJoinQrUrl(
+  now: Date = new Date(),
+  contactsSecret?: string,
+): Promise<string | null> {
   const nowMs = now.getTime();
   const cached = await readCache();
   const cacheUsable = cached !== null && cached.expiresAt > nowMs;
@@ -113,7 +123,7 @@ export async function getJoinQrUrl(now: Date = new Date()): Promise<string | nul
     return cached.url;
   }
 
-  const fresh = await fetchJoinQr();
+  const fresh = await fetchJoinQr(contactsSecret);
   if (fresh !== null) {
     await writeCache(fresh, now);
     return fresh;

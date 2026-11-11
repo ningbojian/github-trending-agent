@@ -21,8 +21,16 @@ vi.mock('../src/db/client', () => ({
   }),
 }));
 
+const apiState = vi.hoisted(() => ({
+  contactsCalls: [] as Array<[string, string]>,
+}));
+
 vi.mock('../src/wecom/api', () => ({
   getWeComAccessToken: async () => 'test-token',
+  getWeComAccessTokenForSecret: async (secret: string, cacheKey: string) => {
+    apiState.contactsCalls.push([secret, cacheKey]);
+    return 'contacts-token';
+  },
 }));
 
 const { getJoinQrUrl } = await import('../src/wecom/join-qr');
@@ -51,6 +59,7 @@ function apiReturns(body: unknown, status = 200): void {
 beforeEach(() => {
   dbState.rows = [];
   dbState.writes = [];
+  apiState.contactsCalls = [];
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
 });
@@ -139,5 +148,20 @@ describe('getJoinQrUrl', () => {
     fetchMock.mockRejectedValue(new Error('network down'));
 
     await expect(getJoinQrUrl(NOW)).resolves.toBeNull();
+  });
+
+  it('有通讯录同步 Secret 时用独立 token 调用', async () => {
+    apiReturns({ errcode: 0, join_qrcode: 'https://wework.qpic.cn/qr.png' });
+
+    await expect(getJoinQrUrl(NOW, 'contacts-secret')).resolves.toBe(
+      'https://wework.qpic.cn/qr.png',
+    );
+
+    expect(apiState.contactsCalls).toEqual([
+      ['contacts-secret', 'wecom_contacts_access_token'],
+    ]);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      'access_token=contacts-token',
+    );
   });
 });

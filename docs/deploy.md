@@ -424,7 +424,7 @@ curl -i https://<domain>/api/oauth-github
 - **企业认证是扩容的唯一正解**：未认证企业成员名额约 100；认证（个体工商户可办，约 300 元/年）后按后台上限把 `WECOM_MEMBER_LIMIT` 调大，或直接设 `WECOM_ACCEPTING=true` 关闭门控。认证是后台操作，代码不依赖。
 - 二维码：加入企业码由 `corp/get_join_qrcode` 每天自动刷新（官方码仅 7 天有效），缓存在 `kv_cache` 6 天；接口失败时回退到未过期的缓存，没有可用码则页面降级为「向管理员索要邀请链接」。`WECOM_JOIN_QR_URL` 可手动覆盖（任意可公开访问的图片地址）。
   - **该接口要求「通讯录管理权限 + 通讯录同步的 Secret」**：在管理后台 → 安全与管理 → 管理工具 → 通讯录同步 取 Secret，配置 `WECOM_CONTACTS_SECRET`。未配置时自动退回应用 Secret，多数企业会因权限不足降级。
-  - 若「通讯录同步」开启了企业可信 IP，Vercel 的动态出口 IP 可能被拒；这种情况改用 `WECOM_JOIN_QR_URL` 配后台生成的 365 天分享二维码图片，页面就不会再出现过期码。
+  - 若「通讯录同步」开启了企业可信 IP，Vercel 的动态出口 IP 会被 `60020` 拒绝。此时 `get_join_qrcode` 会自动复用 `WECOM_RELAY_URL` 的固定 IP 中转（与 `message/send` 同一套 `X-Relay-Secret`）：把中转出口 IP 加进「通讯录同步 → 企业可信 IP」，并确认中转允许转发 `/cgi-bin/corp/get_join_qrcode`。没有固定 IP 中转时，改用 `WECOM_JOIN_QR_URL` 配后台生成的 365 天分享二维码图片，页面就不会再出现过期码。
   - 旧的 `docs/assets/wecom-join-qr.png` / `wecom-plugin-qr.png` 是静态截图，内容已过期，**不再作为默认值**。
   - 微信插件码没有稳定的公开接口，默认不展示；拿到当前有效的码后通过 `WECOM_PLUGIN_QR_URL` 打开。
   - 两张码并排且外观相同，页面用图注（「加入企业」/「微信插件」）区分，缺哪张就只渲染哪张，并在第一步改写成文字指引——不会出现「让你扫码但下面空白」。

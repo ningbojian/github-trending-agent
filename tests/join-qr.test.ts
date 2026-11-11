@@ -62,10 +62,14 @@ beforeEach(() => {
   apiState.contactsCalls = [];
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
+  delete process.env.WECOM_RELAY_URL;
+  delete process.env.WECOM_RELAY_SECRET;
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  delete process.env.WECOM_RELAY_URL;
+  delete process.env.WECOM_RELAY_SECRET;
 });
 
 describe('getJoinQrUrl', () => {
@@ -162,6 +166,24 @@ describe('getJoinQrUrl', () => {
     ]);
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
       'access_token=contacts-token',
+    );
+  });
+
+  it('配置了固定 IP 中转时走中转并带 X-Relay-Secret', async () => {
+    process.env.WECOM_RELAY_URL = 'https://relay.example.com/';
+    process.env.WECOM_RELAY_SECRET = 'relay-secret';
+    apiReturns({ errcode: 0, join_qrcode: 'https://wework.qpic.cn/qr.png' });
+
+    await expect(getJoinQrUrl(NOW, 'contacts-secret')).resolves.toBe(
+      'https://wework.qpic.cn/qr.png',
+    );
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(
+      'https://relay.example.com/cgi-bin/corp/get_join_qrcode?access_token=contacts-token&size_type=3',
+    );
+    expect((init.headers as Record<string, string>)['X-Relay-Secret']).toBe(
+      'relay-secret',
     );
   });
 });

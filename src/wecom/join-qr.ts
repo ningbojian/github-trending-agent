@@ -72,10 +72,20 @@ async function fetchJoinQr(contactsSecret?: string): Promise<string | null> {
           'wecom_contacts_access_token',
         )
       : await getWeComAccessToken();
+    // 通讯录同步有「企业可信 IP」白名单时，Vercel 动态出口会被 60020 拒绝；
+    // 复用 message/send 的固定 IP 中转，把中转 IP 加进通讯录同步白名单即可。
+    const relayUrl = process.env.WECOM_RELAY_URL?.trim().replace(/\/+$/, '');
+    const relaySecret = process.env.WECOM_RELAY_SECRET?.trim();
+    const base = relayUrl || 'https://qyapi.weixin.qq.com';
+    const headers: Record<string, string> = {};
+    if (relayUrl && relaySecret) headers['X-Relay-Secret'] = relaySecret;
     const url =
-      'https://qyapi.weixin.qq.com/cgi-bin/corp/get_join_qrcode' +
+      `${base}/cgi-bin/corp/get_join_qrcode` +
       `?access_token=${encodeURIComponent(token)}&size_type=3`;
-    const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    const res = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
     if (!res.ok) throw new Error(`get_join_qrcode HTTP ${res.status}`);
     const body = (await res.json()) as JoinQrResponse;
     if (

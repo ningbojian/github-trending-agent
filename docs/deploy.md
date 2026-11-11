@@ -117,8 +117,8 @@ npm run db:audit
 | `RESEND_API_KEY` | **可选** | 邮箱备用通道：Resend API Key（第 9 步）；不配则邮箱入口显示「即将开放」、cron 跳过邮件 |
 | `EMAIL_FROM` | **可选** | 邮箱：发件人，须为 Resend 已验证域名下的地址，如 `GitHub 热榜 <digest@mail.example.com>` |
 | `PUBLIC_BASE_URL` | **可选** | 邮箱/落地页：站点根地址（无尾斜杠），用于邮件里的确认/设置/退订链接；缺省回退请求 Host |
-| `WECOM_JOIN_QR_URL` | **可选** | 落地页：「加入企业」二维码地址；缺省用仓库内的 `docs/assets/wecom-join-qr.png` |
-| `WECOM_PLUGIN_QR_URL` | **可选** | 落地页：「微信插件」二维码地址；缺省用仓库内的 `docs/assets/wecom-plugin-qr.png` |
+| `WECOM_JOIN_QR_URL` | **可选** | 落地页：「加入企业」二维码图片地址（手动覆盖）。缺省由 `corp/get_join_qrcode` 每天自动取新码（官方码仅 7 天有效）；接口失败时回退到未过期的缓存，没有可用码则页面降级为「向管理员索要邀请链接」 |
+| `WECOM_PLUGIN_QR_URL` | **可选** | 落地页：「微信插件」二维码地址。默认不显示（旧的 `weixin.qq.com/q/...` 静态码已失效）；配了当前有效的码才展示 |
 | `WECOM_APP_NAME` | **可选** | 落地页：应用显示名（缺省 `GitHub 热榜`） |
 | `WECOM_ACCEPTING` | **可选** | 落地页名额门控：`true`/`false` 显式覆盖，优先于成员数探测 |
 | `WECOM_MEMBER_LIMIT` | **可选** | 名额上限（默认 `100`；企业认证后按后台上限调整） |
@@ -421,9 +421,9 @@ curl -i https://<domain>/api/oauth-github
 - 页面顺序：**先企微、后邮箱**；邮箱按钮始终首屏可见。企微卡永远带一行兜底：「如果加入时提示名额已满或无法加入，可直接用邮箱订阅。」
 - 名额判断：`isWeComAccepting()` 优先级 = 显式 `WECOM_ACCEPTING` > 成员数探测（`count < WECOM_MEMBER_LIMIT`，默认 100）> `true`。探测走 `user/simplelist`（需通讯录读取权限），失败回退手动开关；结果缓存在 `kv_cache` 1 小时，`cron-push-digest` 每小时顺带刷新。
 - **企业认证是扩容的唯一正解**：未认证企业成员名额约 100；认证（个体工商户可办，约 300 元/年）后按后台上限把 `WECOM_MEMBER_LIMIT` 调大，或直接设 `WECOM_ACCEPTING=true` 关闭门控。认证是后台操作，代码不依赖。
-- 二维码：仓库内自带 `docs/assets/wecom-join-qr.png`（加入企业）与 `docs/assets/wecom-plugin-qr.png`（微信插件），落地页默认直接引用，无需配置。换邀请码时重新导出并用 `WECOM_JOIN_QR_URL` / `WECOM_PLUGIN_QR_URL` 覆盖即可（值可以是任意可公开访问的地址）。
-  - 两张码都是 `qrcode` 生成的标准码（660×660、白底、4 模块静区），用 jsQR 与 ZXing 双解码器验证过内容——**不要直接用企微后台导出的邀请卡片截图**：卡片是深色底，二维码周围没有白色静区，多数扫码器和解码库会检测不到。
-  - 当前内容：加入企业 = `https://work.weixin.qq.com/join/4ssGfdH0aTh2w7OiYbGk2A/...`；微信插件 = `http://weixin.qq.com/q/02GyC9Zsxv9ad1O0gChGcF`。
+- 二维码：加入企业码由 `corp/get_join_qrcode` 每天自动刷新（官方码仅 7 天有效），缓存在 `kv_cache` 6 天；接口失败时回退到未过期的缓存，没有可用码则页面降级为「向管理员索要邀请链接」。`WECOM_JOIN_QR_URL` 可手动覆盖（任意可公开访问的图片地址）。
+  - 旧的 `docs/assets/wecom-join-qr.png` / `wecom-plugin-qr.png` 是静态截图，内容已过期，**不再作为默认值**。
+  - 微信插件码没有稳定的公开接口，默认不展示；拿到当前有效的码后通过 `WECOM_PLUGIN_QR_URL` 打开。
   - 两张码并排且外观相同，页面用图注（「加入企业」/「微信插件」）区分，缺哪张就只渲染哪张，并在第一步改写成文字指引——不会出现「让你扫码但下面空白」。
 - 企微成员可见范围要覆盖新加入的成员（应用可见范围 + 微信插件侧）；否则用户加入后发「你好」收不到回复。
 

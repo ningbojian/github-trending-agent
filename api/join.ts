@@ -2,6 +2,7 @@ import { emailConfigured } from '../src/email/send.js';
 import { escapeHtml, sendHtml, type HtmlResponse } from '../src/http/html.js';
 import { renderAppPage, renderMessagePage } from '../src/ui/page.js';
 import { isWeComAccepting } from '../src/wecom/capacity.js';
+import { getJoinQrUrl } from '../src/wecom/join-qr.js';
 
 /**
  * 触达入口落地页（GET /api/join）。
@@ -11,9 +12,11 @@ import { isWeComAccepting } from '../src/wecom/capacity.js';
  * 两张卡都是扁平 .p-card，避免「白卡套白卡」。
  */
 
-/** 仓库内自带的二维码；环境变量可按需覆盖（例如换成企微后台新导出的邀请码）。 */
-export const DEFAULT_JOIN_QR_URL = '/docs/assets/wecom-join-qr.png';
-export const DEFAULT_PLUGIN_QR_URL = '/docs/assets/wecom-plugin-qr.png';
+/**
+ * 加入企业二维码不落静态文件：企微的加入码只有 7 天有效，
+ * 由 getJoinQrUrl 按天刷新；取不到时页面自动降级为文字说明。
+ * 微信插件码没有稳定的公开接口，默认不显示，配置了 env 才展示。
+ */
 
 export interface JoinRequest {
   method?: string;
@@ -145,11 +148,14 @@ export default async function handler(
   }
 
   const accepting = await isWeComAccepting();
+  const envJoinQr = process.env.WECOM_JOIN_QR_URL?.trim();
+  const joinQrUrl = envJoinQr || (await getJoinQrUrl()) || undefined;
   const html = renderJoinPage({
     accepting,
     emailReady: emailConfigured(),
-    joinQrUrl: process.env.WECOM_JOIN_QR_URL?.trim() || DEFAULT_JOIN_QR_URL,
-    pluginQrUrl: process.env.WECOM_PLUGIN_QR_URL?.trim() || DEFAULT_PLUGIN_QR_URL,
+    joinQrUrl,
+    // 插件码短链已失效且没有稳定接口：默认隐藏，有有效地址时再通过 env 打开。
+    pluginQrUrl: process.env.WECOM_PLUGIN_QR_URL?.trim() || undefined,
     appName: process.env.WECOM_APP_NAME?.trim() || 'GitHub 热榜',
   });
   sendHtml(res, 200, html);

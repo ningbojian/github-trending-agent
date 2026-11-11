@@ -1,20 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
 
 const state = vi.hoisted(() => ({
   accepting: true,
   emailReady: true,
+  joinQrUrl: null as string | null,
 }));
 
 vi.mock('../src/wecom/capacity', () => ({
   isWeComAccepting: async () => state.accepting,
 }));
 
+vi.mock('../src/wecom/join-qr', () => ({
+  getJoinQrUrl: async () => state.joinQrUrl,
+}));
+
 vi.mock('../src/email/send', () => ({
   emailConfigured: () => state.emailReady,
 }));
 
-import handler, { DEFAULT_JOIN_QR_URL, DEFAULT_PLUGIN_QR_URL, renderJoinPage } from '../api/join';
+import handler, { renderJoinPage } from '../api/join';
 import { BRAND } from '../src/brand';
 
 interface MockRes {
@@ -53,6 +57,7 @@ const FALLBACK = '如果加入时提示名额已满或无法加入，可直接�
 beforeEach(() => {
   state.accepting = true;
   state.emailReady = true;
+  state.joinQrUrl = null;
   delete process.env.WECOM_JOIN_QR_URL;
   delete process.env.WECOM_PLUGIN_QR_URL;
   delete process.env.WECOM_APP_NAME;
@@ -215,21 +220,23 @@ describe('GET /api/join', () => {
     expect(res.body).toContain('给「热榜助手」发一句「你好」');
   });
 
-  it('defaults to the QR assets shipped in the repo', async () => {
+  it('uses the freshly fetched join QR when no env override is set', async () => {
+    state.joinQrUrl = 'https://wework.qpic.cn/fresh.png';
     const res = mockRes();
     await handler({ method: 'GET' }, res);
     expect(res.statusCode).toBe(200);
-    expect(res.body).toContain(`src="${DEFAULT_JOIN_QR_URL}"`);
-    expect(res.body).toContain(`src="${DEFAULT_PLUGIN_QR_URL}"`);
+    expect(res.body).toContain('src="https://wework.qpic.cn/fresh.png"');
+    // 插件码默认隐藏，不再渲染仓库里的过期图。
+    expect(res.body).not.toContain('/docs/assets/wecom-plugin-qr.png');
   });
 
-  it('ships the default QR assets as real PNGs', () => {
-    const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-    for (const url of [DEFAULT_JOIN_QR_URL, DEFAULT_PLUGIN_QR_URL]) {
-      const path = url.replace(/^\//, '');
-      expect(existsSync(path), path).toBe(true);
-      expect([...readFileSync(path).subarray(0, 8)], path).toEqual(signature);
-    }
+  it('degrades to the admin-link copy when no QR is available', async () => {
+    const res = mockRes();
+    await handler({ method: 'GET' }, res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('向管理员索要企业邀请链接');
+    expect(res.body).not.toContain('/docs/assets/wecom-join-qr.png');
+    expect(res.body).not.toContain('/docs/assets/wecom-plugin-qr.png');
   });
 
   it('falls back to the default app name', async () => {

@@ -107,7 +107,7 @@ npm run db:audit
 | `WECOM_CALLBACK_TOKEN` | 必填 | 企微回调：Token（第 3 步后台自定义） |
 | `WECOM_CALLBACK_AES_KEY` | 必填 | 企微回调：EncodingAESKey（43 位；代码按 `Base64Decode(key + "=")` 得 32 字节） |
 | `WECOM_ADMIN_USERID` | **可选** | 企微：管理员 userid，仅用于管线失败告警；不配则告警步骤跳过（仅 warning） |
-| `WECOM_RELAY_URL` | **可选** | 出站中转地址：配置后 `message/send` 改走固定 IP 中转，规避「企业可信 IP 白名单」（`gettoken` 仍直连） |
+| `WECOM_RELAY_URL` | **可选** | 出站中转地址：配置后 `message/send` 与 `corp/get_join_qrcode` 改走固定 IP 中转，规避「企业可信 IP 白名单」（`gettoken` 仍直连；生产用 `https://relay.<domain>`，见 9.3） |
 | `WECOM_RELAY_SECRET` | **可选** | 中转共享密钥，与中转服务约定；未配 `WECOM_RELAY_URL` 时忽略 |
 | `GITHUB_CLIENT_ID` | 必填 | GitHub OAuth App（第 4 步） |
 | `GITHUB_CLIENT_SECRET` | 必填 | GitHub OAuth App |
@@ -425,7 +425,7 @@ curl -i https://<domain>/api/oauth-github
 - 二维码：加入企业码由 `corp/get_join_qrcode` 每天自动刷新（官方码仅 7 天有效），缓存在 `kv_cache` 6 天；接口失败时回退到未过期的缓存，没有可用码则页面降级为「向管理员索要邀请链接」。`WECOM_JOIN_QR_URL` 可手动覆盖（任意可公开访问的图片地址）。
   - **该接口要求「通讯录管理权限 + 通讯录同步的 Secret」**：在管理后台 → 安全与管理 → 管理工具 → 通讯录同步 取 Secret，配置 `WECOM_CONTACTS_SECRET`。未配置时自动退回应用 Secret，多数企业会因权限不足降级。
   - 若「通讯录同步」开启了企业可信 IP，Vercel 的动态出口 IP 会被 `60020` 拒绝。此时 `get_join_qrcode` 会自动复用 `WECOM_RELAY_URL` 的固定 IP 中转（与 `message/send` 同一套 `X-Relay-Secret`）：把中转出口 IP 加进「通讯录同步 → 企业可信 IP」，并确认中转允许转发 `/cgi-bin/corp/get_join_qrcode`。没有固定 IP 中转时，改用 `WECOM_JOIN_QR_URL` 配后台生成的 365 天分享二维码图片，页面就不会再出现过期码。
-  - 旧的 `docs/assets/wecom-join-qr.png` / `wecom-plugin-qr.png` 是静态截图，内容已过期，**不再作为默认值**。
+  - 仓库不再保留静态二维码文件：旧截图（`wecom-join-qr.png` / `wecom-plugin-qr.png`）已随 2026-11 的动态取码改造删除。
   - 微信插件码没有稳定的公开接口，默认不展示；拿到当前有效的码后通过 `WECOM_PLUGIN_QR_URL` 打开。
   - 两张码并排且外观相同，页面用图注（「加入企业」/「微信插件」）区分，缺哪张就只渲染哪张，并在第一步改写成文字指引——不会出现「让你扫码但下面空白」。
 - 企微成员可见范围要覆盖新加入的成员（应用可见范围 + 微信插件侧）；否则用户加入后发「你好」收不到回复。
@@ -434,7 +434,110 @@ curl -i https://<domain>/api/oauth-github
 
 ![落地页示意：企微卡在前并标推荐，邮箱入口始终可见](assets/join-page.svg)
 
-### 9.3 验证清单
+### 9.3 固定 IP 中转（Cloudflare Tunnel + nginx）
+
+企微的 `message/send` 和 `corp/get_join_qrcode` 都受「企业可信 IP」限制；Vercel 的出口 IP 是动态的（`get_join_qrcode` 命中通讯录同步白名单时会报 `60020`）。生产用一台固定 IP 的 ECS 做中转：
+
+```
+Vercel ──HTTPS──> relay.<domain>（Cloudflare Tunnel）
+                        │
+                        ▼
+                 cloudflared → 127.0.0.1:18080
+                        │
+                        ▼
+                 nginx（只放行两个路径）
+                        │
+                        ▼
+                 qyapi.weixin.qq.com
+```
+
+**1. Cloudflare Tunnel**
+
+1. Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared，记下 tunnel token。
+2. 在服务器安装 `cloudflared`（RPM/DEB 或静态二进制），然后：
+
+   ```bash
+   cloudflared service install <tunnel-token>
+   systemctl enable --now cloudflared
+   systemctl status cloudflared --no-pager
+   ```
+
+3. Public Hostname：Subdomain `relay`，Domain `<domain>`，Service 选 **HTTP** → `http://127.0.0.1:18080`。
+4. 验证：`curl -sS -i https://relay.<domain>/` 能打到 nginx；`cloudflared` 为 `active (running)`。
+
+**2. nginx（只监听本机，只放行两个路径）**
+
+```nginx
+server {
+    listen 127.0.0.1:18080 default_server;
+    server_name _;
+    access_log off;
+
+    location = /cgi-bin/message/send {
+        if ($http_x_relay_secret != "RELAY_SECRET") { return 403; }
+        proxy_pass https://qyapi.weixin.qq.com;
+        proxy_ssl_server_name on;
+        proxy_set_header Host qyapi.weixin.qq.com;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+
+    location = /cgi-bin/corp/get_join_qrcode {
+        if ($http_x_relay_secret != "RELAY_SECRET") { return 403; }
+        proxy_pass https://qyapi.weixin.qq.com;
+        proxy_ssl_server_name on;
+        proxy_set_header Host qyapi.weixin.qq.com;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+    }
+
+    location / { return 404; }
+}
+```
+
+- `listen 127.0.0.1:18080`：公网 18080 关闭，只允许本机 cloudflared 访问。
+- `access_log off`：企微 `access_token` 在查询串里，不能进 access log。
+- `location / { return 404; }`：避免中转变成任意企微 API 代理。
+- 改完执行 `nginx -t && systemctl restart nginx`；用 `ss -lntp | grep 18080` 确认是 `127.0.0.1:18080`。若 reload 后仍是 `0.0.0.0`，直接 restart（旧 worker 可能还持有旧 socket）。
+
+**3. Vercel 环境变量**
+
+```text
+WECOM_RELAY_URL=https://relay.<domain>
+WECOM_RELAY_SECRET=<与 nginx 里的 RELAY_SECRET 完全一致>
+```
+
+保存后必须 **Redeploy**，环境变量才会进入运行实例。
+
+**4. 企微可信 IP**
+
+- 通讯录同步：管理后台 → 安全与管理 → 管理工具 → 通讯录同步 → 企业可信 IP，加入**中转服务器的出口 IP**（不是 Vercel IP）。
+- 应用消息：如果「企业可信 IP」也开了，把同一个中转 IP 加进去。
+- 服务器在 NAT 后面时，以服务器上 `curl -s https://ifconfig.me` 的结果为准。
+
+**5. 验证**
+
+```bash
+# 中转路由（invalid token 应返回 40014，证明已转发到企微）
+curl -4 -sS -i -H "X-Relay-Secret: <secret>" \
+  "https://relay.<domain>/cgi-bin/corp/get_join_qrcode?access_token=invalid&size_type=3"
+
+# 公网 18080 应该连不上
+curl -m 5 -sS -i http://<relay-ip>:18080/
+
+# 落地页出码
+curl -sS https://<domain>/api/join | grep -o 'work.weixin.qq.com[^"]*'
+```
+
+最后在微信插件会话里发「帮助」，确认 `message/send` 也走通。
+
+**6. 安全注意**
+
+- 中转如果曾用 HTTP，`access_token` 和 `X-Relay-Secret` 会进 nginx access log；切到 HTTPS 后应关闭 access log，并轮换一次 `WECOM_RELAY_SECRET`。
+- nginx 备份文件不要放在 `conf.d/`（会带明文 secret），放到 `/root/nginx-backups` 并 `chmod 600`。
+- 服务器在中国大陆时，域名绑 80/443 提供网站服务通常需要 ICP 备案；Cloudflare Tunnel 不需要开放入站端口，可以避开这个问题。
+
+### 9.4 验证清单
 
 1. 打开 `/api/join`：企微在前、带「推荐」、邮箱按钮可见、兜底文案存在；设 `WECOM_ACCEPTING=false` 后邮箱升为推荐、企微显示「名额已满」。
 2. 落地页提交邮箱 → 收到确认邮件 → 点链接：确认成功页 + **立即收到今日简报**（品牌头、概览、条目卡片、中文简介、页脚设置/退订链接）。
@@ -450,7 +553,7 @@ curl -i https://<domain>/api/oauth-github
 
 ![邮箱简报示意：品牌头、今日概览、条目卡片与退订链接](assets/email-digest.svg)
 
-### 9.4 频率与护栏（代码内置，无需配置）
+### 9.5 频率与护栏（代码内置，无需配置）
 
 - 发送窗口 **09:00–18:00（北京时间）**；窗口外 cron 直接跳过。
 - 每人在窗口内选整点时间（09:00–17:00）与间隔（每天 / 每 2 / 3 / 7 天）；当天只发一封；条件 UPDATE 抢占防并发重发。

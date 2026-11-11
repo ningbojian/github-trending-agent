@@ -6,6 +6,21 @@
 export const BRAND = {
   name: 'GitHub 热榜',
   subtitle: '每日简报',
+  /** 公开仓库：网页页脚、邮件页脚与面板「关于」共用同一个入口。 */
+  repoUrl: 'https://github.com/ningbojian/github-trending-agent',
+  /**
+   * 仓库按钮：GitHub 标志性的黑底白标（octocat 黑白配色）。
+   * 网页与邮件共用同一组值；hover 只把底色提亮到 GitHub dark 的按钮色。
+   */
+  repoButton: {
+    /** GitHub 官方黑 #181717。 */
+    background: '#181717',
+    border: '#30363D',
+    text: '#FFFFFF',
+    hoverText: '#FFFFFF',
+    hoverBorder: '#8B949E',
+    hoverBackground: '#24292F',
+  },
   colors: {
     header: '#0B1220',
     /** 白底上的品牌主色（按钮 / 链接 / 卡片左描边）；白底对比度 5.2:1。 */
@@ -99,3 +114,11 @@ export const BRAND_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="
 
 /** favicon：同一图形的 data URI（内联，无静态文件依赖）。 */
 export const BRAND_FAVICON = `data:image/svg+xml,${encodeURIComponent(BRAND_ICON_SVG)}`;
+
+/**
+ * GitHub 官方 mark（16×16 Octicon 造型）。
+ * - 内联在 HTML 中，不写 xmlns（HTML5 内联 SVG 不需要），因此没有 http(s) 外链；
+ * - fill="currentColor"：按钮默认继承正文色，hover 时跟随强调色；
+ * - 不放 <img>：邮件客户端会屏蔽外链图片，网页也少一次请求。
+ */
+export const GITHUB_MARK_SVG = `<svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>`;

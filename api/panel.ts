@@ -18,6 +18,7 @@ import {
 } from '../src/agent/tracking-service.js';
 import { readWeekStats, type WeeklyStats } from '../src/agent/weekly-review.js';
 import { db } from '../src/db/client.js';
+import { BRAND, GITHUB_MARK_SVG } from '../src/brand.js';
 import { favorites, kvCache, repos, subscribers, trendingEntries } from '../src/db/schema.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
 import { parseRepoRef } from '../src/github/repo-ref.js';
@@ -1056,6 +1057,11 @@ async function renderSettings(
           <input type="hidden" name="action" value="reset">
           <button class="p-btn danger" type="submit">重置面板链接</button>
         </form>`,
+     )}
+     ${card(
+       '关于',
+       `<div class="p-row-sub p-mb">${BRAND.name} · 非 GitHub 官方产品</div>
+        <a class="p-repo-btn" href="${escapeHtml(BRAND.repoUrl)}" target="_blank" rel="noopener" aria-label="GitHub 仓库" title="GitHub 仓库"><span class="p-repo-btn-glyph">${GITHUB_MARK_SVG}</span></a>`,
      )}`,
   );
 }

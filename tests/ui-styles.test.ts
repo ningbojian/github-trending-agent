@@ -70,6 +70,21 @@ describe('BASE_STYLES', () => {
     expect(BASE_STYLES).toContain('@media (prefers-reduced-motion:reduce)');
   });
 
+  it('styles the repo button as a square icon button', () => {
+    expect(BASE_STYLES).toMatch(/\.p-repo-btn\{[^}]*width:34px/);
+    expect(BASE_STYLES).toMatch(/\.p-repo-btn\{[^}]*height:34px/);
+    expect(BASE_STYLES).not.toContain('.p-repo-btn-hover');
+    expect(BASE_STYLES).toMatch(/@media \(hover:hover\)\{[\s\S]*\.p-repo-btn:hover/);
+    // 触屏没有 hover，默认必须仍能看到 GitHub mark。
+    expect(BASE_STYLES).toContain('.p-repo-btn-glyph');
+  });
+
+  it('repo button hover stays GitHub black/white, not the cyan accent', () => {
+    expect(BASE_STYLES).toContain(`color:${BRAND.repoButton.hoverText}`);
+    expect(BASE_STYLES).toContain(`border-color:${BRAND.repoButton.hoverBorder}`);
+    expect(BASE_STYLES).not.toMatch(/\.p-repo-btn:hover\{[^}]*color:var\(--p-accent\)/);
+  });
+
   it('is the prefix of the panel styles', () => {
     expect(PANEL_STYLES.startsWith(BASE_STYLES)).toBe(true);
   });

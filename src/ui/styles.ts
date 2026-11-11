@@ -1,3 +1,4 @@
+import { BRAND } from '../brand.js';
 import { cssVars, UI } from './tokens.js';
 
 /**
@@ -208,11 +209,20 @@ export const BASE_STYLES = `${cssVars()}
 .p-break a{color:var(--p-accent);}
 .p-code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
 .p-foot{font-size:12px;color:var(--p-muted);text-align:center;margin:14px 0 0;}
+
+/* 页脚仓库入口：纯 GitHub 图标按钮；hover 只提亮边框、图标与底色。 */
+.p-repo-btn{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;
+  margin-top:10px;border:1px solid ${BRAND.repoButton.border};border-radius:999px;
+  background:${BRAND.repoButton.background};color:${BRAND.repoButton.text};text-decoration:none;
+  line-height:0;transition:border-color .18s ease,color .18s ease,background-color .18s ease;}
+.p-repo-btn-glyph{display:inline-flex;align-items:center;justify-content:center;}
+.p-repo-btn-glyph svg{display:block;width:16px;height:16px;}
 .p-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;
   overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;}
 
 /* 交互状态：hover 只在真有指针的设备上生效，避免手机粘滞。 */
 .p-btn:focus-visible,.p-tile:focus-visible,.p-row-link:focus-visible,
+.p-repo-btn:focus-visible,
 .p-disclosure summary:focus-visible{outline:3px solid var(--p-accent);
   outline-offset:2px;}
 @media (hover:hover){
@@ -221,9 +231,11 @@ export const BASE_STYLES = `${cssVars()}
   .p-tile:hover{border-color:var(--p-accent);}
   .p-row-link:hover .p-row-title{color:var(--p-accent);}
   .p-card:hover::after{opacity:1;}
+  .p-repo-btn:hover{border-color:${BRAND.repoButton.hoverBorder};color:${BRAND.repoButton.hoverText};background-color:${BRAND.repoButton.hoverBackground};}
 }
 @media (prefers-reduced-motion:reduce){
-  .p-btn,.p-tile,.p-row-link,.p-card::after{transition:none;}
+  .p-btn,.p-tile,.p-row-link,.p-card::after,
+  .p-repo-btn{transition:none;}
 }
 
 @media (max-width:420px){

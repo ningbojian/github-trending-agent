@@ -1,4 +1,4 @@
-import { BRAND, BRAND_FAVICON, BRAND_ICON_SVG } from '../brand.js';
+import { BRAND, BRAND_FAVICON, BRAND_ICON_SVG, GITHUB_MARK_SVG } from '../brand.js';
 
 /**
  * 落地页 / 表单页的 HTML 工具。
@@ -103,8 +103,9 @@ ${styles ? `<style>${styles}</style>` : ''}
     ${body}
   </div>
   </div>
-  <div style="text-align:center;color:${footerColor ?? d.faint};font-size:12px;margin-top:16px;">
-    ${BRAND.name} · 非 GitHub 官方产品
+  <div class="p-foot" style="text-align:center;color:${footerColor ?? d.faint};font-size:12px;margin-top:16px;">
+    <div>${BRAND.name} · 非 GitHub 官方产品</div>
+    <a class="p-repo-btn" href="${BRAND.repoUrl}" target="_blank" rel="noopener" aria-label="GitHub 仓库" title="GitHub 仓库"><span class="p-repo-btn-glyph">${GITHUB_MARK_SVG}</span></a>
   </div>
 </div>
 </body>

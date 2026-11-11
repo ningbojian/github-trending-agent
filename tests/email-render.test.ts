@@ -251,3 +251,39 @@ describe('确认信 / 管理信', () => {
     expect(html).toContain('t=a&amp;b');
   });
 });
+
+describe('邮件里的仓库按钮', () => {
+  const confirm = renderConfirmEmail({
+    subject: '确认订阅 GitHub 热榜简报',
+    lead: '你好，点击下面的按钮确认订阅 GitHub 热榜简报。',
+    confirmUrl: 'https://agent.example.com/api/email-confirm?t=a%2Fb',
+    actionLabel: '确认订阅',
+  });
+  const manage = renderManageEmail({
+    settingsUrl: 'https://agent.example.com/api/email-settings?t=a',
+    unsubscribeUrl: 'https://agent.example.com/api/email-unsubscribe?t=a',
+  });
+
+  it('简报、确认信、管理信都带纯图标仓库按钮', () => {
+    for (const html of [renderDigestEmail(BASE).html, confirm, manage]) {
+      expect(html).toContain(`href="${BRAND.repoUrl}"`);
+      expect(html).toContain('aria-label="GitHub 仓库"');
+      expect(html).toContain('<svg');
+      // 纯图标：不再有可见文案；也不能用外链图片。
+      expect(html).not.toContain('GitHub 仓库 ↗');
+      expect(html).not.toMatch(/<img/i);
+    }
+  });
+
+  it('简报纯文本附上仓库地址，方便纯文本客户端', () => {
+    const { text } = renderDigestEmail(BASE);
+    expect(text).toContain(`GitHub 仓库：${BRAND.repoUrl}`);
+  });
+
+  it('按钮与网页共用 GitHub 黑白标色板', () => {
+    const { html } = renderDigestEmail(BASE);
+    expect(html).toContain(`background:${BRAND.repoButton.background}`);
+    expect(html).toContain(`border:1px solid ${BRAND.repoButton.border}`);
+    expect(html).toContain(`fill="${BRAND.repoButton.text}"`);
+  });
+});

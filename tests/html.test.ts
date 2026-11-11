@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { BRAND } from '../src/brand';
 import { renderPage } from '../src/http/html';
 
 describe('renderPage — 品牌头', () => {
@@ -75,5 +76,28 @@ describe('renderPage — 品牌头', () => {
     expect(html).toContain('border:1px solid #222222');
     expect(html).toContain('class="custom-shell"');
     expect(html).toContain('border-radius:20px');
+  });
+});
+
+describe('renderPage — 仓库按钮', () => {
+  it('每个页面页脚都有纯图标 GitHub 仓库按钮，而不是裸链接', () => {
+    const html = renderPage({ title: 'x', body: '' });
+
+    expect(html).toContain('class="p-repo-btn"');
+    expect(html).toContain(`href="${BRAND.repoUrl}"`);
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener"');
+    // 触屏没有 hover，语义由 aria-label 提供。
+    expect(html).toContain('aria-label="GitHub 仓库"');
+    // 纯图标：不再出现 hover 文案。
+    expect(html).not.toContain('contribute to us');
+    expect(html).not.toContain('p-repo-btn-hover');
+  });
+
+  it('按钮里是内联 SVG，不请求外部图标', () => {
+    const html = renderPage({ title: 'x', body: '' });
+
+    expect(html).toMatch(/class="p-repo-btn-glyph"><svg/);
+    expect(html).not.toMatch(/<img[^>]+src="https?:/);
   });
 });

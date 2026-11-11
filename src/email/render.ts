@@ -1,4 +1,4 @@
-import { BRAND } from '../brand.js';
+import { BRAND, GITHUB_MARK_SVG } from '../brand.js';
 import { escapeHtml } from '../http/html.js';
 import type { DigestSnapshotItem } from '../agent/digest-snapshot.js';
 
@@ -219,7 +219,8 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
               &nbsp;·&nbsp;
               <a href="${escapeHtml(unsubscribe)}" style="color:${EMAIL.muted};text-decoration:none;">退订</a>
             </div>
-            <div style="margin-top:5px;color:${EMAIL.faint};">${BRAND.name} · 非 GitHub 官方产品</div>
+            ${emailRepoButton()}
+            <div style="margin-top:8px;color:${EMAIL.faint};">${BRAND.name} · 非 GitHub 官方产品</div>
           </td>
         </tr>
       </table>
@@ -252,6 +253,7 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
     }),
     `调整推送时间 / 频率：${settings}`,
     `退订：${unsubscribe}`,
+    `GitHub 仓库：${BRAND.repoUrl}`,
     '',
     `${BRAND.name} · 非 GitHub 官方产品`,
   ];
@@ -269,6 +271,22 @@ function emailButton(href: string, label: string): string {
   <tr>
     <td style="background:${EMAIL.accent};border-radius:8px;">
       <a href="${escapeHtml(href)}" style="display:inline-block;padding:11px 20px;font-size:14px;font-weight:700;color:#06222A;text-decoration:none;">${escapeHtml(label)}</a>
+    </td>
+  </tr>
+</table>`;
+}
+
+/** 邮件页脚的纯图标仓库按钮：无文案，语义放在 aria-label / title。 */
+function emailRepoButton(): string {
+  // 邮件里 CSS 的 currentColor 不一定能继承，直接写死同一套 GitHub 灰。
+  const mark = GITHUB_MARK_SVG.replace(
+    'fill="currentColor"',
+    `fill="${BRAND.repoButton.text}"`,
+  );
+  return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 0;">
+  <tr>
+    <td style="background:${BRAND.repoButton.background};border:1px solid ${BRAND.repoButton.border};border-radius:999px;">
+      <a href="${escapeHtml(BRAND.repoUrl)}" target="_blank" rel="noopener" aria-label="GitHub 仓库" title="GitHub 仓库" style="display:inline-block;padding:9px;line-height:0;text-decoration:none;">${mark}</a>
     </td>
   </tr>
 </table>`;
@@ -309,7 +327,8 @@ function renderEmailDocument(input: {
         <tr>
           <td style="padding:10px 16px 14px;border-top:1px solid ${EMAIL.divider};color:${EMAIL.muted};font-size:12px;line-height:1.6;">
             ${input.footerHtml ?? ''}
-            <div style="margin-top:5px;color:${EMAIL.faint};">${BRAND.name} · 非 GitHub 官方产品</div>
+            ${emailRepoButton()}
+            <div style="margin-top:8px;color:${EMAIL.faint};">${BRAND.name} · 非 GitHub 官方产品</div>
           </td>
         </tr>
       </table>

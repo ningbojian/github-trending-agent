@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { BRAND, BRAND_FAVICON, BRAND_ICON_SVG } from '../src/brand';
+import { BRAND, BRAND_FAVICON, BRAND_ICON_SVG, GITHUB_MARK_SVG } from '../src/brand';
 
 /** 去掉元信息与渐变定义，只留图形本身，便于逐字比较两份副本。 */
 function geometry(svg: string): string {
@@ -26,6 +26,27 @@ describe('品牌色板', () => {
     // 「+N 今日 / 新上榜」仍是 GitHub 的增长绿
     expect(BRAND.colors.growth).toBe('#1a7f37');
     expect(BRAND.colors.growthBg).toBe('#dafbe1');
+  });
+});
+
+describe('仓库入口', () => {
+  it('指向公开仓库', () => {
+    expect(BRAND.repoUrl).toBe('https://github.com/ningbojian/github-trending-agent');
+  });
+
+  it('按钮用 GitHub 标志性的黑底白标', () => {
+    expect(BRAND.repoButton.background).toBe('#181717');
+    expect(BRAND.repoButton.border).toBe('#30363D');
+    expect(BRAND.repoButton.text).toBe('#FFFFFF');
+    expect(BRAND.repoButton.hoverText).toBe('#FFFFFF');
+    expect(BRAND.repoButton.hoverBackground).toBe('#24292F');
+  });
+
+  it('GitHub mark 内联、继承 currentColor、不引外链', () => {
+    expect(GITHUB_MARK_SVG).toContain('<svg');
+    expect(GITHUB_MARK_SVG).toContain('currentColor');
+    expect(GITHUB_MARK_SVG).not.toMatch(/https?:/);
+    expect(GITHUB_MARK_SVG).not.toContain('<image');
   });
 });
 

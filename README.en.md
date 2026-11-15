@@ -29,7 +29,7 @@ Deployment and integration steps: [docs/deploy.md](docs/deploy.md).
 
 ## Architecture
 
-![Data flow: scheduled scrape → storage → hourly snapshot (one model round) → WeCom and email channels](docs/assets/flow.svg)
+![Data flow: scheduled scrape → storage → daily snapshot (one model round) → WeCom and email channels](docs/assets/flow.svg)
 
 In one sentence: **scraping and translation happen once, and both channels share the same daily snapshot**—WeCom truncates at 1900 bytes (the text body caps at 2048), email does not; personalization only selects different rows in memory by preference and does not call the model again.
 
@@ -54,7 +54,7 @@ Send to the app in WeCom (or the WeCom plugin in WeChat). **The router matches C
 
 **Weekly review**: after 10:00 every Monday, subscribers who had pushes, favorites or feedback that week get one message — what arrived, what was saved, what to push more or less of next week. When there is a clear taste signal it asks “want me to remember this?”; “yes” writes it to memory, “no” skips. Silent accounts are not messaged.
 
-**Daily digest**: GitHub Actions scrapes at 00:30 UTC (08:30 Beijing); `digest-hourly.yml` calls `api/cron-push-digest` at minute 17 of every hour (not on the hour — GitHub's hourly on-the-hour schedule was observed dropping runs for 17 hours straight), and sends each subscriber a digest at their push time (default 09:00, actually delivered by the 09:17 tick) and interval (default daily); if the LLM fails, it falls back to template-only and the repo list is always delivered. Sending the first message to the app automatically enables the subscription. The whole fan-out runs under a 240-second budget (the function cap is 300 s): past it, no further subscriber is claimed and the rest wait for the next tick. That guarantees “no new claims while about to time out”; it does **not** cover a function hard-killed mid-send — that claim cannot be rolled back, so the subscriber waits one more interval.
+**Daily digest**: GitHub Actions scrapes at 00:30 UTC (08:30 Beijing); `digest-hourly.yml` calls `api/cron-push-digest` at :03 and :33 every hour (not on the hour — GitHub's on-the-hour schedule was observed dropping runs for 17 hours straight), and sends each subscriber a digest at their push time (default 09:00, covered by the 09:00 Beijing Vercel Cron and the :03 tick) and interval (default daily); if the LLM fails, it falls back to template-only and the repo list is always delivered. Sending the first message to the app automatically enables the subscription. The whole fan-out runs under a 240-second budget (the function cap is 300 s): past it, no further subscriber is claimed and the rest wait for the next tick. That guarantees “no new claims while about to time out”; it does **not** cover a function hard-killed mid-send — that claim cannot be rolled back, so the subscriber waits one more interval.
 
 What users see (all in personal WeChat, no WeCom app needed):
 

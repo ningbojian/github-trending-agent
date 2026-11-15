@@ -230,6 +230,13 @@ describe('GET /api/join', () => {
     expect(res.body).not.toContain('/docs/assets/wecom-plugin-qr.png');
   });
 
+  it('allows a short CDN cache for the public page', async () => {
+    const res = mockRes();
+    await handler({ method: 'GET' }, res);
+    expect(res.headers['cache-control']).toContain('public');
+    expect(res.headers['cache-control']).toContain('s-maxage=60');
+  });
+
   it('degrades to the admin-link copy when no QR is available', async () => {
     const res = mockRes();
     await handler({ method: 'GET' }, res);

@@ -8,7 +8,7 @@
 部署顺序建议：**1 Neon → 2 Vercel → 3 企微回调 → 4 GitHub OAuth → 5 Actions secrets → 6 TOKEN_ENCRYPT_KEY → 7 联调清单**。
 （回调配置（第 3 步）前必须先完成 Vercel 端 `WECOM_CALLBACK_*` 与 `WECOM_CORP_ID` 的环境变量部署，否则企微 GET URL 验证会 401。）
 
-![数据流：定时抓取 → 入库 → 每小时快照（一轮模型）→ 企微与邮箱双通道](assets/flow.svg)
+![数据流：定时抓取 → 入库 → 每日快照（一轮模型）→ 企微与邮箱双通道](assets/flow.svg)
 
 ---
 
@@ -60,25 +60,17 @@ npm run db:audit
 
 后几种的含义完全不同：`EXTRA_*` 是历史遗留，`MISSING_OR_ALTERED` 才是故障，`INCONCLUSIVE` 是「没查清」。处理建议见下方「库污染怎么处理」。
 
-### ⚠ 本库已知情况（2026-10-28 审计）与禁止事项
+### ⚠ 本库历史情况（2026-10-28 审计）与禁止事项
 
-生产库 `neondb` 里**同时住着另一个项目的 18 张表**：`tenants`、`rooms`、`sessions`、`session_assignments`、`bookings`、`booking_intake_refs`、`dms`、`dm_shifts`、`dm_run_events`、`dm_runs`、`dm_leaves`、`scripts`、`script_stages`、`public_scripts`、`import_runs`、`access_requests`、`search_usage_daily`、`usage_global_daily`。其中 `tenants`(1)、`dm_shifts`(42)、`script_stages`(20) 等**有真实数据**，是活的数据，不是空壳。
+2026-10-28 审计时，生产库 `neondb` 里曾同时住着另一个项目的 18 张表（`tenants`、`rooms`、`sessions`、`session_assignments`、`bookings`、`booking_intake_refs`、`dms`、`dm_shifts`、`dm_run_events`、`dm_runs`、`dm_leaves`、`scripts`、`script_stages`、`public_scripts`、`import_runs`、`access_requests`、`search_usage_daily`、`usage_global_daily`）。当天确认对方已迁走并完成清理，当前 `public` 只剩本项目的表。
 
-我们的 9 张表与它们**完全不重叠**（表名、序列、迁移账本都独立），所以当前运行不受影响。真正的风险只有一个：
+仍然**绝对不要在这个数据库上执行 `drizzle-kit push`**（或任何 `push` 类命令）：`push` 会把 snapshot 里没有的表当成多余对象删掉，误删本项目或其他对象的表。`db:migrate` 是安全的：只按账本增量执行我们的 SQL，不碰其他对象。改 schema 的正确流程是 `db:generate` → 审 SQL → `db:migrate`，不是 `push`。
 
-> **绝对不要在这个数据库上执行 `drizzle-kit push`（或任何 `push` 类命令）。**
+日常用 `npm run db:audit` 只读检查。常见判断：
 
-`push` 会把「snapshot 里有」和「库里有」做差集，把 snapshot 里没有的表当成多余对象**删掉**——也就是上面那 18 张别人的表。`db:migrate` 是安全的：它只按账本增量执行我们自己的 SQL，不碰任何其他对象。改完 schema 的正确流程是 `db:generate` → 审 SQL → `db:migrate`，不是 `push`。
-
-彻底隔离的做法（推荐，10 分钟）：Neon 新建 project/branch → `npm run db:migrate` → 迁有状态的 4 张表（`subscribers`、`favorites`、`search_caches`、`kv_cache`，合计数百行）→ 换 Vercel 的 `NEON_DATABASE_URL` → 重新部署。
-
-**库污染怎么处理**（按风险从低到高）：
-
-1. `EXTRA_EMPTY`：什么都不做。空表不影响任何东西，删别人的表反而有风险。
-2. `EXTRA_WITH_DATA` + 那个项目已废弃：确认后删除，删前先 `pg_dump` 那几张表。
-3. `EXTRA_WITH_DATA` + 那个项目还在用：**不要动别人的表**。**动我们**——给本项目换新库（见上）。
-4. `MISSING_OR_ALTERED`：先看账本差几行——差 1 行补跑迁移即可；表结构被改形要逐列修，**不要**直接 `db:push`。
-5. `INCONCLUSIVE`：先解决那道跑不通的检查（通常是权限），再重跑。**不要**把它当 `CLEAN`。
+- `EXTRA_EMPTY` / `EXTRA_WITH_DATA`：确认归属；别人的表不要动。
+- `MISSING_OR_ALTERED`：先看账本差几行，补跑迁移即可；不要用 `db:push`。
+- `INCONCLUSIVE`：先解决检查本身的权限/超时，**不能当成干净**。
 
 红线：**绝不 `DROP` 别人的表**；**绝不手改 `drizzle.__drizzle_migrations`**；**这个库上绝不跑 `db:push`**。
 
@@ -349,7 +341,7 @@ curl -i https://<domain>/api/oauth-github
 - **预期观察**：
   1. 三条回执分别为 `✅ 每日简报条数已设为 3（1–8）`、`✅ 简报推送时间已设为 20:30（北京时间）`、`✅ 简报推送间隔已设为每 2 天（1–30，未到间隔不重复推送）`。
   2. Neon：`select preferences from subscribers where wecom_userid = '<测试用户>';` 三个字段同时存在（后续「订阅 …」不会把它们刷掉）。
-  3. 次日 20:30 后收到 3 条简报；间隔 2 天时次日不推、第三天推（默认 09:00 由 **Vercel Cron** `vercel.json` 的 `0 1 * * *` 触发，其余时间由 `.github/workflows/digest-hourly.yml` 每小时**第 17 分**兜底；门控在 `pushDigests` 内）。
+  3. 次日 20:30 后收到 3 条简报；间隔 2 天时次日不推、第三天推（默认 09:00 由 **Vercel Cron** `vercel.json` 的 `0 1 * * *` 触发，其余时间由 `.github/workflows/digest-hourly.yml` 每 30 分钟（:03 / :33）兜底；门控在 `pushDigests` 内）。
   4. 越界输入（「条数 0」「推送时间 25:99」「每 99 天」）→ 回用法提示，不写库。
 
 ### ⑦.5 跟踪仓库更新（GitHub）
@@ -381,7 +373,7 @@ curl -i https://<domain>/api/oauth-github
   1. 先收到 3 行欢迎语，紧接一条今日简报（仓库可点、每行一句中文简介）。
   2. Neon：该用户 `subscribers` 有新行（`active = true`，`preferences` 为空偏好），`last_digest_at` = **北京当日 00:00**（回填零点而非当前时刻，保证次日仍按 09:00 正常推送，不会把推送时间永久后移）。
   3. `search_caches` 有该用户的简报条目 → 紧接着发「收藏 1」可用（需先「绑定」）。
-  4. 再次进入应用 / 再发消息**不重复**送礼包；当天 09:17 那次 tick 也不会再推一份（`last_digest_at` 已记当日）。
+  4. 再次进入应用 / 再发消息**不重复**送礼包；当天 09:03 那次 tick 也不会再推一份（`last_digest_at` 已记当日）。
 
 ---
 
@@ -420,7 +412,7 @@ curl -i https://<domain>/api/oauth-github
 
 - 入口：`https://<domain>/api/join`（分享这个链接即可）。
 - 页面顺序：**先企微、后邮箱**；邮箱按钮始终首屏可见。企微卡永远带一行兜底：「如果加入时提示名额已满或无法加入，可直接用邮箱订阅。」
-- 名额判断：`isWeComAccepting()` 优先级 = 显式 `WECOM_ACCEPTING` > 成员数探测（`count < WECOM_MEMBER_LIMIT`，默认 100）> `true`。探测走 `user/simplelist`（需通讯录读取权限），失败回退手动开关；结果缓存在 `kv_cache` 1 小时，`cron-push-digest` 每小时顺带刷新。
+- 名额判断：`isWeComAccepting()` 优先级 = 显式 `WECOM_ACCEPTING` > 成员数探测（`count < WECOM_MEMBER_LIMIT`，默认 100）> `true`。探测走 `user/simplelist`（需通讯录读取权限），失败回退手动开关；结果缓存在 `kv_cache` 1 小时，`cron-push-digest` 在 due tick 顺带刷新（命中缓存则不请求）。
 - **企业认证是扩容的唯一正解**：未认证企业成员名额约 100；认证（个体工商户可办，约 300 元/年）后按后台上限把 `WECOM_MEMBER_LIMIT` 调大，或直接设 `WECOM_ACCEPTING=true` 关闭门控。认证是后台操作，代码不依赖。
 - 二维码：加入企业码由 `corp/get_join_qrcode` 每天自动刷新（官方码仅 7 天有效），缓存在 `kv_cache` 6 天；接口失败时回退到未过期的缓存，没有可用码则页面降级为「向管理员索要邀请链接」。`WECOM_JOIN_QR_URL` 可手动覆盖（任意可公开访问的图片地址）。
   - **该接口要求「通讯录管理权限 + 通讯录同步的 Secret」**：在管理后台 → 安全与管理 → 管理工具 → 通讯录同步 取 Secret，配置 `WECOM_CONTACTS_SECRET`。未配置时自动退回应用 Secret，多数企业会因权限不足降级。
@@ -642,7 +634,7 @@ group by 1, 2 order by 3 desc limit 20;
 | 增长门槛 | 老面孔 7 天内至少涨 `GROWTH_MIN_DELTA = 100` 星；新上榜的（`isNew`）不看增量 | `src/agent/digest-filter.ts` |
 | 口味 | 已收藏的不推（用户已经知道了）；被「不感兴趣」压到 −2 的语言整门丢掉；收藏集中的语言/话题靠前 | `src/agent/taste.ts` |
 
-**没东西就静默**：全部被过滤掉时不发「今日暂无」，也不写 `search_caches`（「收藏 N」仍指向上一份真实列表），不回滚 claim（当天不再每小时重试）。距上次发消息满 3 天补一句「最近没有明显增长的新项目」；有屏蔽语言时点名原因（`（已按你的「不感兴趣」屏蔽 go）`），避免用户把沉默读成「坏了」。首日礼包也记推送历史，否则第二天会把礼包里的仓库再推一遍。
+**没东西就静默**：全部被过滤掉时不发「今日暂无」，也不写 `search_caches`（「收藏 N」仍指向上一份真实列表），不回滚 claim（当天不再重试）。距上次发消息满 3 天补一句「最近没有明显增长的新项目」；有屏蔽语言时点名原因（`（已按你的「不感兴趣」屏蔽 go）`），避免用户把沉默读成「坏了」。首日礼包也记推送历史，否则第二天会把礼包里的仓库再推一遍。
 
 **口味只有两个来源**，都可在库里直接看到，没有隐式推断：
 

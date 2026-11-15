@@ -161,5 +161,7 @@ export default async function handler(
     pluginQrUrl: process.env.WECOM_PLUGIN_QR_URL?.trim() || undefined,
     appName: process.env.WECOM_APP_NAME?.trim() || 'GitHub 热榜',
   });
+  // 公开页面，内容变化慢：让 Vercel CDN 缓存 60 秒，减少函数调用与 Neon 唤醒。
+  res.setHeader('cache-control', 'public, s-maxage=60, stale-while-revalidate=300');
   sendHtml(res, 200, html);
 }

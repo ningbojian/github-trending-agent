@@ -34,7 +34,11 @@ vi.mock('../src/email/tokens', () => ({
   resolveBaseUrl: () => 'https://example.test',
 }));
 vi.mock('../src/wecom/capacity', () => ({
-  refreshWeComMemberCount: async () => undefined,
+  getWeComMemberCount: async () => undefined,
+}));
+// 围栏的时间逻辑在 tests/cron-gates.test.ts 单独测；编排测试固定全部打开。
+vi.mock('../src/agent/cron-gates', () => ({
+  cronGates: () => ({ tracking: true, weekly: true, heartbeat: true }),
 }));
 vi.mock('../src/agent/weekly-review', () => ({
   pushWeeklyReviews: weeklyMock.pushWeeklyReviews,

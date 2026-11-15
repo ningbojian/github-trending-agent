@@ -1,14 +1,16 @@
-# 每 10 分钟触发 Vercel 简报端点（推送时间/间隔门控与并发抢占在 pushDigests 内完成）。
-# cron 只在 :03/:13/:23/... 触发（避开整点高峰）；也可 workflow_dispatch 手动触发。
+# 每 30 分钟触发 Vercel 简报端点（推送时间/间隔门控与并发抢占在 pushDigests 内完成）。
+# cron 只在 :03/:33 触发（避开整点高峰）；也可 workflow_dispatch 手动触发。
 # 为什么不是整点：GitHub 明说整点是负载高峰，高频排程最容易被延迟或直接丢弃。
-# 为什么改 10 分钟：用户可以把推送时间设成任意 HH:MM，每小时一次会让 10:00 的人
-# 等到 10:17；10 分钟粒度把延迟压到「≤10 分钟 + GitHub 调度延迟」。
+# 为什么是 30 分钟而不是 10 分钟：Neon Free 按 CU-hours 计费，每次查询都会唤醒
+# compute 并保持 scale-to-zero 窗口；10 分钟粒度（144 次/天）会把 100 CU-hours
+# 额度吃满。30 分钟把唤醒降到 48 次/天，推送延迟上限 ≤30 分钟；Vercel 的
+# 09:00 / 10:00 准点 cron 仍覆盖主要推送时段。
 # 与 daily.yml 的分工：daily 只负责抓取入库，简报推送单由此工作流触发（避免双触发）。
 name: 简报定时触发
 
 on:
   schedule:
-    - cron: '3,13,23,33,43,53 * * * *'
+    - cron: '3,33 * * * *'
   workflow_dispatch:
 
 permissions:

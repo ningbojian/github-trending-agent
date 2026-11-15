@@ -1,5 +1,5 @@
 # 每日管线：抓取 GitHub Trending → 补全 topics → 兜底触发一次简报。
-# 简报的正常触发是 digest-hourly.yml（每小时）；但 GitHub 的排程触发在本仓库实测
+# 简报的正常触发是 digest-hourly.yml（每 30 分钟）；但 GitHub 的排程触发在本仓库实测
 # 不可靠（每小时那条曾连续 17 小时零触发），所以这里补一次兜底。
 # 不会重复发送：pushDigests 有三重门控——推送时间未到跳过、当天已发/未满间隔跳过、
 # 抢占用原子条件 UPDATE。

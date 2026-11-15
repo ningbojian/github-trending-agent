@@ -1,14 +1,18 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { emailSubscribers, subscribers } from '../db/schema.js';
-import { normalizeEmailPreferences } from '../email/preferences.js';
+import {
+  EMAIL_WINDOW_END_MINUTES,
+  EMAIL_WINDOW_START_MINUTES,
+  normalizeEmailPreferences,
+} from '../email/preferences.js';
 import { normalizePreferences } from './preferences.js';
 import { shanghaiToday } from './time.js';
 
 /**
  * 「现在有没有人该收到简报」的轻量检查。
  *
- * cron 每 5 分钟触发一次；没有这个检查时，即使所有人都已发过，端点也会
+ * cron 每 30 分钟触发一次；没有这个检查时，即使所有人都已发过，端点也会
  * 重建快照（摘要 + 短句要调模型，实测 ~220 秒）并跑观察——纯粹浪费。
  * 这里只做两次 select + 纯计算，命中才进入重活路径。
  *
@@ -54,9 +58,15 @@ export async function anyDigestDue(now: Date = new Date()): Promise<boolean> {
         .select({
           preferences: emailSubscribers.preferences,
           lastSentAt: emailSubscribers.lastSentAt,
+          confirmed: emailSubscribers.confirmed,
         })
         .from(emailSubscribers)
-        .where(eq(emailSubscribers.active, true)),
+        .where(
+          and(
+            eq(emailSubscribers.active, true),
+            eq(emailSubscribers.confirmed, true),
+          ),
+        ),
     ]);
 
     const wecomDue = wecomRows.some((row) => {
@@ -73,6 +83,15 @@ export async function anyDigestDue(now: Date = new Date()): Promise<boolean> {
     if (wecomDue) return true;
 
     return emailRows.some((row) => {
+      // 未确认的邮箱永远不会被 pushEmailDigests 选中；不能再让它把 due 拉成 true。
+      if (row.confirmed !== true) return false;
+      // 与 pushEmailDigests 的发送窗口一致：18:00 之后邮件不会再发，due 也不该为真。
+      if (
+        minutes < EMAIL_WINDOW_START_MINUTES ||
+        minutes >= EMAIL_WINDOW_END_MINUTES
+      ) {
+        return false;
+      }
       const prefs = normalizeEmailPreferences(row.preferences);
       return (
         minutes >= pushMinutes(prefs.pushTime) &&

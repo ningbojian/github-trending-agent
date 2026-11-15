@@ -7,7 +7,11 @@ import {
   selectEntriesForPreferences,
   type DigestSnapshot,
 } from '../agent/digest-snapshot.js';
-import { normalizeEmailPreferences } from './preferences.js';
+import {
+  EMAIL_WINDOW_END_MINUTES,
+  EMAIL_WINDOW_START_MINUTES,
+  normalizeEmailPreferences,
+} from './preferences.js';
 import {
   pushedRecently,
   readEmailPushHistory,
@@ -32,8 +36,6 @@ const DEFAULT_DAILY_CAP = 300;
 /** 单轮发送上限：一次函数调用内的耗时/失败面封顶，未发者留给下一个整点。 */
 const MAX_PER_RUN = 50;
 const MAX_CONSECUTIVE_FAILURES = 5;
-const WINDOW_START_MINUTES = 9 * 60;
-const WINDOW_END_MINUTES = 18 * 60;
 const DAILY_SENT_KEY_PREFIX = 'email_digest_sent:';
 
 export interface PushEmailDigestsResult {
@@ -172,7 +174,7 @@ export async function pushEmailDigests(
     .where(and(eq(emailSubscribers.active, true), eq(emailSubscribers.confirmed, true)));
 
   const nowMinutes = shanghaiMinutes(now);
-  if (nowMinutes < WINDOW_START_MINUTES || nowMinutes >= WINDOW_END_MINUTES) {
+  if (nowMinutes < EMAIL_WINDOW_START_MINUTES || nowMinutes >= EMAIL_WINDOW_END_MINUTES) {
     return { sent: 0, skipped: rows.length, failed: 0 };
   }
 

@@ -182,11 +182,11 @@ vi.mock('../src/email/push', () => ({
 }));
 
 const capacityMock = vi.hoisted(() => ({
-  refreshWeComMemberCount: vi.fn(async () => null),
+  getWeComMemberCount: vi.fn(async () => null),
 }));
 
 vi.mock('../src/wecom/capacity', () => ({
-  refreshWeComMemberCount: capacityMock.refreshWeComMemberCount,
+  getWeComMemberCount: capacityMock.getWeComMemberCount,
 }));
 
 // 每周复盘在独立文件里测编排；这里只证明端点把它接上了、响应形状稳定。
@@ -1753,19 +1753,17 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
       weekly: { sent: 0, skipped: 0, failed: 0 },
       tracking: { sent: 0, skipped: 0, failed: 0, checked: 0 },
     });
-    expect(weeklyMock.pushWeeklyReviews).toHaveBeenCalledTimes(1);
     expect(res.headers['content-type']).toContain('application/json');
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
-    // 两个渠道共用同一份快照：cron 读一次、pushDigests 内再读一次，
-    // 第二次命中 kv_cache（真实环境每天只构建一轮模型）。
-    expect(snapshotMock.getDailySnapshot).toHaveBeenCalledTimes(2);
+    // 两个渠道共用同一份快照：cron 取一次后直接传给 pushDigests，不再重复读库。
+    expect(snapshotMock.getDailySnapshot).toHaveBeenCalledTimes(1);
     // cron 请求没有用户头，站点根地址由 resolveBaseUrl 兜底后显式传入，
     // 否则邮件里的设置/退订链接会回落 localhost。
     expect(emailPushMock.pushEmailDigests).toHaveBeenCalledWith({
       snapshot: null,
       baseUrl: 'http://localhost:3000',
     });
-    expect(capacityMock.refreshWeComMemberCount).toHaveBeenCalledTimes(1);
+    expect(capacityMock.getWeComMemberCount).toHaveBeenCalledTimes(1);
   });
 });
 

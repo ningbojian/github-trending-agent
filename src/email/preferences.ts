@@ -27,6 +27,9 @@ export const EMAIL_PUSH_TIMES = [
 export const EMAIL_INTERVALS = [1, 2, 3, 7] as const;
 export const EMAIL_DIGEST_COUNTS = [5, 10, 15, 20] as const;
 export const EMAIL_MAX_KEYWORDS = 10;
+/** 邮件发送窗口（北京时间分钟数）：09:00–18:00。推送与 due 判断共用。 */
+export const EMAIL_WINDOW_START_MINUTES = 9 * 60;
+export const EMAIL_WINDOW_END_MINUTES = 18 * 60;
 
 export interface EmailPreferences {
   pushTime: string;

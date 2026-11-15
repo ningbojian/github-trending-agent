@@ -69,12 +69,32 @@ describe('anyDigestDue', () => {
     await expect(anyDigestDue(NOW)).resolves.toBe(false);
   });
 
-  it('只有邮箱用户到点也算 due', async () => {
+  it('只有已确认的邮箱用户到点也算 due', async () => {
     dbMock.email.push({
       preferences: { pushTime: '09:00', intervalDays: 1 },
       lastSentAt: null,
+      confirmed: true,
     });
     await expect(anyDigestDue(NOW)).resolves.toBe(true);
+  });
+
+  it('未确认邮箱永远不算 due（避免每个 tick 都进重活路径）', async () => {
+    dbMock.email.push({
+      preferences: { pushTime: '09:00', intervalDays: 1 },
+      lastSentAt: null,
+      confirmed: false,
+    });
+    await expect(anyDigestDue(NOW)).resolves.toBe(false);
+  });
+
+  it('已确认邮箱，18:00 之后不再算 due', async () => {
+    const afterWindow = new Date('2026-11-01T12:00:00.000Z'); // 北京 20:00
+    dbMock.email.push({
+      preferences: { pushTime: '09:00', intervalDays: 1 },
+      lastSentAt: null,
+      confirmed: true,
+    });
+    await expect(anyDigestDue(afterWindow)).resolves.toBe(false);
   });
 
   it('查询失败 → fail-open（当作有人到点）', async () => {

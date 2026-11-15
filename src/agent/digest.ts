@@ -478,6 +478,11 @@ export interface PushDigestsOptions {
   onlyUserId?: string;
   /** 忽略「还没到推送时间」的门控（用户手动要简报时用）；间隔与当日已发仍然生效。 */
   ignorePushTime?: boolean;
+  /**
+   * 调用方已经取到的当天快照（cron 与邮件共用）。
+   * `undefined` = 自行读取；`null` = 已知当天没有快照，走逐订阅者回退。
+   */
+  snapshot?: DigestSnapshot | null;
   /** 注入时钟（单测用）。 */
   clock?: () => number;
 }
@@ -724,7 +729,8 @@ export async function pushDigests(
   );
 
   // 当日快照只构建/读取一次，两个渠道共用；失败返回 null → 逐订阅者回退。
-  const snapshot = await getDailySnapshot(now);
+  const snapshot =
+    options.snapshot !== undefined ? options.snapshot : await getDailySnapshot(now);
 
   const nowMinutes = shanghaiMinutes(now);
   const today = shanghaiToday(now);

@@ -154,7 +154,7 @@ curl -i https://<domain>/api/wecom-callback
 curl -i https://<domain>/api/oauth-github
 ```
 
-> **推送有两个触发源**：`vercel.json` 的 Vercel Cron `0 1 * * *`（UTC，= 北京 09:00）负责默认时段的准点触发，Vercel 会带上 `Authorization: Bearer $CRON_SECRET`（前提是该项目已配置同名环境变量）；GitHub Actions 的 `digest-hourly.yml` 作为其余时段的兜底。GitHub 的 schedule 实测会整段丢触发（2026-10-28 出现过 09:17–13:17 连续五个 tick 不跑），**不要**把它当准点保障。
+> **推送有两个触发源**：`vercel.json` 的 Vercel Cron `0 1 * * *`（UTC，= 北京 09:00）负责默认时段的准点触发，Vercel 会带上 `Authorization: Bearer $CRON_SECRET`（前提是该项目已配置同名环境变量）；**Cloudflare Worker 的 Cron Trigger 每 30 分钟（:03 / :33）**作为其余时段的兜底（主触发器）。GitHub Actions 的 `digest-hourly.yml` 已手动停用，只保留 `workflow_dispatch` 手动触发——GitHub 的 schedule 实测会整段丢触发（2026-10-28 出现过 09:17–13:17 连续五个 tick 不跑）。
 >
 > `VERCEL_URL` 作为 Actions secret 时**只填域名**（`myapp.vercel.app`），不带 `https://` 前缀、不带尾斜杠——`digest-hourly.yml` 会拼成 `https://${VERCEL_URL}/api/cron-push-digest`（`daily.yml` 抓取/补全之后还会**兜底触发一次**简报推送；`pushDigests` 的三重门控保证与小时触发不重复）。
 
@@ -341,7 +341,7 @@ curl -i https://<domain>/api/oauth-github
 - **预期观察**：
   1. 三条回执分别为 `✅ 每日简报条数已设为 3（1–8）`、`✅ 简报推送时间已设为 20:30（北京时间）`、`✅ 简报推送间隔已设为每 2 天（1–30，未到间隔不重复推送）`。
   2. Neon：`select preferences from subscribers where wecom_userid = '<测试用户>';` 三个字段同时存在（后续「订阅 …」不会把它们刷掉）。
-  3. 次日 20:30 后收到 3 条简报；间隔 2 天时次日不推、第三天推（默认 09:00 由 **Vercel Cron** `vercel.json` 的 `0 1 * * *` 触发，其余时间由 `.github/workflows/digest-hourly.yml` 每 30 分钟（:03 / :33）兜底；门控在 `pushDigests` 内）。
+  3. 次日 20:30 后收到 3 条简报；间隔 2 天时次日不推、第三天推（默认 09:00 由 **Vercel Cron** `vercel.json` 的 `0 1 * * *` 触发，其余时间由 Cloudflare Worker 的 Cron Trigger 每 30 分钟（:03 / :33）兜底（GitHub Actions 工作流已停用，仅手动触发）；门控在 `pushDigests` 内）。
   4. 越界输入（「条数 0」「推送时间 25:99」「每 99 天」）→ 回用法提示，不写库。
 
 ### ⑦.5 跟踪仓库更新（GitHub）
@@ -552,6 +552,19 @@ curl -sS https://<domain>/api/join | grep -o 'work.weixin.qq.com[^"]*'
 - 单轮 ≤50 封、间隔 ≥250ms；全局日上限 300 封；确认信同地址 10 分钟冷却、全局每日 50 封。
 - 连续失败 5 次自动停用该订阅者；失败回滚 `last_sent_at` 并累计计数。
 - 每封带 `List-Unsubscribe` + `List-Unsubscribe-Post`（RFC 8058），正文含可见退订链接；无外链图片、无追踪像素。
+
+### 9.6 Cloudflare Worker 定时触发
+
+生产环境的简报主触发器不是 GitHub Actions，而是 Cloudflare Worker 的 Cron Trigger：
+
+1. Cloudflare Dashboard → Workers & Pages → 选中负责调用 `/api/cron-push-digest` 的 Worker。
+2. Settings → Triggers → Cron Triggers → 编辑。
+3. 把每 5 分钟（`*/5 * * * *`）改成每 30 分钟：`3,33 * * * *`（UTC；对应北京时间 :03 / :33，避开整点高峰）。
+4. Worker 的 URL 和 `CRON_SECRET` 不变；它继续用 `Authorization: Bearer <CRON_SECRET>` 调用端点。
+5. Vercel 的 09:00 / 10:00 cron 仍是准点兜底。
+6. GitHub Actions 的 `digest-hourly.yml` 已手动停用，只保留 `workflow_dispatch`；**不要同时开两套 30 分钟触发器**，否则同一个 tick 会被调用两次，白白唤醒 Neon。
+
+验证：Cloudflare Worker 的 Cron 日志 / Vercel 函数日志应每 30 分钟出现一次 `/api/cron-push-digest`；Neon Usage 的 CU-hours 曲线应明显下降。
 
 ---
 

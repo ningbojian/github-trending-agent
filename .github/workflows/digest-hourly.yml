@@ -1,3 +1,6 @@
+# ⚠ 当前该工作流在 GitHub 上已手动停用；生产主触发器是 Cloudflare Worker 的 Cron Trigger
+# （每 30 分钟，见 docs/deploy.md 9.6）。重新启用前先确认 Worker 已停用或错开时间，
+# 避免同一 tick 被调用两次、白白唤醒 Neon。
 # 每 30 分钟触发 Vercel 简报端点（推送时间/间隔门控与并发抢占在 pushDigests 内完成）。
 # cron 只在 :03/:33 触发（避开整点高峰）；也可 workflow_dispatch 手动触发。
 # 为什么不是整点：GitHub 明说整点是负载高峰，高频排程最容易被延迟或直接丢弃。

@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { cronGates } from '../src/agent/cron-gates.js';
 import { PUSH_BUDGET_MS, pushDigests } from '../src/agent/digest.js';
-import { anyDigestDue } from '../src/agent/digest-due.js';
+import { probeDue, refreshDueState } from '../src/agent/due-state-cache.js';
 import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
 import { getDailyObservations } from '../src/agent/observation.js';
 import { pushTrackedChanges } from '../src/agent/tracking-check.js';
@@ -93,11 +93,29 @@ export default async function handler(
   const startedAt = Date.now();
   try {
     const now = new Date();
-    // 没人到点就早退：否则每 30 分钟触发都会重建快照（摘要/短句，实测 ~220s）
-    // 并跑一次观察——纯粹浪费模型额度与函数时长。
-    const due = await anyDigestDue(now);
+    // 缓存预过滤：命中且不在 due 窗口时 probeDue 本身不查库；
+    // 下面的早退再跳过 tracking/weekly/heartbeat 这些额外查库。
+    const probe = await probeDue(now);
+    const due = probe.due;
     // 30 分钟 tick 下的围栏：tracking / weekly / heartbeat 不再每个 tick 都跑。
     const gates = cronGates(now, due);
+    // 心跳只在本次已经查过库、或 tracking/weekly 本来就要查库时写：
+    // 安静的缓存命中 tick 不再为了心跳额外唤醒 Neon。
+    const shouldHeartbeat =
+      gates.heartbeat && (probe.checked || gates.tracking || gates.weekly);
+
+    if (!due && !gates.tracking && !gates.weekly && !shouldHeartbeat) {
+      sendJson(res, 200, {
+        sent: 0,
+        skipped: 0,
+        failed: 0,
+        email: { sent: 0, skipped: 0, failed: 0 },
+        weekly: { sent: 0, skipped: 0, failed: 0 },
+        tracking: { sent: 0, skipped: 0, failed: 0, checked: 0 },
+        dueState: probe.cache,
+      });
+      return;
+    }
 
     let snapshot: Awaited<ReturnType<typeof getDailySnapshot>> = null;
     let wecom = { sent: 0, skipped: 0, failed: 0 };
@@ -140,16 +158,23 @@ export default async function handler(
             baseUrl: resolveBaseUrl(req.headers),
           })
         : { sent: 0, skipped: 0, failed: 0 };
+    // 两个渠道都发完后刷新窗口，让下一次 tick 看到最新的 lastSentAt/lastDigestAt。
+    if (due) {
+      await refreshDueState(now);
+    }
     // 每周复盘：只在周一 10:00–12:00 跑；函数自身仍按「本周未发」幂等。
     const weekly = gates.weekly
       ? await pushWeeklyReviews()
       : { sent: 0, skipped: 0, failed: 0 };
-    // heartbeat 每个整点后的第一个 tick 写一次（或真实到点时写），不再每 tick UPSERT。
-    if (gates.heartbeat) {
+    // heartbeat 只在已经查过库的 tick 写；cache 字段供每日 CU 监测看命中率。
+    if (shouldHeartbeat) {
       await recordHeartbeat({
         at: new Date().toISOString(),
         ok: true,
         due,
+        dueState: probe.cache,
+        dueWindow: probe.window,
+        dueChecked: probe.checked,
         ms: Date.now() - startedAt,
         wecom,
         email,
@@ -157,7 +182,7 @@ export default async function handler(
         tracking,
       });
     }
-    sendJson(res, 200, { ...wecom, email, weekly, tracking });
+    sendJson(res, 200, { ...wecom, email, weekly, tracking, dueState: probe.cache });
   } catch (err) {
     console.error('cron-push-digest failed:', err);
     // detail 供 Bearer 鉴权后的调用方排障（端点不公开，不引入暴露面）

@@ -8,6 +8,7 @@ import { readBodyFields } from '../src/http/body.js';
 import { escapeHtml, sendHtml, type HtmlResponse } from '../src/http/html.js';
 import { renderAppPage, renderMessagePage, type MessageTone } from '../src/ui/page.js';
 import { shanghaiToday } from '../src/agent/time.js';
+import { invalidateDueState } from '../src/agent/due-state-cache.js';
 
 /**
  * 邮箱订阅入口（GET 表单 / POST 邮箱）。
@@ -304,5 +305,7 @@ export default async function handler(
     return;
   }
 
+  // 订阅行有变化（新建/恢复确认令牌）：让下一次 tick 重新计算 due 窗口。
+  await invalidateDueState();
   sendHtml(res, 200, neutralPage());
 }

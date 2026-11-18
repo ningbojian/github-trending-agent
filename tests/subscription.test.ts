@@ -39,6 +39,13 @@ vi.mock('../src/db/client', () => ({
 
 vi.mock('../src/wecom/api', () => ({ sendWeComText: vi.fn() }));
 
+const dueStateMock = vi.hoisted(() => ({
+  invalidateDueState: vi.fn(async () => {}),
+}));
+vi.mock('../src/agent/due-state-cache', () => ({
+  invalidateDueState: dueStateMock.invalidateDueState,
+}));
+
 import { formatSubscriptionSummary } from '../src/agent/subscription-summary';
 import {
   mergePreferences,
@@ -79,6 +86,7 @@ beforeEach(() => {
   dbMock.updateError = false;
   dbMock.updates = [];
   vi.mocked(sendWeComText).mockClear();
+  dueStateMock.invalidateDueState.mockClear();
 });
 
 describe('readSubscription', () => {
@@ -117,6 +125,7 @@ describe('mergePreferences', () => {
     await mergePreferences('u1', { digestCount: 3 });
 
     expect(dbMock.updates).toHaveLength(1);
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalledTimes(1);
     expect(dbMock.updates[0]).toEqual({
       preferences: {
         languages: ['go'],
@@ -170,6 +179,7 @@ describe('removeSubscriptionTerm', () => {
       preferences: { languages: ['go'], keywords: ['python'], digestCount: 6 },
     });
     expect(dbMock.updates[0]).not.toHaveProperty('active');
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalledTimes(1);
   });
 
   it('没命中 → 不写库', async () => {
@@ -181,6 +191,7 @@ describe('removeSubscriptionTerm', () => {
       topics: [],
     });
     expect(dbMock.updates).toEqual([]);
+    expect(dueStateMock.invalidateDueState).not.toHaveBeenCalled();
   });
 
   it('没有订阅者行 → 视为没命中，不写库', async () => {

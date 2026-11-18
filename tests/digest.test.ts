@@ -24,9 +24,19 @@ vi.mock('../src/agent/observation', () => ({
   getDailyObservations: observationMock.getDailyObservations,
 }));
 
-// 「有没有人到点」单独测；cron 编排测试里固定当作有人到点。
-vi.mock('../src/agent/digest-due', () => ({
-  anyDigestDue: async () => true,
+// 「有没有人到点」由 due-state-cache 内部测；cron 编排测试里固定当作有人到点。
+const dueStateMock = vi.hoisted(() => ({
+  invalidateDueState: vi.fn(async () => {}),
+}));
+vi.mock('../src/agent/due-state-cache', () => ({
+  invalidateDueState: dueStateMock.invalidateDueState,
+  probeDue: async () => ({
+    due: true,
+    checked: true,
+    cache: 'miss',
+    window: true,
+  }),
+  refreshDueState: async () => {},
 }));
 
 const summaryMock = vi.hoisted(() => ({
@@ -1661,6 +1671,7 @@ describe('markDigestSent — 首日简报发送成功后的当日去重', () => 
     const compiled = compileQuery(update.condition);
     expect(compiled.sql).toContain('"subscribers"."wecom_userid"');
     expect(compiled.params).toContain('alice');
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1752,6 +1763,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
       email: { sent: 0, skipped: 0, failed: 0 },
       weekly: { sent: 0, skipped: 0, failed: 0 },
       tracking: { sent: 0, skipped: 0, failed: 0, checked: 0 },
+      dueState: 'miss',
     });
     expect(res.headers['content-type']).toContain('application/json');
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
@@ -1764,6 +1776,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
       baseUrl: 'http://localhost:3000',
     });
     expect(capacityMock.getWeComMemberCount).toHaveBeenCalledTimes(1);
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalled();
   });
 });
 

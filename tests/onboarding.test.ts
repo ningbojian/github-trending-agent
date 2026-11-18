@@ -18,6 +18,13 @@ vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
 }));
 
+const dueStateMock = vi.hoisted(() => ({
+  invalidateDueState: vi.fn(async () => {}),
+}));
+vi.mock('../src/agent/due-state-cache', () => ({
+  invalidateDueState: dueStateMock.invalidateDueState,
+}));
+
 // trace 会多写一次 kv_cache insert，与本文件的写库次数断言无关 → 只透传。
 vi.mock('../src/obs/trace', () => ({
   withTrace: (_meta: unknown, fn: () => Promise<unknown>) => fn(),
@@ -214,6 +221,7 @@ beforeEach(() => {
   digestMock.saveRecentResults.mockResolvedValue(undefined);
   digestMock.markDigestSent.mockReset();
   digestMock.markDigestSent.mockResolvedValue(undefined);
+  dueStateMock.invalidateDueState.mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   // 全量替换为 mock handler：真实 search/bind/stars handler 绝不触发。
@@ -596,6 +604,7 @@ describe('handleUnsubscribe（退订 → active=false）', () => {
     const compiled = compileQuery(update.condition);
     expect(compiled.sql).toContain('"subscribers"."wecom_userid"');
     expect(compiled.params).toContain('alice');
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalledTimes(1);
   });
 });
 

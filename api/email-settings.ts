@@ -10,6 +10,7 @@ import {
   type EmailPreferences,
 } from '../src/email/preferences.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
+import { invalidateDueState } from '../src/agent/due-state-cache.js';
 import { readBodyFields, readBodyFieldsAll } from '../src/http/body.js';
 import { escapeHtml, sendHtml, type HtmlResponse } from '../src/http/html.js';
 import { renderAppPage, renderMessagePage } from '../src/ui/page.js';
@@ -247,6 +248,8 @@ export default async function handler(
     .update(emailSubscribers)
     .set({ preferences: validated.preferences })
     .where(eq(emailSubscribers.id, row.id));
+  // 推送时间/间隔可能变了：下一次 cron tick 重新计算 due 窗口。
+  await invalidateDueState();
 
   sendHtml(
     res,

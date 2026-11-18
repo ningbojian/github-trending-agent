@@ -15,6 +15,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { subscribers } from '../db/schema.js';
 import { directionByAlias } from './directions.js';
+import { invalidateDueState } from './due-state-cache.js';
 
 /** 库里 preferences 的列类型（含确定字段；运行时可能还有历史遗留键）。 */
 type StoredPreferences = typeof subscribers.$inferSelect.preferences;
@@ -80,6 +81,8 @@ export async function mergePreferences(
     .update(subscribers)
     .set(values)
     .where(eq(subscribers.wecomUserid, wecomUserid));
+  // 推送时间/间隔/退订状态可能变了：让下一次 cron tick 重建 due 窗口。
+  await invalidateDueState();
 }
 
 /**

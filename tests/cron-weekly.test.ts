@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * cron 端点是「编排」：鉴权、顺序、响应形状。
@@ -10,9 +10,42 @@ const weeklyMock = vi.hoisted(() => ({
   pushWeeklyReviews: vi.fn(async () => ({ sent: 2, skipped: 1, failed: 0 })),
 }));
 
+const digestMock = vi.hoisted(() => ({
+  pushDigests: vi.fn(async () => ({ sent: 3, skipped: 4, failed: 0 })),
+}));
+
+const emailMock = vi.hoisted(() => ({
+  pushEmailDigests: vi.fn(async () => ({ sent: 1, skipped: 0, failed: 0 })),
+}));
+
+const snapshotMock = vi.hoisted(() => ({
+  getDailySnapshot: vi.fn(async () => ({ date: '2026-10-26', items: [] })),
+}));
+
+const dueMock = vi.hoisted(() => ({
+  probeDue: vi.fn(
+    async (): Promise<{
+      due: boolean;
+      checked: boolean;
+      cache: 'hit' | 'miss' | 'off';
+      window: boolean;
+    }> => ({
+      due: true,
+      checked: true,
+      cache: 'miss',
+      window: true,
+    }),
+  ),
+  refreshDueState: vi.fn(async () => {}),
+}));
+
+const gateMock = vi.hoisted(() => ({
+  cronGates: vi.fn(() => ({ tracking: true, weekly: true, heartbeat: true })),
+}));
+
 vi.mock('../src/agent/digest', () => ({
   PUSH_BUDGET_MS: 240_000,
-  pushDigests: async () => ({ sent: 3, skipped: 4, failed: 0 }),
+  pushDigests: digestMock.pushDigests,
 }));
 vi.mock('../src/agent/observation', () => ({
   getDailyObservations: async () => null,
@@ -21,14 +54,15 @@ vi.mock('../src/agent/tracking-check', () => ({
   pushTrackedChanges: async () => ({ sent: 0, skipped: 0, failed: 0, checked: 0 }),
 }));
 vi.mock('../src/agent/digest-snapshot', () => ({
-  getDailySnapshot: async () => ({ date: '2026-10-26', items: [] }),
+  getDailySnapshot: snapshotMock.getDailySnapshot,
 }));
-// 「有没有人到点」的检查单独测；cron 编排测试里固定当作有人到点。
-vi.mock('../src/agent/digest-due', () => ({
-  anyDigestDue: async () => true,
+// due 缓存的内部逻辑单独测；cron 编排测试里固定当作有人到点。
+vi.mock('../src/agent/due-state-cache', () => ({
+  probeDue: dueMock.probeDue,
+  refreshDueState: dueMock.refreshDueState,
 }));
 vi.mock('../src/email/push', () => ({
-  pushEmailDigests: async () => ({ sent: 1, skipped: 0, failed: 0 }),
+  pushEmailDigests: emailMock.pushEmailDigests,
 }));
 vi.mock('../src/email/tokens', () => ({
   resolveBaseUrl: () => 'https://example.test',
@@ -36,9 +70,9 @@ vi.mock('../src/email/tokens', () => ({
 vi.mock('../src/wecom/capacity', () => ({
   getWeComMemberCount: async () => undefined,
 }));
-// 围栏的时间逻辑在 tests/cron-gates.test.ts 单独测；编排测试固定全部打开。
+// 围栏的时间逻辑在 tests/cron-gates.test.ts 单独测；编排测试按用例覆写。
 vi.mock('../src/agent/cron-gates', () => ({
-  cronGates: () => ({ tracking: true, weekly: true, heartbeat: true }),
+  cronGates: gateMock.cronGates,
 }));
 vi.mock('../src/agent/weekly-review', () => ({
   pushWeeklyReviews: weeklyMock.pushWeeklyReviews,
@@ -48,6 +82,27 @@ vi.mock('../src/config', () => ({
 }));
 
 import handler from '../api/cron-push-digest';
+
+beforeEach(() => {
+  dueMock.probeDue.mockReset();
+  dueMock.probeDue.mockResolvedValue({
+    due: true,
+    checked: true,
+    cache: 'miss',
+    window: true,
+  });
+  dueMock.refreshDueState.mockClear();
+  gateMock.cronGates.mockReset();
+  gateMock.cronGates.mockReturnValue({
+    tracking: true,
+    weekly: true,
+    heartbeat: true,
+  });
+  digestMock.pushDigests.mockClear();
+  emailMock.pushEmailDigests.mockClear();
+  snapshotMock.getDailySnapshot.mockClear();
+  weeklyMock.pushWeeklyReviews.mockClear();
+});
 
 function response() {
   const state: { status: number; body: string } = { status: 0, body: '' };
@@ -88,5 +143,37 @@ describe('cron-push-digest', () => {
     await handler({ method: 'GET', headers: {} }, res);
     expect(state.status).toBe(401);
     expect(weeklyMock.pushWeeklyReviews).not.toHaveBeenCalled();
+  });
+
+  it('缓存命中且不在窗口、又没有其它围栏 → 直接返回，不查库/不推送', async () => {
+    dueMock.probeDue.mockResolvedValue({
+      due: false,
+      checked: false,
+      cache: 'hit',
+      window: false,
+    });
+    gateMock.cronGates.mockReturnValue({
+      tracking: false,
+      weekly: false,
+      heartbeat: false,
+    });
+
+    const { state, res } = response();
+    await handler(
+      { method: 'GET', headers: { authorization: 'Bearer cron-secret' } },
+      res,
+    );
+
+    expect(state.status).toBe(200);
+    expect(JSON.parse(state.body)).toMatchObject({
+      sent: 0,
+      email: { sent: 0 },
+      weekly: { sent: 0 },
+      tracking: { sent: 0 },
+    });
+    expect(digestMock.pushDigests).not.toHaveBeenCalled();
+    expect(emailMock.pushEmailDigests).not.toHaveBeenCalled();
+    expect(snapshotMock.getDailySnapshot).not.toHaveBeenCalled();
+    expect(dueMock.refreshDueState).not.toHaveBeenCalled();
   });
 });

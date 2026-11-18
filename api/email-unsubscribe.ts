@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../src/db/client.js';
 import { emailSubscribers } from '../src/db/schema.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
+import { invalidateDueState } from '../src/agent/due-state-cache.js';
 import { escapeHtml, sendHtml, type HtmlResponse } from '../src/http/html.js';
 import { renderMessagePage } from '../src/ui/page.js';
 
@@ -91,6 +92,8 @@ export default async function handler(
           .update(emailSubscribers)
           .set({ active: false })
           .where(eq(emailSubscribers.unsubToken, token));
+        // 退订后不再进入 due 窗口。
+        await invalidateDueState();
       } catch (err) {
         console.error('one-click unsubscribe failed:', err);
         failed = true;

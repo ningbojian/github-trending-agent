@@ -19,6 +19,7 @@ import {
   readPushHistory,
   recordPush,
 } from './push-history.js';
+import { invalidateDueState } from './due-state-cache.js';
 import { DEFAULT_DIGEST_COUNT, normalizePreferences } from './preferences.js';
 import { loadRepoSummaries } from './repo-summary.js';
 import { normalizeRepoName } from './repo-name.js';
@@ -584,6 +585,8 @@ export async function markDigestSent(wecomUserid: string): Promise<void> {
       lastDigestAt: sql`(date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai')`,
     })
     .where(eq(subscribers.wecomUserid, wecomUserid));
+  // 今天这个名额已用掉：下一次 tick 不该再把他算进 due 窗口。
+  await invalidateDueState();
 }
 
 /**
@@ -952,6 +955,10 @@ export async function pushDigests(
         await rollbackClaim(sub.id);
       }
     }
+  }
+  if (sent > 0) {
+    // 至少有一个人发送成功（last_digest_at 已更新）：让 due 窗口立即反映。
+    await invalidateDueState();
   }
   return { sent, skipped, failed };
 }

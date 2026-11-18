@@ -108,6 +108,13 @@ vi.mock('../src/email/send', () => ({
   },
 }));
 
+const dueStateMock = vi.hoisted(() => ({
+  invalidateDueState: vi.fn(async () => {}),
+}));
+vi.mock('../src/agent/due-state-cache', () => ({
+  invalidateDueState: dueStateMock.invalidateDueState,
+}));
+
 const snapshotState = vi.hoisted(() => ({
   snapshot: null as null | {
     date: string;
@@ -231,6 +238,7 @@ beforeEach(() => {
   emailState.fail = false;
   snapshotState.snapshot = null;
   ENV.PUBLIC_BASE_URL = undefined;
+  dueStateMock.invalidateDueState.mockClear();
 });
 
 // ---------------------------------------------------------------------------
@@ -314,6 +322,7 @@ describe('POST /api/subscribe', () => {
     expect(sent.text).toMatch(
       /https:\/\/agent\.example\.com\/api\/email-confirm\?t=[A-Za-z0-9]+/,
     );
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalled();
   });
 
   it('never puts a subscriber’s settings token in the response', async () => {
@@ -535,6 +544,7 @@ describe('GET /api/email-confirm', () => {
       'List-Unsubscribe': '<https://agent.example.com/api/email-unsubscribe?t=unsub-token>',
       'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
     });
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalled();
   });
 
   it('confirms exactly once when the same link is opened twice concurrently', async () => {
@@ -702,6 +712,7 @@ describe('/api/email-settings', () => {
         keywords: ['ai', '开发效率'],
       },
     });
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalled();
   });
 
   it('keeps repeated urlencoded language fields', async () => {
@@ -807,5 +818,6 @@ describe('/api/email-unsubscribe', () => {
     );
     expect(res.statusCode).toBe(200);
     expect(dbState.updateCalls[0].values).toEqual({ active: false });
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalled();
   });
 });

@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { MAX_INTERVAL_DAYS } from '../agent/digest.js';
 import { mergePreferences } from '../agent/subscription-store.js';
+import { invalidateDueState } from '../agent/due-state-cache.js';
 import { directionLabel, splitDirectionTokens } from '../agent/directions.js';
 import { setPending } from '../agent/pending.js';
 import { db } from '../db/client.js';
@@ -321,6 +322,8 @@ export async function handleConfirmUnsubscribe(msg: InboundMessage): Promise<voi
       .update(subscribers)
       .set({ active: false })
       .where(eq(subscribers.wecomUserid, msg.fromUserName));
+    // 退订后不再进入 due 窗口。
+    await invalidateDueState();
     await sendWeComText(msg.fromUserName, UNSUBSCRIBE_REPLY);
   } catch (err) {
     console.error('handleConfirmUnsubscribe failed:', err);

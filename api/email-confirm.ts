@@ -2,6 +2,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../src/db/client.js';
 import { emailSubscribers } from '../src/db/schema.js';
 import { getDailySnapshot, selectEntriesForPreferences } from '../src/agent/digest-snapshot.js';
+import { invalidateDueState } from '../src/agent/due-state-cache.js';
 import { normalizeEmailPreferences } from '../src/email/preferences.js';
 import { renderDigestEmail } from '../src/email/render.js';
 import { sendEmail } from '../src/email/send.js';
@@ -102,6 +103,8 @@ export default async function handler(
     sendHtml(res, 404, messagePage('链接无效或已使用', '请重新订阅。', '', 'err'));
     return;
   }
+  // 确认后从「未确认」变成可投递：让下一次 tick 重新计算 due 窗口。
+  await invalidateDueState();
 
   const baseUrl = resolveBaseUrl(req.headers);
   const preferences = normalizeEmailPreferences(row.preferences);

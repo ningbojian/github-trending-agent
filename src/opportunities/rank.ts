@@ -114,8 +114,12 @@ export function rankOpportunities(
   const seenRepos = new Set<string>();
   const languageCount = new Map<string, number>();
 
-  const canTake = (item: OpportunityItem): boolean => {
+  const canTake = (
+    item: OpportunityItem,
+    ignoreLanguageCap = false,
+  ): boolean => {
     if (seenRepos.has(item.repo)) return false;
+    if (ignoreLanguageCap) return true;
     return (languageCount.get(normalize(item.language)) ?? 0) < 2;
   };
 
@@ -142,7 +146,8 @@ export function rankOpportunities(
     if (picked.filter((entry) => entry.kind === 'research').length >= researchQuota) {
       continue;
     }
-    if (!canTake(item)) continue;
+    // 研究机会更稀缺：保证 1 条研究卡不被同语言上限挤掉。
+    if (!canTake(item, true)) continue;
     take(item);
   }
 

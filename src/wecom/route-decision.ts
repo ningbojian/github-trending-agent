@@ -35,6 +35,7 @@ export type HandlerKey =
   | 'untrack'
   | 'myTracking'
   | 'panel'
+  | 'opportunity'
   | 'search';
 
 /** 疑似命令的用法提示键（文案由 router 映射）。 */
@@ -66,6 +67,9 @@ const FAVORITE_PATTERN = new RegExp(`^收藏\\s*${NUMBER_TOKEN_PATTERN}$`);
 
 /** 「订阅 …」——前缀匹配（「退订」首字为「退」，不会被吞掉）。 */
 const SUBSCRIBE_PATTERN = /^订阅/;
+
+/** 「机会」——固定词，零模型；不能吞掉正常搜索。 */
+const OPPORTUNITY_PATTERN = /^(机会|下一步|我能做什么|有什么可以做的)$/;
 
 /**
  * 「取消订阅 <关键词>」——动词后必须是空白或句子结束（裸「取消订阅」命中，
@@ -215,6 +219,9 @@ export function decideTextRoute(content: string): RouteDecision {
   }
   if (text === '我的面板' || text === '面板') {
     return { kind: 'handler', handler: 'panel' };
+  }
+  if (OPPORTUNITY_PATTERN.test(text)) {
+    return { kind: 'handler', handler: 'opportunity' };
   }
   if (MY_TRACKING_PATTERN.test(text)) {
     return { kind: 'handler', handler: 'myTracking' };

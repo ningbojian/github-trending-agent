@@ -46,6 +46,7 @@ import {
 } from './subscription.js';
 import { sendWelcomeFlow } from './welcome.js';
 import { handleMyPanel } from './panel-link.js';
+import { handleOpportunities } from './opportunity.js';
 import { handleTodayDigest } from './today-digest.js';
 import { handleMoreDigest } from './more-digest.js';
 import {
@@ -108,6 +109,8 @@ export interface Handlers {
   myTracking: MessageHandler;
   /** 「我的面板」——发一条 7 天有效的控制面板链接。 */
   panel: MessageHandler;
+  /** 「机会」——2 个可填的坑 + 1 个值得研究的问题。 */
+  opportunity: MessageHandler;
 }
 
 /** 未注册时的静默 stub。 */
@@ -137,6 +140,7 @@ let handlers: Handlers = {
   untrack: stub,
   myTracking: stub,
   panel: stub,
+  opportunity: stub,
 };
 
 /**
@@ -173,6 +177,7 @@ export function resetHandlers(): void {
     untrack: stub,
     myTracking: stub,
     panel: stub,
+    opportunity: stub,
   };
 }
 
@@ -483,4 +488,5 @@ registerHandlers({
   untrack: handleUntrack,
   myTracking: handleMyTracking,
   panel: handleMyPanel,
+  opportunity: handleOpportunities,
 });

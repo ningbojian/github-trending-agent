@@ -54,3 +54,7 @@
 {"id":"route-memory-forget","text":"忘掉 Rust","expected":{"route":{"kind":"handler","name":"memory"}}}
 {"id":"route-memory-show","text":"我的记忆","expected":{"route":{"kind":"handler","name":"memory"}}}
 {"id":"route-memory-show-typo","text":"我的记忆列表","notes":"带后缀不是合法指令 → 用法提示，别当搜索词","expected":{"route":{"kind":"usage","name":"memory"}}}
+{"id":"route-opportunity-exact","text":"机会","expected":{"route":{"kind":"handler","name":"opportunity"}}}
+{"id":"route-opportunity-next-step","text":"下一步","expected":{"route":{"kind":"handler","name":"opportunity"}}}
+{"id":"route-opportunity-what","text":"我能做什么","expected":{"route":{"kind":"handler","name":"opportunity"}}}
+{"id":"route-opportunity-long","text":"机会成本是什么","notes":"精确词之外仍是搜索","expected":{"route":{"kind":"handler","name":"search"}}}

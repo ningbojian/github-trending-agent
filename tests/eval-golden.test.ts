@@ -34,6 +34,7 @@ describe('eval golden — 金标集与基线', () => {
         'myModel',
         'mySubscription',
         'notInterested',
+        'opportunity',
         'pushInterval',
         'pushTime',
         'search',

@@ -11,6 +11,14 @@ const weeklyMock = vi.hoisted(() => ({
   pushWeeklyReviews: vi.fn(async () => ({ sent: 2, skipped: 1, failed: 0 })),
 }));
 
+const weeklyOpportunitiesMock = vi.hoisted(() => ({
+  pushWeeklyOpportunities: vi.fn(async () => ({
+    sent: 0,
+    skipped: 0,
+    failed: 0,
+  })),
+}));
+
 const digestMock = vi.hoisted(() => ({
   pushDigests: vi.fn(async () => ({ sent: 3, skipped: 4, failed: 0 })),
 }));
@@ -100,6 +108,9 @@ vi.mock('../src/agent/cron-gates', () => ({
 vi.mock('../src/agent/weekly-review', () => ({
   pushWeeklyReviews: weeklyMock.pushWeeklyReviews,
 }));
+vi.mock('../src/agent/weekly-opportunities', () => ({
+  pushWeeklyOpportunities: weeklyOpportunitiesMock.pushWeeklyOpportunities,
+}));
 vi.mock('../src/config', () => ({
   env: { CRON_SECRET: 'cron-secret' },
 }));
@@ -125,6 +136,7 @@ beforeEach(() => {
   emailMock.pushEmailDigests.mockClear();
   snapshotMock.getDailySnapshot.mockClear();
   weeklyMock.pushWeeklyReviews.mockClear();
+  weeklyOpportunitiesMock.pushWeeklyOpportunities.mockClear();
   trackingMock.pushTrackedChanges.mockClear();
   opportunityMock.buildOpportunityPool.mockClear();
 });
@@ -160,6 +172,7 @@ describe('cron-push-digest', () => {
     expect(body.sent).toBe(3);
     expect(body.weekly).toEqual({ sent: 2, skipped: 1, failed: 0 });
     expect(weeklyMock.pushWeeklyReviews).toHaveBeenCalledTimes(1);
+    expect(weeklyOpportunitiesMock.pushWeeklyOpportunities).toHaveBeenCalledTimes(1);
     expect(dueMock.refreshDueState).toHaveBeenCalledTimes(1);
   });
 

@@ -37,6 +37,8 @@ export interface PreferencesInput {
   digestCount?: unknown;
   pushTime?: unknown;
   intervalDays?: unknown;
+  /** 是否接收周一机会推送；缺省 true。 */
+  weeklyOpportunities?: unknown;
 }
 
 /** 规范化后的偏好：所有字段都有确定值。 */
@@ -48,6 +50,7 @@ export interface NormalizedPreferences {
   digestCount: number;
   pushTime: string;
   intervalDays: number;
+  weeklyOpportunities: boolean;
 }
 
 /**
@@ -102,5 +105,6 @@ export function normalizePreferences(preferences: PreferencesInput): NormalizedP
     digestCount,
     pushTime,
     intervalDays,
+    weeklyOpportunities: preferences.weeklyOpportunities !== false,
   };
 }

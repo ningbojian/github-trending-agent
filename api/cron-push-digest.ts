@@ -7,6 +7,7 @@ import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
 import { getDailyObservations } from '../src/agent/observation.js';
 import { pushTrackedChanges } from '../src/agent/tracking-check.js';
 import { pushWeeklyReviews } from '../src/agent/weekly-review.js';
+import { pushWeeklyOpportunities } from '../src/agent/weekly-opportunities.js';
 import { pushEmailDigests } from '../src/email/push.js';
 import { resolveBaseUrl } from '../src/email/tokens.js';
 import { getWeComMemberCount } from '../src/wecom/capacity.js';
@@ -190,6 +191,13 @@ export default async function handler(
     const weekly = gates.weekly
       ? await pushWeeklyReviews()
       : { sent: 0, skipped: 0, failed: 0 };
+    // 周一机会推送：同一 weekly gate；池空/关闭偏好/今天已发都会跳过。
+    const opportunities = gates.weekly
+      ? await pushWeeklyOpportunities(now).catch((err: unknown) => {
+          console.error('[cron] weekly opportunities failed:', err);
+          return { sent: 0, skipped: 0, failed: 0 };
+        })
+      : { sent: 0, skipped: 0, failed: 0 };
     // heartbeat 只在已经查过库的 tick 写；cache 字段供每日 CU 监测看命中率。
     if (shouldHeartbeat) {
       await recordHeartbeat({
@@ -203,6 +211,7 @@ export default async function handler(
         wecom,
         email,
         weekly,
+        opportunities,
         tracking,
       });
     }
@@ -210,6 +219,7 @@ export default async function handler(
       ...wecom,
       email,
       weekly,
+      opportunities,
       tracking,
       dueState: probe.cache,
       dueWindow: probe.window,

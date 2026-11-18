@@ -213,6 +213,17 @@ vi.mock('../src/agent/weekly-review', () => ({
   pushWeeklyReviews: weeklyMock.pushWeeklyReviews,
 }));
 
+const weeklyOpportunitiesMock = vi.hoisted(() => ({
+  pushWeeklyOpportunities: vi.fn(async () => ({
+    sent: 0,
+    skipped: 0,
+    failed: 0,
+  })),
+}));
+vi.mock('../src/agent/weekly-opportunities', () => ({
+  pushWeeklyOpportunities: weeklyOpportunitiesMock.pushWeeklyOpportunities,
+}));
+
 const trackingMock = vi.hoisted(() => ({
   pushTrackedChanges: vi.fn(async () => ({
     sent: 0,
@@ -1778,6 +1789,7 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
       dueState: 'miss',
       dueWindow: true,
       dueChecked: true,
+      opportunities: { sent: 0, skipped: 0, failed: 0 },
     });
     expect(res.headers['content-type']).toContain('application/json');
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);

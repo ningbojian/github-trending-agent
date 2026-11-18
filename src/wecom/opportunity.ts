@@ -1,3 +1,4 @@
+import { fitOpportunityText } from '../opportunities/format.js';
 import { normalizePreferences } from '../agent/preferences.js';
 import { readSubscription } from '../agent/subscription-store.js';
 import { loadUserSignals } from '../agent/taste.js';
@@ -22,28 +23,11 @@ const FAIL_TEXT = '机会暂时取不到，稍后再试。';
 export function formatOpportunityReply(items: OpportunityItem[]): string {
   const contribute = items.filter((item) => item.kind === 'contribute').length;
   const research = items.filter((item) => item.kind === 'research').length;
-  const header = `🧭 今天的机会（${contribute} 填坑 + ${research} 研究）`;
-  const footer = '面板里可以追踪/不感兴趣；回复「面板」打开。';
-
-  const cards = items.map((item, index) => {
-    const kind = item.kind === 'contribute' ? '填坑' : '研究';
-    return [
-      `${index + 1}. [${kind}] ${item.repo} #${item.issueNumber}`,
-      item.title,
-      `为什么：${item.why}`,
-      `第一步：${item.firstStep}`,
-      `难度：${item.effort} · 置信度：${item.confidence}`,
-      item.url,
-    ].join('\n');
-  });
-
-  for (let count = cards.length; count >= 1; count -= 1) {
-    const text = [header, '', ...cards.slice(0, count), footer].join('\n\n');
-    if (Buffer.byteLength(text, 'utf8') <= 1900) return text;
-  }
-
-  const fallback = [header, '', cards[0] ?? '', footer].join('\n\n');
-  return fallback;
+  return fitOpportunityText(
+    `🧭 今天的机会（${contribute} 填坑 + ${research} 研究）`,
+    items,
+    '面板里可以追踪/不感兴趣；回复「面板」打开。',
+  );
 }
 
 /** 命令入口：读共享池 + 本地信号 → 内存排序 → 发送。 */

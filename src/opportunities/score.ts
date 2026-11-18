@@ -145,3 +145,47 @@ export function toOpportunityItem(
     evidence: evidenceFor(fact, now),
   };
 }
+
+export interface SelectOpportunityOptions {
+  contribute?: number;
+  research?: number;
+}
+
+/**
+ * 共享池的选择层：硬门槛 → 按 kind 配额取高分 → 某类不足时用另一类补齐。
+ * 池是保守的（12+6），命令/周报再按用户排序取 2+1。
+ */
+export function selectOpportunityItems(
+  facts: RawOpportunityFact[],
+  now: number,
+  options: SelectOpportunityOptions = {},
+): OpportunityItem[] {
+  const contributeLimit = options.contribute ?? 12;
+  const researchLimit = options.research ?? 6;
+  const unique = [...new Map(facts.map((fact) => [fact.id, fact])).values()];
+
+  const items = unique
+    .filter((fact) => passesOpportunityGate(fact, now).ok)
+    .map((fact) => toOpportunityItem(fact, now))
+    .sort((a, b) => b.score - a.score);
+
+  const contribute = items.filter((item) => item.kind === 'contribute');
+  const research = items.filter((item) => item.kind === 'research');
+  const picked = [
+    ...contribute.slice(0, contributeLimit),
+    ...research.slice(0, researchLimit),
+  ];
+
+  const shortfall = contributeLimit + researchLimit - picked.length;
+  if (shortfall > 0) {
+    const chosen = new Set(picked.map((item) => item.id));
+    for (const item of items) {
+      if (shortfall <= 0) break;
+      if (chosen.has(item.id)) continue;
+      picked.push(item);
+      chosen.add(item.id);
+    }
+  }
+
+  return picked;
+}

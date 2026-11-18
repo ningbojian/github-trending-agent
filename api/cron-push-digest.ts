@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { cronGates } from '../src/agent/cron-gates.js';
 import { PUSH_BUDGET_MS, pushDigests } from '../src/agent/digest.js';
 import { probeDue, refreshDueState } from '../src/agent/due-state-cache.js';
+import { buildOpportunityPool } from '../src/opportunities/pool.js';
 import { getDailySnapshot } from '../src/agent/digest-snapshot.js';
 import { getDailyObservations } from '../src/agent/observation.js';
 import { pushTrackedChanges } from '../src/agent/tracking-check.js';
@@ -29,6 +30,8 @@ export const maxDuration = 300;
 export interface CronRequest {
   method?: string;
   headers: Record<string, string | string[] | undefined>;
+  /** Vercel 预解析的 query；task=opportunity 时用于构建共享机会池。 */
+  query?: Record<string, string | string[] | undefined>;
 }
 
 /** Vercel res 的最小形态。 */
@@ -88,6 +91,24 @@ export default async function handler(
   const expected = `Bearer ${env.CRON_SECRET}`;
   if (header(req, 'authorization') !== expected) {
     sendJson(res, 401, { error: 'unauthorized' });
+    return;
+  }
+
+  // 机会池构建：每天由 GitHub Actions 在采集完后调用一次，不进入简报路径。
+  const task = Array.isArray(req.query?.task) ? req.query.task[0] : req.query?.task;
+  if (task === 'opportunity') {
+    try {
+      const result = await buildOpportunityPool(new Date());
+      sendJson(res, 200, {
+        ok: result.pool !== null,
+        date: result.pool?.date ?? null,
+        items: result.pool?.items.length ?? 0,
+        reason: result.reason ?? null,
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      sendJson(res, 500, { ok: false, error: detail });
+    }
     return;
   }
 

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { OpportunityPool } from '../src/opportunities/pool';
 
 /**
  * cron 端点是「编排」：鉴权、顺序、响应形状。
@@ -41,6 +42,19 @@ const dueMock = vi.hoisted(() => ({
 
 const gateMock = vi.hoisted(() => ({
   cronGates: vi.fn(() => ({ tracking: true, weekly: true, heartbeat: true })),
+}));
+
+const opportunityMock = vi.hoisted(() => ({
+  buildOpportunityPool: vi.fn(
+    async (): Promise<{ pool: OpportunityPool | null; reason?: string }> => ({
+      pool: null,
+      reason: 'no-data',
+    }),
+  ),
+}));
+
+vi.mock('../src/opportunities/pool', () => ({
+  buildOpportunityPool: opportunityMock.buildOpportunityPool,
 }));
 
 vi.mock('../src/agent/digest', () => ({
@@ -112,6 +126,7 @@ beforeEach(() => {
   snapshotMock.getDailySnapshot.mockClear();
   weeklyMock.pushWeeklyReviews.mockClear();
   trackingMock.pushTrackedChanges.mockClear();
+  opportunityMock.buildOpportunityPool.mockClear();
 });
 
 function response() {
@@ -235,6 +250,38 @@ describe('cron-push-digest', () => {
 
     expect(state.status).toBe(200);
     expect(weeklyMock.pushWeeklyReviews).toHaveBeenCalledTimes(1);
+    expect(digestMock.pushDigests).not.toHaveBeenCalled();
+    expect(emailMock.pushEmailDigests).not.toHaveBeenCalled();
+  });
+
+  it('task=opportunity → 只构建机会池，不跑简报', async () => {
+    opportunityMock.buildOpportunityPool.mockResolvedValueOnce({
+      pool: {
+        version: 1,
+        date: '2026-11-18',
+        dataDate: '2026-11-18',
+        generatedAt: '2026-11-18T02:00:00.000Z',
+        items: [],
+      },
+    });
+
+    const { state, res } = response();
+    await handler(
+      {
+        method: 'GET',
+        headers: { authorization: 'Bearer cron-secret' },
+        query: { task: 'opportunity' },
+      },
+      res,
+    );
+
+    expect(state.status).toBe(200);
+    expect(JSON.parse(state.body)).toMatchObject({
+      ok: true,
+      date: '2026-11-18',
+      items: 0,
+    });
+    expect(dueMock.probeDue).not.toHaveBeenCalled();
     expect(digestMock.pushDigests).not.toHaveBeenCalled();
     expect(emailMock.pushEmailDigests).not.toHaveBeenCalled();
   });

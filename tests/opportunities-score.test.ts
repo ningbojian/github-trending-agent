@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   passesOpportunityGate,
   scoreOpportunity,
+  selectOpportunityItems,
   toOpportunityItem,
 } from '../src/opportunities/score';
 import type { RawOpportunityFact } from '../src/opportunities/types';
@@ -128,5 +129,43 @@ describe('toOpportunityItem', () => {
   it('零讨论且无维护者参与 → 低置信度', () => {
     const item = toOpportunityItem(fact({ comments: 0 }), NOW);
     expect(item.confidence).toBe('低');
+  });
+});
+
+describe('selectOpportunityItems', () => {
+  it('过滤硬门槛并按 contribute/research 配额选择', () => {
+    const facts = [
+      fact(),
+      fact({ id: 'contribute:acme/stale#1', archived: true }),
+      fact({
+        id: 'research:acme/agent#9',
+        kind: 'research',
+        labels: ['RFC'],
+        assigned: true,
+      }),
+    ];
+
+    const items = selectOpportunityItems(facts, NOW, {
+      contribute: 1,
+      research: 1,
+    });
+    expect(items.map((item) => item.id).sort()).toEqual([
+      'contribute:acme/agent#12',
+      'research:acme/agent#9',
+    ]);
+  });
+
+  it('某类不足时用另一类补齐', () => {
+    const facts = [
+      fact(),
+      fact({ id: 'contribute:acme/two#2', issueNumber: 2 }),
+      fact({ id: 'contribute:acme/three#3', issueNumber: 3 }),
+    ];
+    const items = selectOpportunityItems(facts, NOW, {
+      contribute: 1,
+      research: 2,
+    });
+    expect(items).toHaveLength(3);
+    expect(items.filter((item) => item.kind === 'contribute')).toHaveLength(3);
   });
 });

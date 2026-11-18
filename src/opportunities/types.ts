@@ -43,3 +43,14 @@ export interface OpportunityItem extends RawOpportunityFact {
   confidence: OpportunityConfidence;
   evidence: OpportunityEvidence[];
 }
+
+/** kv_cache 里一天一行的共享机会池。 */
+export interface OpportunityPool {
+  version: 1;
+  /** 北京日期 YYYY-MM-DD。 */
+  date: string;
+  /** 原始事实的 capturedDate。 */
+  dataDate: string;
+  generatedAt: string;
+  items: OpportunityItem[];
+}

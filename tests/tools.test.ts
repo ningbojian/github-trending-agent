@@ -70,6 +70,12 @@ function fakeGithub(overrides: Partial<GithubClient> = {}): { client: GithubClie
     async listIssues() {
       return { ok: true, data: [], cached: false };
     },
+    async getIssueComments() {
+      return { ok: true, data: [], cached: false };
+    },
+    async searchIssues() {
+      return { ok: true, data: [], cached: false };
+    },
     ...overrides,
   };
   return { client, calls };

@@ -90,6 +90,8 @@ export interface IssueInfo {
   title: string;
   body: string;
   htmlUrl: string;
+  /** owner/repo；搜索接口用 repository_url 解析，仓库 issue 列表里可能为 null。 */
+  repository: string | null;
   labels: string[];
   comments: number;
   reactions: number;
@@ -97,6 +99,12 @@ export interface IssueInfo {
   updatedAt: string | null;
   authorAssociation: string | null;
   pullRequest: boolean;
+  assigned: boolean;
+}
+
+export interface IssueCommentInfo {
+  authorAssociation: string | null;
+  userLogin: string | null;
 }
 
 export interface GithubClient {
@@ -110,6 +118,19 @@ export interface GithubClient {
       labels?: string[];
       state?: 'open';
       perPage?: number;
+      token: string | null;
+    },
+  ): Promise<GithubResult<IssueInfo[]>>;
+  getIssueComments(
+    ref: RepoRef,
+    issueNumber: number,
+    token: string | null,
+  ): Promise<GithubResult<IssueCommentInfo[]>>;
+  searchIssues(
+    query: string,
+    options: {
+      perPage?: number;
+      sort?: 'reactions' | 'updated' | 'comments';
       token: string | null;
     },
   ): Promise<GithubResult<IssueInfo[]>>;
@@ -203,6 +224,7 @@ function parseIssues(value: unknown): IssueInfo[] | undefined {
       title: asString(item.title) ?? '',
       body: asString(item.body) ?? '',
       htmlUrl: asString(item.html_url) ?? '',
+      repository: repoFromApiUrl(asString(item.repository_url)),
       labels,
       comments: asNumber(item.comments) ?? 0,
       reactions,
@@ -210,10 +232,34 @@ function parseIssues(value: unknown): IssueInfo[] | undefined {
       updatedAt: asString(item.updated_at),
       authorAssociation: asString(item.author_association),
       pullRequest: isRecord(item.pull_request),
+      assigned: Array.isArray(item.assignees) && item.assignees.length > 0,
     });
   }
   // /issues 会混入 PR；机会发现只关心真正的 issue。
   return issues.filter((issue) => !issue.pullRequest);
+}
+
+function repoFromApiUrl(url: string | null): string | null {
+  if (url === null) return null;
+  const match = url.match(/\/repos\/([^/]+)\/([^/]+)$/);
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+function parseSearchIssues(value: unknown): IssueInfo[] | undefined {
+  if (!isRecord(value) || !Array.isArray(value.items)) return undefined;
+  return parseIssues(value.items);
+}
+
+function parseComments(value: unknown): IssueCommentInfo[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((item) => {
+    const record = isRecord(item) ? item : {};
+    const user = isRecord(record.user) ? record.user : {};
+    return {
+      authorAssociation: asString(record.author_association),
+      userLogin: asString(user.login),
+    };
+  });
 }
 
 /**
@@ -515,6 +561,39 @@ export function createGithubClient(options: GithubClientOptions = {}): GithubCli
         {
           token: options.token,
           parse: async (response) => parseIssues(await response.json()) ?? [],
+        },
+      );
+      return result.ok
+        ? { ok: true, data: result.data ?? [], cached: false }
+        : result;
+    },
+
+    async getIssueComments(ref, issueNumber, token) {
+      const result = await request<IssueCommentInfo[]>(
+        repoPath(ref, `/issues/${issueNumber}/comments?per_page=30`),
+        {
+          token,
+          parse: async (response) => parseComments(await response.json()) ?? [],
+        },
+      );
+      return result.ok
+        ? { ok: true, data: result.data ?? [], cached: false }
+        : result;
+    },
+
+    async searchIssues(query, options) {
+      const params = new URLSearchParams({
+        q: query,
+        per_page: String(options.perPage ?? 30),
+        sort: options.sort ?? 'reactions',
+        order: 'desc',
+      });
+      const result = await request<IssueInfo[]>(
+        `/search/issues?${params.toString()}`,
+        {
+          token: options.token,
+          parse: async (response) =>
+            parseSearchIssues(await response.json()) ?? [],
         },
       );
       return result.ok

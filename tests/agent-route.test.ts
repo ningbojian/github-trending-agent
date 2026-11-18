@@ -70,6 +70,12 @@ function fakeGithub(): GithubClient {
     async listIssues() {
       return { ok: true, data: [], cached: false };
     },
+    async getIssueComments() {
+      return { ok: true, data: [], cached: false };
+    },
+    async searchIssues() {
+      return { ok: true, data: [], cached: false };
+    },
   };
 }
 

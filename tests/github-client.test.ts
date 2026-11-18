@@ -392,4 +392,74 @@ describe('listIssues', () => {
     expect(calls[0]).toContain('state=open');
     expect(calls[0]).toContain('per_page=10');
   });
+
+  it('getIssueComments 解析 author_association', async () => {
+    const { client, calls } = setup([
+      response({
+        json: [
+          { author_association: 'CONTRIBUTOR', user: { login: 'alice' } },
+          { author_association: 'MEMBER', user: { login: 'maintainer' } },
+        ],
+      }),
+    ]);
+
+    const result = await client.getIssueComments(
+      parseRepoRef('acme/agent')!,
+      12,
+      null,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data).toEqual([
+      { authorAssociation: 'CONTRIBUTOR', userLogin: 'alice' },
+      { authorAssociation: 'MEMBER', userLogin: 'maintainer' },
+    ]);
+    expect(calls[0]).toContain('/repos/acme/agent/issues/12/comments');
+  });
+
+  it('searchIssues 解析 items 并编码查询', async () => {
+    const { client, calls } = setup([
+      response({
+        json: {
+          total_count: 1,
+          items: [
+            {
+              number: 9,
+              title: 'RFC: async drop',
+              body: 'open question',
+              html_url: 'https://github.com/acme/agent/issues/9',
+              repository_url: 'https://api.github.com/repos/acme/agent',
+              labels: [{ name: 'RFC' }],
+              comments: 4,
+              reactions: { total_count: 7 },
+              created_at: '2026-10-01T00:00:00Z',
+              updated_at: '2026-11-15T00:00:00Z',
+              author_association: 'MEMBER',
+              assignees: [],
+            },
+          ],
+        },
+      }),
+    ]);
+
+    const result = await client.searchIssues('is:issue is:open label:RFC', {
+      perPage: 20,
+      token: null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data[0]).toMatchObject({
+      number: 9,
+      repository: 'acme/agent',
+      labels: ['RFC'],
+      comments: 4,
+      reactions: 7,
+      assigned: false,
+    });
+    expect(calls[0]).toContain('/search/issues');
+    expect(calls[0]).toContain('q=is%3Aissue+is%3Aopen+label%3ARFC');
+    expect(calls[0]).toContain('per_page=20');
+  });
 });

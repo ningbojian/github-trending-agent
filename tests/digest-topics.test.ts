@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { selectEntriesForPreferences } from '../src/agent/digest-snapshot';
+import { buildDigestFromSnapshot, buildDigestNewsFromSnapshot } from '../src/agent/digest';
+import { selectEntriesForPreferences, type DigestSnapshot } from '../src/agent/digest-snapshot';
 
 function item(fullName: string, topics: string[]) {
   return {
@@ -51,5 +52,34 @@ describe('selectEntriesForPreferences — 方向过滤', () => {
   it('全都命中不了时退回原列表（避免空简报）', () => {
     const out = selectEntriesForPreferences(ITEMS, { topics: ['quant'] }, 8);
     expect(out).toHaveLength(3);
+  });
+});
+
+const SNAPSHOT: DigestSnapshot = {
+  date: '2026-11-18',
+  dataDate: '2026-11-18',
+  abstract: null,
+  items: ITEMS,
+};
+
+describe('企微简报构建 — 方向订阅接线', () => {
+  it('buildDigestFromSnapshot 应用 topics', async () => {
+    const out = await buildDigestFromSnapshot(
+      { preferences: { topics: ['agent'] } },
+      SNAPSHOT,
+    );
+    expect(out.entries.map((entry) => entry.fullName)).toEqual([
+      'acme/agent-kit',
+    ]);
+  });
+
+  it('buildDigestNewsFromSnapshot 应用 topics', async () => {
+    const out = await buildDigestNewsFromSnapshot(
+      { preferences: { topics: ['agent'] } },
+      SNAPSHOT,
+    );
+    expect(out.entries.map((entry) => entry.fullName)).toEqual([
+      'acme/agent-kit',
+    ]);
   });
 });

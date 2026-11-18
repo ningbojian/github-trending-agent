@@ -323,13 +323,14 @@ export async function buildDigestFromSnapshot(
     preferences: {
       languages?: unknown;
       keywords?: unknown;
+      topics?: unknown;
       digestCount?: unknown;
     };
   },
   snapshot: DigestSnapshot,
   accept?: (item: DigestSnapshotItem) => boolean,
 ): Promise<{ content: string; entries: { fullName: string }[] }> {
-  const { languages, keywords, digestCount } = normalizePreferences(
+  const { languages, keywords, topics, digestCount } = normalizePreferences(
     sub.preferences,
   );
   const selected = selectEntriesForPreferences(
@@ -337,6 +338,7 @@ export async function buildDigestFromSnapshot(
     {
       languages,
       keywords,
+      topics,
       digestCount,
     },
     DEFAULT_DIGEST_COUNT,
@@ -369,6 +371,7 @@ export async function buildDigestNewsFromSnapshot(
     preferences: {
       languages?: unknown;
       keywords?: unknown;
+      topics?: unknown;
       digestCount?: unknown;
     };
   },
@@ -377,10 +380,10 @@ export async function buildDigestNewsFromSnapshot(
     accept?: (item: DigestSnapshotItem) => boolean;
   } = {},
 ): Promise<{ articles: NewsArticle[]; entries: { fullName: string }[] }> {
-  const { languages, keywords, digestCount } = normalizePreferences(sub.preferences);
+  const { languages, keywords, topics, digestCount } = normalizePreferences(sub.preferences);
   const selected = selectEntriesForPreferences(
     snapshot.items,
-    { languages, keywords, digestCount },
+    { languages, keywords, topics, digestCount },
     DEFAULT_DIGEST_COUNT,
     options.accept,
   ).slice(0, NEWS_MAX_ARTICLES);

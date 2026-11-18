@@ -76,6 +76,7 @@ jobs:
       - name: 采集机会事实（填写坑/研究候选）
         # 公开数据 only：写入 source_items，不含 userid/邮箱；失败不拖垮主链路。
         continue-on-error: true
+        timeout-minutes: 10
         run: npx tsx src/opportunities/run-collect.ts
 
       - name: 构建机会池（运营方 LLM，一天一次）

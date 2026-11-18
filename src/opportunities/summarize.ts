@@ -69,16 +69,20 @@ function normalize(
   value: unknown,
   items: OpportunityItem[],
 ): Map<string, OpportunitySummary> {
-  const ids = new Set(items.map((item) => item.id));
+  const byId = new Map(items.map((item) => [item.id, item]));
   const summaries = new Map<string, OpportunitySummary>();
   const parsed = SUMMARY_SCHEMA.safeParse(value);
   if (parsed.success) {
     for (const row of parsed.data.items) {
-      if (!ids.has(row.id)) continue;
+      const item = byId.get(row.id);
+      if (!item) continue;
+      const fallback = templateSummary(item);
+      const why = capText(row.why);
+      const firstStep = capText(row.firstStep);
       summaries.set(row.id, {
         id: row.id,
-        why: row.why.slice(0, 120),
-        firstStep: row.firstStep.slice(0, 120),
+        why: why === '' ? fallback.why : why,
+        firstStep: firstStep === '' ? fallback.firstStep : firstStep,
         effort: row.effort,
         confidence: row.confidence,
       });
@@ -90,6 +94,11 @@ function normalize(
     }
   }
   return summaries;
+}
+
+function capText(text: string, max = 80): string {
+  const chars = [...text.trim()];
+  return chars.length > max ? chars.slice(0, max).join('') : text.trim();
 }
 
 /**

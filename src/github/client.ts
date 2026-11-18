@@ -107,6 +107,11 @@ export interface IssueCommentInfo {
   userLogin: string | null;
 }
 
+export interface IssueTimelineInfo {
+  /** 是否已有 open / merged 的关联 PR（有人在做了）。 */
+  linkedPr: boolean;
+}
+
 export interface GithubClient {
   getRepo(ref: RepoRef, token: string | null): Promise<GithubResult<RepoInfo>>;
   getReadme(ref: RepoRef, token: string | null): Promise<GithubResult<string | null>>;
@@ -126,6 +131,11 @@ export interface GithubClient {
     issueNumber: number,
     token: string | null,
   ): Promise<GithubResult<IssueCommentInfo[]>>;
+  getIssueTimeline(
+    ref: RepoRef,
+    issueNumber: number,
+    token: string | null,
+  ): Promise<GithubResult<IssueTimelineInfo>>;
   searchIssues(
     query: string,
     options: {
@@ -260,6 +270,20 @@ function parseComments(value: unknown): IssueCommentInfo[] | undefined {
       userLogin: asString(user.login),
     };
   });
+}
+
+function parseTimeline(value: unknown): IssueTimelineInfo | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const linkedPr = value.some((event) => {
+    if (!isRecord(event) || event.event !== 'cross-referenced') return false;
+    const source = isRecord(event.source) ? event.source : {};
+    const issue = isRecord(source.issue) ? source.issue : {};
+    const pr = issue.pull_request;
+    if (!isRecord(pr)) return false;
+    // open 的 PR 说明有人在做；merged 的说明已经修了（issue 未关多半是漏关）。
+    return issue.state === 'open' || typeof pr.merged_at === 'string';
+  });
+  return { linkedPr };
 }
 
 /**
@@ -578,6 +602,25 @@ export function createGithubClient(options: GithubClientOptions = {}): GithubCli
       );
       return result.ok
         ? { ok: true, data: result.data ?? [], cached: false }
+        : result;
+    },
+
+    async getIssueTimeline(ref, issueNumber, token) {
+      const result = await request<IssueTimelineInfo>(
+        repoPath(ref, `/issues/${issueNumber}/timeline?per_page=100`),
+        {
+          token,
+          accept: 'application/vnd.github.mockingbird-preview+json',
+          parse: async (response) =>
+            parseTimeline(await response.json()) ?? { linkedPr: false },
+        },
+      );
+      return result.ok
+        ? {
+            ok: true,
+            data: result.data ?? { linkedPr: false },
+            cached: false,
+          }
         : result;
     },
 

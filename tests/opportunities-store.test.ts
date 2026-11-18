@@ -59,6 +59,16 @@ describe('opportunity store', () => {
     await expect(readShownOpportunities('u1')).resolves.toEqual(new Set());
   });
 
+  it('过期行不再生效', async () => {
+    dbMock.rows = [
+      {
+        value: { ids: ['a', 'b'] },
+        expiresAt: new Date(Date.now() - 1000),
+      },
+    ];
+    await expect(readHiddenOpportunities('u1')).resolves.toEqual(new Set());
+  });
+
   it('hide 追加并去重，保留最近 200 条', async () => {
     dbMock.rows = [
       { value: { ids: Array.from({ length: 200 }, (_, i) => `id-${i}`) } },

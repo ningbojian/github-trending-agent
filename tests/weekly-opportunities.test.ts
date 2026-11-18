@@ -55,10 +55,12 @@ vi.mock('../src/agent/taste', () => ({
 
 const storeMock = vi.hoisted(() => ({
   readHiddenOpportunities: vi.fn(async () => new Set<string>()),
+  readShownOpportunities: vi.fn(async () => new Set<string>()),
   markOpportunitiesShown: vi.fn(async () => undefined),
 }));
 vi.mock('../src/opportunities/store', () => ({
   readHiddenOpportunities: storeMock.readHiddenOpportunities,
+  readShownOpportunities: storeMock.readShownOpportunities,
   markOpportunitiesShown: storeMock.markOpportunitiesShown,
 }));
 
@@ -139,6 +141,8 @@ beforeEach(() => {
   poolMock.readOpportunityPool.mockResolvedValue(POOL as unknown);
   tasteMock.loadUserSignals.mockClear();
   storeMock.readHiddenOpportunities.mockClear();
+  storeMock.readShownOpportunities.mockReset();
+  storeMock.readShownOpportunities.mockResolvedValue(new Set());
   storeMock.markOpportunitiesShown.mockClear();
   apiMock.sendWeComText.mockReset();
   apiMock.sendWeComText.mockResolvedValue(undefined);
@@ -177,5 +181,30 @@ describe('pushWeeklyOpportunities', () => {
 
     const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
     expect(result).toEqual({ sent: 1, skipped: 1, failed: 1 });
+  });
+
+  it('已展示过的条目不再进本周推送', async () => {
+    storeMock.readShownOpportunities.mockResolvedValue(
+      new Set(['contribute:acme/agent#12']),
+    );
+
+    const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
+
+    expect(result.sent).toBe(2);
+    const text = apiMock.sendWeComText.mock.calls[0]![1] as string;
+    expect(text).not.toContain('https://github.com/acme/agent/issues/12');
+    expect(text).toContain('https://github.com/acme/two/issues/2');
+  });
+
+  it('超过 50 个订阅者也不丢人', async () => {
+    dbMock.subscriberRows = Array.from({ length: 60 }, (_, index) => ({
+      wecomUserid: `u${index}`,
+      preferences: {},
+    }));
+
+    const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
+
+    expect(result.sent).toBe(60);
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(60);
   });
 });

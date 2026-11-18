@@ -179,4 +179,14 @@ describe('formatOpportunityReply', () => {
     expect(text).toContain('难度：小');
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1900);
   });
+
+  it('超长 emoji 标题/文案也绝不超过 1900 字节', () => {
+    const huge = item({
+      title: '😀'.repeat(400),
+      why: '很长的理由'.repeat(200),
+      firstStep: '第一步'.repeat(100),
+    });
+    const text = formatOpportunityReply([huge]);
+    expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1900);
+  });
 });

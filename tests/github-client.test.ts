@@ -418,6 +418,61 @@ describe('listIssues', () => {
     expect(calls[0]).toContain('/repos/acme/agent/issues/12/comments');
   });
 
+  it('getIssueTimeline 识别 open/merged linked PR', async () => {
+    const { client, calls } = setup([
+      response({
+        json: [
+          {
+            event: 'cross-referenced',
+            source: {
+              issue: {
+                state: 'open',
+                pull_request: { merged_at: null },
+              },
+            },
+          },
+          { event: 'commented' },
+        ],
+      }),
+    ]);
+
+    const result = await client.getIssueTimeline(
+      parseRepoRef('acme/agent')!,
+      12,
+      null,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.linkedPr).toBe(true);
+    expect(calls[0]).toContain('/repos/acme/agent/issues/12/timeline');
+  });
+
+  it('getIssueTimeline 不把 closed-unmerged PR 当占用', async () => {
+    const { client } = setup([
+      response({
+        json: [
+          {
+            event: 'cross-referenced',
+            source: {
+              issue: {
+                state: 'closed',
+                pull_request: { merged_at: null },
+              },
+            },
+          },
+        ],
+      }),
+    ]);
+    const result = await client.getIssueTimeline(
+      parseRepoRef('acme/agent')!,
+      12,
+      null,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.linkedPr).toBe(false);
+  });
+
   it('searchIssues 解析 items 并编码查询', async () => {
     const { client, calls } = setup([
       response({

@@ -29,6 +29,8 @@ export interface OpportunityBuildDeps {
   ) => Promise<Map<string, OpportunitySummary>>;
   claim?: (date: string) => Promise<boolean>;
   release?: (date: string) => Promise<void>;
+  /** 人工抽查/调门槛后强制重建当天池。 */
+  force?: boolean;
 }
 
 export function poolKey(date: string): string {
@@ -196,9 +198,11 @@ export async function buildOpportunityPool(
   const claim = deps.claim ?? tryClaimBuild;
   const release = deps.release ?? releaseBuildLock;
 
-  // Actions 重跑/手动触发时不要重复烧 LLM：当天池已存在直接返回。
-  const existing = await readOpportunityPool(now);
-  if (existing) return { pool: existing };
+  // Actions 重跑/手动触发时不要重复烧 LLM：当天池已存在直接返回；force=1 跳过。
+  if (!deps.force) {
+    const existing = await readOpportunityPool(now);
+    if (existing) return { pool: existing };
+  }
 
   if (!(await claim(date))) {
     return { pool: null, reason: 'locked' };

@@ -15,10 +15,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 async function readIds(key: string): Promise<string[]> {
   try {
     const rows = await db()
-      .select({ value: kvCache.value })
+      .select({ value: kvCache.value, expiresAt: kvCache.expiresAt })
       .from(kvCache)
       .where(eq(kvCache.key, key));
-    const value = rows[0]?.value;
+    const row = rows[0];
+    if (!row) return [];
+    const expiresAt =
+      row.expiresAt instanceof Date
+        ? row.expiresAt
+        : new Date(String(row.expiresAt ?? ''));
+    if (
+      Number.isFinite(expiresAt.getTime()) &&
+      expiresAt.getTime() <= Date.now()
+    ) {
+      return [];
+    }
+    const value = row.value;
     if (!isRecord(value) || !Array.isArray(value.ids)) return [];
     return value.ids.filter((id): id is string => typeof id === 'string');
   } catch {

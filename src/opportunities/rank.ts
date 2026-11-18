@@ -68,8 +68,8 @@ function fitScore(item: OpportunityItem, signals: OpportunitySignals): number {
   }
 
   if (
-    signals.favoriteRepos.has(item.repo) ||
-    signals.trackedRepos.has(item.repo)
+    new Set([...signals.favoriteRepos].map(normalize)).has(normalize(item.repo)) ||
+    new Set([...signals.trackedRepos].map(normalize)).has(normalize(item.repo))
   ) {
     boost += 0.5;
   }

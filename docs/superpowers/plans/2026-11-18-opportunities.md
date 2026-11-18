@@ -433,7 +433,7 @@ export async function pushWeeklyOpportunities(
 
 - [ ] **Step 1:** `npm test` 全绿；`npx tsc --noEmit` 干净；`npm run eval:ci` 通过。
 - [ ] **Step 2:** 手动跑一次 `run-collect.ts`（本地 `.env` 需要 `NEON_DATABASE_URL` + `GITHUB_TOKEN`），检查写入条数。
-- [ ] **Step 3:** 手动调 `task=opportunity`（本地/预览），生成当天池；人工抽查 20 条：是否陈旧、是否已 assign、是否有明确第一步、中文覆盖如何；不达标就调门槛后重跑。
+- [ ] **Step 3:** 手动调 `task=opportunity`（本地/预览），生成当天池；调门槛后用 `&force=1` 强制重建；人工抽查 20 条：是否陈旧、是否已 assign、是否有明确第一步、中文覆盖如何；不达标就调门槛后重跑。
 - [ ] **Step 4:** 分支 review（superpowers:requesting-code-review），修复 Important。
 - [ ] **Step 5:** 合并 main、推送、确认 Vercel 部署；部署后看一次 `opportunity-pool:v1:<date>` 和命令/面板。
 - [ ] **Step 6:** 监控：池大小、采集成功数、LLM token、命令/面板使用、周报发送计数；前 3 天每天人工看一次。

@@ -162,7 +162,20 @@ export function selectOpportunityItems(
 ): OpportunityItem[] {
   const contributeLimit = options.contribute ?? 12;
   const researchLimit = options.research ?? 6;
-  const unique = [...new Map(facts.map((fact) => [fact.id, fact])).values()];
+  const uniqueById = [...new Map(facts.map((fact) => [fact.id, fact])).values()];
+  // 同一个 repo#issue 可能同时被填坑和研究搜到：池里只保留一条（优先填坑）。
+  const byIssue = new Map<string, RawOpportunityFact>();
+  for (const fact of uniqueById) {
+    const key = `${fact.repo.toLowerCase()}#${fact.issueNumber}`;
+    const existing = byIssue.get(key);
+    if (
+      !existing ||
+      (existing.kind === 'research' && fact.kind === 'contribute')
+    ) {
+      byIssue.set(key, fact);
+    }
+  }
+  const unique = [...byIssue.values()];
 
   const items = unique
     .filter((fact) => passesOpportunityGate(fact, now).ok)

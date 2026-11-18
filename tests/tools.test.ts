@@ -73,6 +73,9 @@ function fakeGithub(overrides: Partial<GithubClient> = {}): { client: GithubClie
     async getIssueComments() {
       return { ok: true, data: [], cached: false };
     },
+    async getIssueTimeline() {
+      return { ok: true, data: { linkedPr: false }, cached: false };
+    },
     async searchIssues() {
       return { ok: true, data: [], cached: false };
     },

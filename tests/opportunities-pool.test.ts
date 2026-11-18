@@ -148,6 +148,26 @@ describe('buildOpportunityPool', () => {
     expect(dbMock.insertCalls).toEqual([]);
   });
 
+  it('force=true 时跳过已有池并重建', async () => {
+    dbMock.kvRows = [
+      {
+        value: pool({ items: [] }),
+        expiresAt: new Date(NOW.getTime() + 60_000),
+      },
+    ];
+    const readRawFacts = vi.fn(async () => [fact()]);
+
+    const result = await buildOpportunityPool(NOW, {
+      ...deps,
+      force: true,
+      readRawFacts,
+    });
+
+    expect(readRawFacts).toHaveBeenCalledTimes(1);
+    expect(result.pool?.items).toHaveLength(1);
+    expect(dbMock.insertCalls).not.toEqual([]);
+  });
+
   it('选择、合成并写入当天池', async () => {
     const facts = [
       fact(),

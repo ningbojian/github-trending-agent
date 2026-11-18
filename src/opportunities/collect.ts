@@ -204,33 +204,39 @@ export async function collectOpportunities(
 
   const uniqueFacts = [...new Map(facts.map((fact) => [fact.id, fact])).values()];
 
-  // 维护者互动是最强的质量信号；只对首轮分数最高的一小批多打一次 comments。
+  // 维护者互动 + linked PR 是最强的质量信号；只对首轮分数最高的一小批
+  // 多打 comments / timeline 两次请求。其余条目的 linkedPr 保持 false（未知），
+  // 由质量门槛按「未确认」处理。
   const top = [...uniqueFacts]
     .sort(
       (a, b) =>
         scoreOpportunity(b, now.getTime()) -
         scoreOpportunity(a, now.getTime()),
     )
-    .slice(0, 20);
+    .slice(0, 30);
   for (const fact of top) {
     const ref = parseRepoRef(fact.repo);
     if (!ref) continue;
     try {
-      requests += 1;
-      const result = await client.getIssueComments(
-        ref,
-        fact.issueNumber,
-        token,
-      );
-      if (!result.ok) {
-        errors.push(`${fact.id}: ${result.message}`);
-        continue;
+      requests += 2;
+      const [comments, timeline] = await Promise.all([
+        client.getIssueComments(ref, fact.issueNumber, token),
+        client.getIssueTimeline(ref, fact.issueNumber, token),
+      ]);
+      if (comments.ok) {
+        fact.maintainerEngaged = comments.data.some((comment) =>
+          ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(
+            (comment.authorAssociation ?? '').toUpperCase(),
+          ),
+        );
+      } else {
+        errors.push(`${fact.id}: ${comments.message}`);
       }
-      fact.maintainerEngaged = result.data.some((comment) =>
-        ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(
-          (comment.authorAssociation ?? '').toUpperCase(),
-        ),
-      );
+      if (timeline.ok) {
+        fact.linkedPr = timeline.data.linkedPr;
+      } else {
+        errors.push(`${fact.id}: ${timeline.message}`);
+      }
     } catch (err) {
       errors.push(`${fact.id}: ${errorMessage(err)}`);
     }

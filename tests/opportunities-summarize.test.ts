@@ -100,4 +100,44 @@ describe('summarizeOpportunities', () => {
     });
     expect(failed.get(A.id)).toEqual(templateSummary(A));
   });
+
+  it('空 why/firstStep 回退模板，长文本截到 80 字', async () => {
+    const map = await summarizeOpportunities([A], {
+      generate: async () =>
+        JSON.stringify({
+          items: [
+            {
+              id: A.id,
+              why: '',
+              firstStep: '   ',
+              effort: '小',
+              confidence: '高',
+            },
+          ],
+        }),
+    });
+    expect(map.get(A.id)).toMatchObject({
+      why: A.why,
+      firstStep: A.firstStep,
+      effort: '小',
+      confidence: '高',
+    });
+
+    const long = await summarizeOpportunities([A], {
+      generate: async () =>
+        JSON.stringify({
+          items: [
+            {
+              id: A.id,
+              why: '很'.repeat(200),
+              firstStep: '步'.repeat(200),
+              effort: '小',
+              confidence: '高',
+            },
+          ],
+        }),
+    });
+    expect([...long.get(A.id)!.why].length).toBeLessThanOrEqual(80);
+    expect([...long.get(A.id)!.firstStep].length).toBeLessThanOrEqual(80);
+  });
 });

@@ -1042,13 +1042,13 @@ async function renderSettings(
            <select class="p-select" name="weatherCity">${cityOptions}</select>
            <span class="p-hint">自动只到城市级；不准时手动选一个。</span>
          </label>
-         <label class="p-field">
+         <div class="p-field">
            <span class="p-label">每周机会</span>
            <label class="p-check"><input type="checkbox" name="weeklyOpportunities" value="on"${
              prefs.weeklyOpportunities ? ' checked' : ''
            }> 周一推送 2 填坑 + 1 研究</label>
            <span class="p-hint">和每日简报分开，只在周一发一条。</span>
-         </label>`,
+         </div>`,
       )}
       ${card('保存', '<button class="p-btn block" type="submit">保存设置</button>')}
      </form>

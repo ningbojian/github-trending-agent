@@ -99,7 +99,11 @@ export default async function handler(
   const task = Array.isArray(req.query?.task) ? req.query.task[0] : req.query?.task;
   if (task === 'opportunity') {
     try {
-      const result = await buildOpportunityPool(new Date());
+      const force =
+        (Array.isArray(req.query?.force)
+          ? req.query.force[0]
+          : req.query?.force) === '1';
+      const result = await buildOpportunityPool(new Date(), { force });
       sendJson(res, 200, {
         ok: result.pool !== null,
         date: result.pool?.date ?? null,

@@ -7,6 +7,7 @@ import { rankOpportunities } from '../opportunities/rank.js';
 import {
   markOpportunitiesShown,
   readHiddenOpportunities,
+  readShownOpportunities,
 } from '../opportunities/store.js';
 import { sendWeComText } from '../wecom/api.js';
 import { normalizePreferences } from './preferences.js';
@@ -15,7 +16,6 @@ import { shanghaiToday } from './time.js';
 
 const CLAIM_PREFIX = 'opportunity-weekly-sent:v1:';
 const CLAIM_TTL_MS = 2 * 24 * 60 * 60 * 1000;
-const MAX_USERS = 50;
 
 const EMPTY_SIGNALS = {
   starred: new Set<string>(),
@@ -74,7 +74,7 @@ export async function pushWeeklyOpportunities(
   let skipped = 0;
   let failed = 0;
 
-  for (const row of rows.slice(0, MAX_USERS)) {
+  for (const row of rows) {
     const prefs = normalizePreferences(row.preferences ?? {});
     if (!prefs.weeklyOpportunities) {
       skipped += 1;
@@ -85,9 +85,10 @@ export async function pushWeeklyOpportunities(
       continue;
     }
     try {
-      const [taste, hidden] = await Promise.all([
+      const [taste, hidden, shown] = await Promise.all([
         loadUserSignals(row.userid, now).catch(() => EMPTY_SIGNALS),
         readHiddenOpportunities(row.userid),
+        readShownOpportunities(row.userid),
       ]);
       const items = rankOpportunities(
         pool.items,
@@ -100,7 +101,7 @@ export async function pushWeeklyOpportunities(
           favoriteRepos: taste.starred,
           trackedRepos: new Set(),
           hidden,
-          shown: new Set(),
+          shown,
         },
         { limit: 3, contribute: 2, research: 1 },
       );

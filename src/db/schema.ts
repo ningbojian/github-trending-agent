@@ -76,6 +76,8 @@ export const subscribers = pgTable(
         pushTime?: string;
         /** 推送间隔天数 1–30（缺省 1 = 每天）。 */
         intervalDays?: number;
+        /** 周一机会推送开关；缺省 true。 */
+        weeklyOpportunities?: boolean;
       }>()
       .notNull()
       .default(sql`'{"languages":[],"keywords":[]}'`),
@@ -123,6 +125,8 @@ export const emailSubscribers = pgTable(
         keywords: string[];
         /** 订阅方向（directions.ts 的 key）。 */
         topics?: string[];
+        /** 周一邮件附带机会开关；缺省 true。 */
+        weeklyOpportunities?: boolean;
       }>()
       .notNull()
       .default(

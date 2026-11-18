@@ -140,6 +140,7 @@ describe('selectOpportunityItems', () => {
       fact({
         id: 'research:acme/agent#9',
         kind: 'research',
+        issueNumber: 9,
         labels: ['RFC'],
         assigned: true,
       }),
@@ -153,6 +154,24 @@ describe('selectOpportunityItems', () => {
       'contribute:acme/agent#12',
       'research:acme/agent#9',
     ]);
+  });
+
+  it('同一 repo#issue 同时命中两类时只保留填坑', () => {
+    const facts = [
+      fact(),
+      fact({
+        id: 'research:acme/agent#12',
+        kind: 'research',
+        labels: ['RFC'],
+        assigned: true,
+      }),
+    ];
+    const items = selectOpportunityItems(facts, NOW, {
+      contribute: 1,
+      research: 1,
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.id).toBe('contribute:acme/agent#12');
   });
 
   it('某类不足时用另一类补齐', () => {

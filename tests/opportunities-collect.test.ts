@@ -103,6 +103,13 @@ function fakeClient(overrides: Partial<GithubClient> = {}): GithubClient {
         cached: false,
       };
     },
+    async getIssueTimeline() {
+      return {
+        ok: true,
+        data: { linkedPr: false },
+        cached: false,
+      };
+    },
     async searchIssues(query) {
       return {
         ok: true,
@@ -160,6 +167,23 @@ describe('collectOpportunities', () => {
       'research:acme/agent#9',
     ]);
     expect(result.errors.join('\n')).toContain('boom');
+  });
+
+  it('timeline 发现 linked PR 时写回 linkedPr', async () => {
+    const result = await collectOpportunities(NOW, {
+      client: fakeClient({
+        async getIssueTimeline() {
+          return { ok: true, data: { linkedPr: true }, cached: false };
+        },
+      }),
+      listCandidateRepos: async () => ['acme/agent'],
+      token: null,
+    });
+
+    const contribute = result.facts.find(
+      (fact) => fact.kind === 'contribute',
+    );
+    expect(contribute?.linkedPr).toBe(true);
   });
 
   it('upsertOpportunityFacts 写入 source_items 形状', async () => {

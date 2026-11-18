@@ -196,6 +196,10 @@ export async function buildOpportunityPool(
   const claim = deps.claim ?? tryClaimBuild;
   const release = deps.release ?? releaseBuildLock;
 
+  // Actions 重跑/手动触发时不要重复烧 LLM：当天池已存在直接返回。
+  const existing = await readOpportunityPool(now);
+  if (existing) return { pool: existing };
+
   if (!(await claim(date))) {
     return { pool: null, reason: 'locked' };
   }

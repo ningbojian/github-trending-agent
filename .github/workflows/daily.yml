@@ -73,6 +73,26 @@ jobs:
         continue-on-error: true
         run: npx tsx src/sources/run-sources.ts
 
+      - name: 采集机会事实（填写坑/研究候选）
+        # 公开数据 only：写入 source_items，不含 userid/邮箱；失败不拖垮主链路。
+        continue-on-error: true
+        run: npx tsx src/opportunities/run-collect.ts
+
+      - name: 构建机会池（运营方 LLM，一天一次）
+        if: env.VERCEL_URL != '' && env.CRON_SECRET != ''
+        continue-on-error: true
+        run: |
+          # 复用现有 cron 端点，不新增 Vercel 函数；池构建失败只 warning，
+          # 命令/面板会显示空状态，下一天再补。
+          CODE=$(curl -sS --max-time 150 -o opportunity-resp.json -w "%{http_code}" -X POST "https://${VERCEL_URL}/api/cron-push-digest?task=opportunity" \
+            -H "Authorization: Bearer ${CRON_SECRET}")
+          echo "HTTP ${CODE}"
+          cat opportunity-resp.json 2>/dev/null || true; echo
+          if [ "${CODE}" != "200" ]; then
+            echo "::warning::机会池构建返回 ${CODE}；命令/面板会显示空状态"
+            exit 0
+          fi
+
       - name: 兜底触发一次简报推送
         if: env.VERCEL_URL != '' && env.CRON_SECRET != ''
         run: |

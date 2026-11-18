@@ -129,6 +129,25 @@ describe('buildOpportunityPool', () => {
     release: async () => {},
   };
 
+  it('当天已有池 → 直接返回，不重建、不再调 LLM', async () => {
+    dbMock.kvRows = [
+      {
+        value: pool({ items: [] }),
+        expiresAt: new Date(NOW.getTime() + 60_000),
+      },
+    ];
+    const readRawFacts = vi.fn(async () => [fact()]);
+
+    const result = await buildOpportunityPool(NOW, {
+      ...deps,
+      readRawFacts,
+    });
+
+    expect(result.pool?.items).toEqual([]);
+    expect(readRawFacts).not.toHaveBeenCalled();
+    expect(dbMock.insertCalls).toEqual([]);
+  });
+
   it('选择、合成并写入当天池', async () => {
     const facts = [
       fact(),

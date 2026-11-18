@@ -333,3 +333,63 @@ describe('GitHub 客户端 — readme / releases / commits', () => {
     expect(headers[0]?.['X-GitHub-Api-Version']).toBe('2022-11-28');
   });
 });
+
+describe('listIssues', () => {
+  it('解析 issue、过滤 PR，并带 labels/state 参数', async () => {
+    const { client, calls } = setup([
+      response({
+        json: [
+          {
+            number: 7,
+            title: 'A pull request',
+            body: '',
+            html_url: 'https://github.com/acme/agent/pull/7',
+            labels: [],
+            comments: 0,
+            reactions: { total_count: 0 },
+            created_at: '2026-11-01T00:00:00Z',
+            updated_at: '2026-11-16T00:00:00Z',
+            author_association: 'MEMBER',
+            pull_request: { url: 'https://api.github.com/repos/acme/agent/pulls/7' },
+          },
+          {
+            number: 12,
+            title: 'Windows 下 CUDA 检测失败',
+            body: '复现步骤...',
+            html_url: 'https://github.com/acme/agent/issues/12',
+            labels: [{ name: 'good first issue' }],
+            comments: 3,
+            reactions: { total_count: 2 },
+            created_at: '2026-11-01T00:00:00Z',
+            updated_at: '2026-11-16T00:00:00Z',
+            author_association: 'CONTRIBUTOR',
+          },
+        ],
+      }),
+    ]);
+
+    const result = await client.listIssues(parseRepoRef('acme/agent')!, {
+      labels: ['good first issue'],
+      state: 'open',
+      perPage: 10,
+      token: null,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data).toHaveLength(1);
+    expect(result.data[0]).toMatchObject({
+      number: 12,
+      title: 'Windows 下 CUDA 检测失败',
+      labels: ['good first issue'],
+      comments: 3,
+      reactions: 2,
+      authorAssociation: 'CONTRIBUTOR',
+      pullRequest: false,
+    });
+    expect(calls[0]).toContain('/repos/acme/agent/issues');
+    expect(calls[0]).toContain('labels=good+first+issue');
+    expect(calls[0]).toContain('state=open');
+    expect(calls[0]).toContain('per_page=10');
+  });
+});

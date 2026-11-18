@@ -67,6 +67,9 @@ function fakeGithub(overrides: Partial<GithubClient> = {}): { client: GithubClie
       calls.fetch.push('commits');
       return { ok: true, data: COMMITS, cached: false };
     },
+    async listIssues() {
+      return { ok: true, data: [], cached: false };
+    },
     ...overrides,
   };
   return { client, calls };

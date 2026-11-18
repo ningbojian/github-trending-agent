@@ -85,11 +85,34 @@ export interface CommitInfo {
   date: string | null;
 }
 
+export interface IssueInfo {
+  number: number;
+  title: string;
+  body: string;
+  htmlUrl: string;
+  labels: string[];
+  comments: number;
+  reactions: number;
+  createdAt: string | null;
+  updatedAt: string | null;
+  authorAssociation: string | null;
+  pullRequest: boolean;
+}
+
 export interface GithubClient {
   getRepo(ref: RepoRef, token: string | null): Promise<GithubResult<RepoInfo>>;
   getReadme(ref: RepoRef, token: string | null): Promise<GithubResult<string | null>>;
   getReleases(ref: RepoRef, token: string | null): Promise<GithubResult<ReleaseInfo[]>>;
   getCommits(ref: RepoRef, token: string | null): Promise<GithubResult<CommitInfo[]>>;
+  listIssues(
+    ref: RepoRef,
+    options: {
+      labels?: string[];
+      state?: 'open';
+      perPage?: number;
+      token: string | null;
+    },
+  ): Promise<GithubResult<IssueInfo[]>>;
 }
 
 function repoKey(ref: RepoRef): string {
@@ -158,6 +181,39 @@ function parseCommits(value: unknown): CommitInfo[] | undefined {
       date: asString(record.date),
     };
   });
+}
+
+function parseIssues(value: unknown): IssueInfo[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const issues: IssueInfo[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const number = asNumber(item.number);
+    if (number === null) continue;
+    const labels = Array.isArray(item.labels)
+      ? item.labels.flatMap((label) =>
+          isRecord(label) && typeof label.name === 'string' ? [label.name] : [],
+        )
+      : [];
+    const reactions = isRecord(item.reactions)
+      ? asNumber(item.reactions.total_count) ?? 0
+      : 0;
+    issues.push({
+      number,
+      title: asString(item.title) ?? '',
+      body: asString(item.body) ?? '',
+      htmlUrl: asString(item.html_url) ?? '',
+      labels,
+      comments: asNumber(item.comments) ?? 0,
+      reactions,
+      createdAt: asString(item.created_at),
+      updatedAt: asString(item.updated_at),
+      authorAssociation: asString(item.author_association),
+      pullRequest: isRecord(item.pull_request),
+    });
+  }
+  // /issues 会混入 PR；机会发现只关心真正的 issue。
+  return issues.filter((issue) => !issue.pullRequest);
 }
 
 /**
@@ -443,6 +499,27 @@ export function createGithubClient(options: GithubClientOptions = {}): GithubCli
             : result;
         },
       );
+    },
+
+    async listIssues(ref, options) {
+      const params = new URLSearchParams({
+        state: options.state ?? 'open',
+        per_page: String(options.perPage ?? 20),
+      });
+      if (options.labels && options.labels.length > 0) {
+        // GitHub 的 labels 参数是 AND 语义；调用方应按单个标签分别请求。
+        params.set('labels', options.labels.join(','));
+      }
+      const result = await request<IssueInfo[]>(
+        `${repoPath(ref, '/issues')}?${params.toString()}`,
+        {
+          token: options.token,
+          parse: async (response) => parseIssues(await response.json()) ?? [],
+        },
+      );
+      return result.ok
+        ? { ok: true, data: result.data ?? [], cached: false }
+        : result;
     },
   };
 }

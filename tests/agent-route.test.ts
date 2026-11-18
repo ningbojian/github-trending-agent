@@ -67,6 +67,9 @@ function fakeGithub(): GithubClient {
     async getCommits() {
       return { ok: true, data: [], cached: false };
     },
+    async listIssues() {
+      return { ok: true, data: [], cached: false };
+    },
   };
 }
 

@@ -33,6 +33,14 @@ import {
 import { readDailySnapshotCache, type DigestSnapshotItem } from '../src/agent/digest-snapshot.js';
 import { DIRECTIONS } from '../src/agent/directions.js';
 import { clearUserLlm } from '../src/agent/user-llm.js';
+import { loadUserSignals } from '../src/agent/taste.js';
+import { readOpportunityPool } from '../src/opportunities/pool.js';
+import { rankOpportunities } from '../src/opportunities/rank.js';
+import {
+  hideOpportunity,
+  readHiddenOpportunities,
+} from '../src/opportunities/store.js';
+import { renderOpportunityCards } from '../src/panel/opportunity-view.js';
 import { buildAuthorizeUrl } from '../src/github/oauth.js';
 import { readBodyFields, readBodyFieldsAll } from '../src/http/body.js';
 import {
@@ -110,6 +118,7 @@ function shiftDate(date: string, days: number): string {
 
 const NAV_ITEMS: Array<{ view: string; label: string }> = [
   { view: 'overview', label: '总览' },
+  { view: 'opportunities', label: '机会' },
   { view: 'tracking', label: '跟踪' },
   { view: 'history', label: '历史' },
   { view: 'favorites', label: '收藏' },
@@ -1078,6 +1087,80 @@ interface ActionOutcome {
   error?: string;
 }
 
+/** 机会视图：读共享池 + 本地信号，面板里最多展示 4 填坑 + 2 研究。 */
+async function renderOpportunities(
+  userid: string,
+  token: string,
+  weather: Weather | null,
+  notice?: string,
+  error?: string,
+): Promise<string> {
+  const now = new Date();
+  const [pool, sub, taste, hidden] = await Promise.all([
+    readOpportunityPool(now),
+    readSubscriber(userid),
+    loadUserSignals(userid, now),
+    readHiddenOpportunities(userid),
+  ]);
+  if (!pool) {
+    return page(
+      '机会',
+      token,
+      'opportunities',
+      `${banner(notice, error)}
+       ${viewHead(
+         '机会',
+         '今天的机会池还没准备好',
+         weather,
+         'sleepy',
+         'search',
+         '每天构建一次共享池；晚点再回来看看。',
+         { href: href(token, { view: 'overview' }), label: '返回总览' },
+       )}
+       ${empty('机会池还没准备好。')}`,
+    );
+  }
+
+  const prefs = normalizePreferences(sub?.preferences ?? {});
+  const items = rankOpportunities(
+    pool.items,
+    {
+      languages: prefs.languages,
+      topics: prefs.topics,
+      keywords: prefs.keywords,
+      languageBoost: taste.languageBoost,
+      topicBoost: taste.topicBoost,
+      favoriteRepos: taste.starred,
+      trackedRepos: new Set(),
+      hidden,
+      shown: new Set(),
+    },
+    { limit: 6, contribute: 4, research: 2 },
+  );
+  const contribute = items.filter((item) => item.kind === 'contribute').length;
+  const research = items.filter((item) => item.kind === 'research').length;
+  const cards = renderOpportunityCards(items, token);
+
+  return page(
+    '机会',
+    token,
+    'opportunities',
+    `${banner(notice, error)}
+     ${viewHead(
+       '机会',
+       items.length > 0
+         ? `${items.length} 条 · ${contribute} 填坑 + ${research} 研究`
+         : '今天没有通过质量门槛的机会',
+       weather,
+       error ? 'alert' : notice ? 'happy' : 'idle',
+       'search',
+       '每天一次共享池；隐藏/追踪/收藏都会即时生效。',
+       { href: href(token, { view: 'overview' }), label: '返回总览' },
+     )}
+     ${cards || empty('今天没有通过质量门槛的机会，明天再看。')}`,
+  );
+}
+
 /** 面板里的所有写操作：与聊天命令共用服务层，这里只做输入校验与文案映射。 */
 async function applyAction(
   userid: string,
@@ -1170,6 +1253,32 @@ async function applyAction(
       const sub = await readSubscriber(userid);
       const { pushTime } = normalizePreferences(sub?.preferences ?? {});
       return { notice: `好，已恢复推送。下次 ${pushTime} 见。` };
+    }
+  }
+
+  if (view === 'opportunities') {
+    if (fields.action === 'opp-hide') {
+      const id = (fields.id ?? '').trim();
+      if (id === '') return { error: '参数缺失。' };
+      await hideOpportunity(userid, id);
+      return { notice: '已隐藏，之后不会再出现。' };
+    }
+    if (fields.action === 'opp-track') {
+      const result = await addTrackedRepo(userid, fields.repo ?? '');
+      if (result.ok) {
+        return { notice: `跟上了：${result.displayName}。` };
+      }
+      return {
+        error:
+          result.reason === 'usage'
+            ? '用法：owner/repo'
+            : result.reason === 'limit'
+              ? '最多 10 个。先取消一个。'
+              : '这个仓库暂时读不到，等下再试。',
+      };
+    }
+    if (fields.action === 'opp-favorite') {
+      return applyFavoriteAction(userid, 'favorite', fields.fullName ?? '');
     }
   }
 
@@ -1312,6 +1421,10 @@ export default async function handler(
   if (view === 'checkup') {
     const index = Number(queryParam(req, 'i'));
     await sendView(await renderCheckup(userid, token, weather, Number.isFinite(index) ? index : 0));
+    return;
+  }
+  if (view === 'opportunities') {
+    await sendView(await renderOpportunities(userid, token, weather, notice, error));
     return;
   }
   if (view === 'settings') {

@@ -39,6 +39,8 @@ export interface EmailPreferences {
   keywords: string[];
   /** 订阅方向（directions.ts 的 key）。 */
   topics: string[];
+  /** 周一邮件里是否附带「本周机会」；缺省 true。 */
+  weeklyOpportunities: boolean;
 }
 
 const KEYWORD_PUNCT_RE = /[。！？!?；;，,、()（）]/g;
@@ -86,6 +88,8 @@ export function normalizeEmailPreferences(value: unknown): EmailPreferences {
     digestCount?: unknown;
     languages?: unknown;
     keywords?: unknown;
+    topics?: unknown;
+    weeklyOpportunities?: unknown;
   };
   // 与设置页写入校验共用同一份白名单：08:00 / 18:00 这类整点落在发送窗口外，
   // 放进来会让该订阅者永远收不到信，因此一律回默认 09:00。
@@ -107,6 +111,7 @@ export function normalizeEmailPreferences(value: unknown): EmailPreferences {
     languages: normalizeEmailLanguages(raw.languages),
     keywords: normalizeEmailKeywords(raw.keywords),
     topics: normalizeEmailTopics((raw as { topics?: unknown }).topics),
+    weeklyOpportunities: raw.weeklyOpportunities !== false,
   };
 }
 
@@ -132,6 +137,7 @@ export function validateEmailPreferencesInput(fields: {
   languages?: string[];
   topics?: string[];
   keywords?: string;
+  weeklyOpportunities?: boolean;
 }): { ok: true; preferences: EmailPreferences } | { ok: false; error: string } {
   const pushTime = fields.pushTime ?? EMAIL_DEFAULT_PUSH_TIME;
   if (!(EMAIL_PUSH_TIMES as readonly string[]).includes(pushTime)) {
@@ -154,6 +160,7 @@ export function validateEmailPreferencesInput(fields: {
       languages: normalizeEmailLanguages(fields.languages ?? []),
       topics: normalizeEmailTopics(fields.topics ?? []),
       keywords: normalizeEmailKeywords(fields.keywords ?? ''),
+      weeklyOpportunities: fields.weeklyOpportunities !== false,
     },
   };
 }

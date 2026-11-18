@@ -20,6 +20,8 @@ import {
 import { renderDigestEmail } from './render.js';
 import { emailConfigured, sendEmail } from './send.js';
 import { resolveBaseUrl } from './tokens.js';
+import { readOpportunityPool } from '../opportunities/pool.js';
+import { rankOpportunities } from '../opportunities/rank.js';
 
 /**
  * 邮件简报推送（每小时 cron 调用）。
@@ -188,6 +190,8 @@ export async function pushEmailDigests(
   const today = shanghaiToday(now);
   const baseUrl = options.baseUrl ?? resolveBaseUrl();
   const unsubscribeUrl = `${baseUrl}/api/email-unsubscribe?t=`;
+  const monday = new Date(`${today}T00:00:00.000Z`).getUTCDay() === 1;
+  const opportunityPool = monday ? await readOpportunityPool(now) : null;
   let remaining = Math.max(0, dailyCap - (await readDailySent(today)));
   let runRemaining = MAX_PER_RUN;
 
@@ -249,6 +253,24 @@ export async function pushEmailDigests(
         poolSize: snapshot.items.length,
         baseUrl,
         unsubToken: row.unsubToken,
+        opportunities:
+          monday && preferences.weeklyOpportunities && opportunityPool
+            ? rankOpportunities(
+                opportunityPool.items,
+                {
+                  languages: preferences.languages,
+                  topics: preferences.topics,
+                  keywords: preferences.keywords,
+                  languageBoost: new Map(),
+                  topicBoost: new Map(),
+                  favoriteRepos: new Set(),
+                  trackedRepos: new Set(),
+                  hidden: new Set(),
+                  shown: new Set(),
+                },
+                { limit: 3, contribute: 2, research: 1 },
+              )
+            : undefined,
       });
       await sendEmail({
         to: row.email,

@@ -152,6 +152,14 @@ function form(options: {
         <input class="p-input" id="keywords" name="keywords" type="text"
           value="${escapeHtml(preferences.keywords.join(', '))}">
       </div>
+      <div class="p-field">
+        <span class="p-label">每周机会</span>
+        <label class="p-check">
+          <input type="checkbox" name="weeklyOpportunities" value="on"${preferences.weeklyOpportunities ? ' checked' : ''}>
+          周一简报里附带 2 填坑 + 1 研究
+        </label>
+        <span class="p-hint">只加在周一那封邮件里，不额外发信。</span>
+      </div>
       <button class="p-btn block" type="submit">保存设置</button>
     </form>
     <div class="p-actions">
@@ -228,6 +236,7 @@ export default async function handler(
     languages: all.languages ?? [],
     topics: all.topics ?? [],
     keywords: fields.keywords,
+    weeklyOpportunities: fields.weeklyOpportunities === 'on',
   });
   if (!validated.ok) {
     sendHtml(

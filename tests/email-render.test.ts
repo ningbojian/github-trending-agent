@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DigestSnapshotItem } from '../src/agent/digest-snapshot';
 import { BRAND } from '../src/brand';
 import { emailSubject, renderConfirmEmail, renderDigestEmail, renderManageEmail } from '../src/email/render';
+import type { OpportunityItem } from '../src/opportunities/types';
 
 function item(overrides: Partial<DigestSnapshotItem> = {}): DigestSnapshotItem {
   return {
@@ -285,5 +286,43 @@ describe('邮件里的仓库按钮', () => {
     expect(html).toContain(`background:${BRAND.repoButton.background}`);
     expect(html).toContain(`border:1px solid ${BRAND.repoButton.border}`);
     expect(html).toContain(`fill="${BRAND.repoButton.text}"`);
+  });
+
+  it('周一附带的「本周机会」同时出现在 HTML 和纯文本', () => {
+    const opportunity: OpportunityItem = {
+      id: 'contribute:acme/agent#12',
+      kind: 'contribute',
+      repo: 'acme/agent',
+      issueNumber: 12,
+      title: 'Windows 下 CUDA 检测失败',
+      body: '...',
+      url: 'https://github.com/acme/agent/issues/12',
+      language: 'typescript',
+      topics: ['agent'],
+      stars: 500,
+      license: 'MIT',
+      archived: false,
+      pushedAt: '2026-11-10T00:00:00Z',
+      labels: ['good first issue'],
+      comments: 3,
+      reactions: 2,
+      createdAt: '2026-11-01T00:00:00Z',
+      updatedAt: '2026-11-16T00:00:00Z',
+      maintainerEngaged: true,
+      assigned: false,
+      linkedPr: false,
+      score: 80,
+      why: '值得修。',
+      firstStep: '复现并认领。',
+      effort: '小',
+      confidence: '高',
+      evidence: [],
+    };
+    const rendered = renderDigestEmail({ ...BASE, opportunities: [opportunity] });
+    expect(rendered.html).toContain('本周机会');
+    expect(rendered.html).toContain('acme/agent #12');
+    expect(rendered.html).toContain('https://github.com/acme/agent/issues/12');
+    expect(rendered.text).toContain('本周机会');
+    expect(rendered.text).toContain('https://github.com/acme/agent/issues/12');
   });
 });

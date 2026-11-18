@@ -710,6 +710,7 @@ describe('/api/email-settings', () => {
         languages: ['python', 'rust'],
         topics: [],
         keywords: ['ai', '开发效率'],
+        weeklyOpportunities: false,
       },
     });
     expect(dueStateMock.invalidateDueState).toHaveBeenCalled();

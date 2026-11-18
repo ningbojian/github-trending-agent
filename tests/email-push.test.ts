@@ -56,9 +56,15 @@ vi.mock('../src/db/client', async () => {
   };
 });
 
+const poolMock = vi.hoisted(() => ({
+  readOpportunityPool: vi.fn(async (): Promise<unknown> => null),
+}));
+vi.mock('../src/opportunities/pool', () => ({
+  readOpportunityPool: poolMock.readOpportunityPool,
+}));
+
 const mailState = vi.hoisted(() => ({
-  configured: true,
-  sendCalls: [] as Array<{
+  configured: true,  sendCalls: [] as Array<{
     to: string;
     subject: string;
     text: string;
@@ -177,6 +183,8 @@ beforeEach(() => {
   dbState.insertCalls = [];
   mailState.configured = true;
   mailState.sendCalls = [];
+  poolMock.readOpportunityPool.mockReset();
+  poolMock.readOpportunityPool.mockResolvedValue(null);
   mailState.failFor = new Set();
   snapshotState.snapshot = {
     date: '2026-10-25',
@@ -506,5 +514,85 @@ describe('pushEmailDigests — sending', () => {
     const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
     expect(result).toEqual({ sent: 0, skipped: 1, failed: 0 });
     expect(dbState.updateCalls).toHaveLength(0);
+  });
+
+  it('周一且开启偏好 → 简报带本周机会', async () => {
+    dbState.emailRows = [emailRow()];
+    poolMock.readOpportunityPool.mockResolvedValue({
+      version: 1,
+      date: '2026-10-26',
+      dataDate: '2026-10-26',
+      generatedAt: '2026-10-26T00:00:00.000Z',
+      items: [
+        {
+          id: 'contribute:acme/agent#12',
+          kind: 'contribute',
+          repo: 'acme/agent',
+          issueNumber: 12,
+          title: 'Windows 下 CUDA 检测失败',
+          body: '...',
+          url: 'https://github.com/acme/agent/issues/12',
+          language: 'typescript',
+          topics: ['agent'],
+          stars: 500,
+          license: 'MIT',
+          archived: false,
+          pushedAt: '2026-11-10T00:00:00.000Z',
+          labels: ['good first issue'],
+          comments: 3,
+          reactions: 2,
+          createdAt: '2026-11-01T00:00:00.000Z',
+          updatedAt: '2026-11-16T00:00:00.000Z',
+          maintainerEngaged: true,
+          assigned: false,
+          linkedPr: false,
+          score: 80,
+          why: '值得修。',
+          firstStep: '复现并认领。',
+          effort: '小',
+          confidence: '高',
+          evidence: [],
+        },
+      ],
+    });
+
+    const result = await pushEmailDigests({
+      now: new Date('2026-10-26T01:30:00Z'),
+      gapMs: 0,
+    });
+
+    expect(result.sent).toBe(1);
+    expect(mailState.sendCalls[0]!.html).toContain('本周机会');
+    expect(mailState.sendCalls[0]!.text).toContain('本周机会');
+  });
+
+  it('周一但偏好关闭 → 不带本周机会', async () => {
+    dbState.emailRows = [
+      emailRow({
+        preferences: {
+          pushTime: '09:00',
+          intervalDays: 1,
+          digestCount: 15,
+          languages: [],
+          keywords: [],
+          weeklyOpportunities: false,
+        },
+      }),
+    ];
+    poolMock.readOpportunityPool.mockResolvedValue({
+      version: 1,
+      date: '2026-10-26',
+      dataDate: '2026-10-26',
+      generatedAt: '2026-10-26T00:00:00.000Z',
+      items: [],
+    });
+
+    const result = await pushEmailDigests({
+      now: new Date('2026-10-26T01:30:00Z'),
+      gapMs: 0,
+    });
+
+    expect(result.sent).toBe(1);
+    expect(mailState.sendCalls[0]!.html).not.toContain('本周机会');
   });
 });

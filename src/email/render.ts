@@ -1,6 +1,7 @@
 import { BRAND, GITHUB_MARK_SVG } from '../brand.js';
 import { escapeHtml } from '../http/html.js';
 import type { DigestSnapshotItem } from '../agent/digest-snapshot.js';
+import type { OpportunityItem } from '../opportunities/types.js';
 
 /**
  * 品牌化每日简报邮件：内联样式 + table 布局 + 无外链图片/追踪像素。
@@ -48,6 +49,8 @@ export interface DigestEmailInput {
   /** 站点根地址（无尾斜杠），用于设置/退订链接。 */
   baseUrl: string;
   unsubToken: string;
+  /** 周一可选：本周机会（2 填坑 + 1 研究）。 */
+  opportunities?: OpportunityItem[];
 }
 
 export interface RenderedEmail {
@@ -123,7 +126,7 @@ function renderItemHtml(
 
 /** 渲染邮件（HTML + 纯文本双版本）。 */
 export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
-  const { date, pushTime, abstract, items, baseUrl, unsubToken, poolSize } = input;
+  const { date, pushTime, abstract, items, baseUrl, unsubToken, poolSize, opportunities } = input;
   const subject = emailSubject(date);
   const settings = settingsUrl(baseUrl, unsubToken);
   const unsubscribe = unsubscribeUrl(baseUrl, unsubToken);
@@ -165,6 +168,25 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
             </td>
           </tr>
         </table>`
+      : '';
+
+  const opportunitySection =
+    opportunities && opportunities.length > 0
+      ? `<tr><td style="padding:8px 16px 0;">
+          <div style="margin-top:10px;padding-top:10px;border-top:1px dashed ${EMAIL.divider};">
+            <div style="font-size:13px;font-weight:700;color:${EMAIL.text};">本周机会</div>
+            <div style="font-size:12px;color:${EMAIL.muted};margin-top:2px;">从公开 GitHub 里筛出的动手机会，点链接去原 issue。</div>
+            ${opportunities
+              .map(
+                (item) => `<div style="margin-top:9px;">
+              <a href="${escapeHtml(item.url)}" style="color:${EMAIL.accent};font-size:13px;font-weight:700;text-decoration:none;">[${item.kind === 'contribute' ? '填坑' : '研究'}] ${escapeHtml(item.repo)} #${item.issueNumber}</a>
+              <div style="font-size:12px;line-height:1.6;color:${EMAIL.text};">${escapeHtml(item.title)}</div>
+              <div style="font-size:12px;line-height:1.6;color:${EMAIL.muted};">${escapeHtml(item.why)} 第一步：${escapeHtml(item.firstStep)}</div>
+            </div>`,
+              )
+              .join('')}
+          </div>
+        </td></tr>`
       : '';
 
   const html = `<!DOCTYPE html>
@@ -211,6 +233,7 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
             </table>
           </td>
         </tr>
+        ${opportunitySection}
         <tr>
           <td style="padding:10px 16px 14px;border-top:1px solid ${EMAIL.divider};color:${EMAIL.muted};font-size:12px;line-height:1.6;">
             <div>数据来源：GitHub Trending（近 7 天）。</div>
@@ -240,6 +263,17 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
       : []),
     '',
     ...(abstract ? [abstract, ''] : []),
+    ...(opportunities && opportunities.length > 0
+      ? [
+          '本周机会：',
+          ...opportunities.flatMap((item, index) => [
+            `${index + 1}. [${item.kind === 'contribute' ? '填坑' : '研究'}] ${item.repo} #${item.issueNumber}`,
+            item.url,
+            `${item.why} 第一步：${item.firstStep}`,
+            '',
+          ]),
+        ]
+      : []),
     ...items.flatMap((item, index) => {
       const meta = [`★ ${formatNumber(item.stars)}`, `+${formatNumber(item.starsDelta)} 今日`];
       if (item.isNew) meta.push('新上榜');

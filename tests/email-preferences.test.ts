@@ -101,6 +101,7 @@ describe('normalizeEmailPreferences', () => {
       languages: [],
       topics: [],
       keywords: [],
+      weeklyOpportunities: true,
     });
   });
 
@@ -141,6 +142,7 @@ describe('validateEmailPreferencesInput', () => {
         languages: [],
         topics: [],
         keywords: [],
+        weeklyOpportunities: true,
       },
     });
   });
@@ -180,7 +182,16 @@ describe('validateEmailPreferencesInput', () => {
         languages: ['python', 'rust'],
         topics: [],
         keywords: ['ai', '开发效率'],
+        weeklyOpportunities: true,
       },
     });
+  });
+
+  it('weeklyOpportunities 默认 true，显式 false 保留', () => {
+    expect(normalizeEmailPreferences({}).weeklyOpportunities).toBe(true);
+    expect(
+      normalizeEmailPreferences({ weeklyOpportunities: false })
+        .weeklyOpportunities,
+    ).toBe(false);
   });
 });

@@ -50,8 +50,17 @@ vi.mock('../src/agent/digest', () => ({
 vi.mock('../src/agent/observation', () => ({
   getDailyObservations: async () => null,
 }));
+const trackingMock = vi.hoisted(() => ({
+  pushTrackedChanges: vi.fn(async () => ({
+    sent: 0,
+    skipped: 0,
+    failed: 0,
+    checked: 0,
+  })),
+}));
+
 vi.mock('../src/agent/tracking-check', () => ({
-  pushTrackedChanges: async () => ({ sent: 0, skipped: 0, failed: 0, checked: 0 }),
+  pushTrackedChanges: trackingMock.pushTrackedChanges,
 }));
 vi.mock('../src/agent/digest-snapshot', () => ({
   getDailySnapshot: snapshotMock.getDailySnapshot,
@@ -102,6 +111,7 @@ beforeEach(() => {
   emailMock.pushEmailDigests.mockClear();
   snapshotMock.getDailySnapshot.mockClear();
   weeklyMock.pushWeeklyReviews.mockClear();
+  trackingMock.pushTrackedChanges.mockClear();
 });
 
 function response() {
@@ -135,6 +145,7 @@ describe('cron-push-digest', () => {
     expect(body.sent).toBe(3);
     expect(body.weekly).toEqual({ sent: 2, skipped: 1, failed: 0 });
     expect(weeklyMock.pushWeeklyReviews).toHaveBeenCalledTimes(1);
+    expect(dueMock.refreshDueState).toHaveBeenCalledTimes(1);
   });
 
   it('鉴权失败 → 401，且不触发任何推送', async () => {
@@ -175,5 +186,56 @@ describe('cron-push-digest', () => {
     expect(emailMock.pushEmailDigests).not.toHaveBeenCalled();
     expect(snapshotMock.getDailySnapshot).not.toHaveBeenCalled();
     expect(dueMock.refreshDueState).not.toHaveBeenCalled();
+    expect(trackingMock.pushTrackedChanges).not.toHaveBeenCalled();
+  });
+
+  it('无 due 但 tracking 围栏打开 → 仍然跑跟踪检查，不推送简报', async () => {
+    dueMock.probeDue.mockResolvedValue({
+      due: false,
+      checked: false,
+      cache: 'hit',
+      window: false,
+    });
+    gateMock.cronGates.mockReturnValue({
+      tracking: true,
+      weekly: false,
+      heartbeat: true,
+    });
+
+    const { state, res } = response();
+    await handler(
+      { method: 'GET', headers: { authorization: 'Bearer cron-secret' } },
+      res,
+    );
+
+    expect(state.status).toBe(200);
+    expect(trackingMock.pushTrackedChanges).toHaveBeenCalledTimes(1);
+    expect(digestMock.pushDigests).not.toHaveBeenCalled();
+    expect(emailMock.pushEmailDigests).not.toHaveBeenCalled();
+  });
+
+  it('无 due 但 weekly 围栏打开 → 仍然跑周报，不推送简报', async () => {
+    dueMock.probeDue.mockResolvedValue({
+      due: false,
+      checked: false,
+      cache: 'hit',
+      window: false,
+    });
+    gateMock.cronGates.mockReturnValue({
+      tracking: false,
+      weekly: true,
+      heartbeat: true,
+    });
+
+    const { state, res } = response();
+    await handler(
+      { method: 'GET', headers: { authorization: 'Bearer cron-secret' } },
+      res,
+    );
+
+    expect(state.status).toBe(200);
+    expect(weeklyMock.pushWeeklyReviews).toHaveBeenCalledTimes(1);
+    expect(digestMock.pushDigests).not.toHaveBeenCalled();
+    expect(emailMock.pushEmailDigests).not.toHaveBeenCalled();
   });
 });

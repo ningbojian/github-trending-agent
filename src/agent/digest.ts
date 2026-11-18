@@ -579,14 +579,17 @@ async function rollbackClaim(id: number): Promise<void> {
  * 定时推送不走此函数（那边用条件 UPDATE 抢占，见 claimDigest）。
  */
 export async function markDigestSent(wecomUserid: string): Promise<void> {
-  await db()
-    .update(subscribers)
-    .set({
-      lastDigestAt: sql`(date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai')`,
-    })
-    .where(eq(subscribers.wecomUserid, wecomUserid));
-  // 今天这个名额已用掉：下一次 tick 不该再把他算进 due 窗口。
-  await invalidateDueState();
+  try {
+    await db()
+      .update(subscribers)
+      .set({
+        lastDigestAt: sql`(date_trunc('day', now() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai')`,
+      })
+      .where(eq(subscribers.wecomUserid, wecomUserid));
+  } finally {
+    // 更新即使抛错也可能已在服务端生效：失效缓存，别让旧窗口继续当权威。
+    await invalidateDueState();
+  }
 }
 
 /**

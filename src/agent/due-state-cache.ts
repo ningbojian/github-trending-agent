@@ -19,11 +19,13 @@ import { shanghaiMinutes, shanghaiToday } from './time.js';
  */
 
 export const DUE_STATE_TAG = 'digest-due-state';
+export const DUE_STATE_EPOCH_KEY = 'due-state:epoch:v1';
 export const DUE_STATE_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 export const DUE_STATE_TTL_SECONDS = 26 * 60 * 60;
 
 const DUE_STATE_VERSION = 1 as const;
 const CACHE_NAMESPACE = 'gte';
+const FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 export interface DueState {
   version: typeof DUE_STATE_VERSION;
@@ -67,6 +69,7 @@ function isValidState(value: unknown, now: Date): value is DueState {
   if (typeof state.generatedAt !== 'string') return false;
   const generatedAt = Date.parse(state.generatedAt);
   if (!Number.isFinite(generatedAt)) return false;
+  if (generatedAt > now.getTime() + FUTURE_SKEW_MS) return false;
   if (now.getTime() - generatedAt > DUE_STATE_MAX_AGE_MS) return false;
   if (!Array.isArray(state.windows)) return false;
   return state.windows.every(
@@ -101,8 +104,21 @@ async function readCachedState(
   now: Date,
 ): Promise<{ state: DueState | null; status: DueCacheStatus }> {
   try {
-    const value = await cache().get(cacheKey(shanghaiToday(now)));
-    if (isValidState(value, now)) return { state: value, status: 'hit' };
+    const [value, epochValue] = await Promise.all([
+      cache().get(cacheKey(shanghaiToday(now))),
+      cache().get(DUE_STATE_EPOCH_KEY),
+    ]);
+    const epoch =
+      typeof epochValue === 'number' && Number.isFinite(epochValue)
+        ? epochValue
+        : 0;
+    // 失效 epoch 之后写入的状态才可信：并发 rebuild 不能盖掉一次 expireTag。
+    if (
+      isValidState(value, now) &&
+      Date.parse(value.generatedAt) > epoch
+    ) {
+      return { state: value, status: 'hit' };
+    }
     return { state: null, status: 'miss' };
   } catch (err) {
     warn('due-state cache read failed:', err);
@@ -132,8 +148,16 @@ async function buildAndCache(
   return { state, dueNow: snapshot.dueNow };
 }
 
-/** 订阅/发送状态变更后调用：让下一次 tick 重建，不在写路径额外查库。 */
+/** 订阅/发送状态变更后调用：写 epoch + expireTag，让下一次 tick 重建。 */
 export async function invalidateDueState(): Promise<void> {
+  try {
+    await cache().set(DUE_STATE_EPOCH_KEY, Date.now(), {
+      ttl: DUE_STATE_TTL_SECONDS,
+      name: 'due-state-epoch',
+    });
+  } catch (err) {
+    warn('due-state epoch write failed:', err);
+  }
   try {
     await cache().expireTag(DUE_STATE_TAG);
   } catch (err) {

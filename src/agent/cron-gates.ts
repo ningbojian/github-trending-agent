@@ -9,7 +9,8 @@ import { shanghaiMinutes, shanghaiToday } from './time.js';
  *
  * - tracking：09:00–10:00 的两次 tick（函数内部还有 20 小时判断，不会重复处理）
  * - weekly：周一 10:00–12:00 的四次 tick（函数自身也按周一 10 点后幂等）
- * - heartbeat：有真实到点任务，或整点后的第一个 tick（:03）写一次
+ * - heartbeat：有真实到点任务，或整点后的第一个 tick（:03）允许写；
+ *   cron handler 另外要求本次已经查过库（dueState 命中缓存且不在窗口时不写）
  */
 export interface CronGates {
   tracking: boolean;

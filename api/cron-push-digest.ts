@@ -50,8 +50,9 @@ function sendJson(res: CronResponse, status: number, body: unknown): void {
 }
 
 /**
- * 心跳：每次触发都往 `cron:last-run:v1` 里追加一条（保留最近 20 次，3 天 TTL）。
- * 排障用——「今天为什么没收到推送」时先看它：有没有触发、每次算出了什么。
+ * 心跳：只在本次已经查过库的 tick 往 `cron:last-run:v1` 追加一条
+ * （保留最近 20 次，3 天 TTL）；安静的缓存命中 tick 不写，
+ * 避免心跳本身把 Neon 唤醒。排障用——「今天为什么没收到推送」时先看它。
  * 失败静默：心跳不能影响推送本身。
  */
 async function recordHeartbeat(entry: Record<string, unknown>): Promise<void> {
@@ -113,6 +114,8 @@ export default async function handler(
         weekly: { sent: 0, skipped: 0, failed: 0 },
         tracking: { sent: 0, skipped: 0, failed: 0, checked: 0 },
         dueState: probe.cache,
+        dueWindow: probe.window,
+        dueChecked: probe.checked,
       });
       return;
     }
@@ -182,7 +185,15 @@ export default async function handler(
         tracking,
       });
     }
-    sendJson(res, 200, { ...wecom, email, weekly, tracking, dueState: probe.cache });
+    sendJson(res, 200, {
+      ...wecom,
+      email,
+      weekly,
+      tracking,
+      dueState: probe.cache,
+      dueWindow: probe.window,
+      dueChecked: probe.checked,
+    });
   } catch (err) {
     console.error('cron-push-digest failed:', err);
     // detail 供 Bearer 鉴权后的调用方排障（端点不公开，不引入暴露面）

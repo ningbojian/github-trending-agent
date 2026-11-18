@@ -264,6 +264,7 @@ describe('ensureSubscriber — 新用户自动开通', () => {
       active: true,
       preferences: { languages: [], keywords: [] },
     });
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalledTimes(1);
   });
 
   it('已有订阅者行 → 不 insert，返回 false（老用户）', async () => {
@@ -272,6 +273,7 @@ describe('ensureSubscriber — 新用户自动开通', () => {
     await expect(ensureSubscriber(makeMsg())).resolves.toBe(false);
 
     expect(dbMock.insertCalls).toHaveLength(0);
+    expect(dueStateMock.invalidateDueState).not.toHaveBeenCalled();
   });
 
   it('查询失败（DB 错误）→ log warn 并返回 false，不向外抛（fail-open）', async () => {
@@ -281,6 +283,7 @@ describe('ensureSubscriber — 新用户自动开通', () => {
 
     expect(console.warn).toHaveBeenCalled();
     expect(dbMock.insertCalls).toHaveLength(0);
+    expect(dueStateMock.invalidateDueState).not.toHaveBeenCalled();
   });
 });
 

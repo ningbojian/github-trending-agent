@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DUE_STATE_EPOCH_KEY,
   DUE_STATE_TAG,
   isInDueWindow,
   invalidateDueState,
@@ -187,6 +188,50 @@ describe('probeDue — 缓存未命中', () => {
     await expect(probeDue(NOW)).resolves.toMatchObject({ cache: 'miss' });
     expect(dueMock.readDueSnapshot).toHaveBeenCalledTimes(1);
   });
+
+  it('generatedAt 明显在未来视为未命中（时钟漂移防御）', async () => {
+    cacheMock.store.set(
+      STATE_KEY,
+      state({
+        generatedAt: new Date(NOW.getTime() + 10 * 60 * 1000).toISOString(),
+        windows: [{ start: 0, end: 1440 }],
+      }),
+    );
+    dueMock.readDueSnapshot.mockResolvedValue({ dueNow: false, windows: [] });
+
+    await expect(probeDue(NOW)).resolves.toMatchObject({ cache: 'miss' });
+    expect(dueMock.readDueSnapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('probeDue — 失效 epoch', () => {
+  it('状态早于最近一次失效 → 视为未命中并重建', async () => {
+    cacheMock.store.set(STATE_KEY, state({ generatedAt: NOW.toISOString() }));
+    cacheMock.store.set(DUE_STATE_EPOCH_KEY, NOW.getTime() + 1000);
+    dueMock.readDueSnapshot.mockResolvedValue({ dueNow: false, windows: [] });
+
+    await expect(probeDue(NOW)).resolves.toMatchObject({ cache: 'miss' });
+    expect(dueMock.readDueSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('状态晚于最近一次失效 → 正常命中', async () => {
+    cacheMock.store.set(
+      STATE_KEY,
+      state({
+        generatedAt: new Date(NOW.getTime() + 1000).toISOString(),
+        windows: [{ start: 540, end: 600 }],
+      }),
+    );
+    cacheMock.store.set(DUE_STATE_EPOCH_KEY, NOW.getTime());
+
+    await expect(probeDue(NOW)).resolves.toEqual({
+      due: false,
+      checked: false,
+      cache: 'hit',
+      window: false,
+    });
+    expect(dueMock.readDueSnapshot).not.toHaveBeenCalled();
+  });
 });
 
 describe('probeDue — 缓存异常', () => {
@@ -212,13 +257,51 @@ describe('probeDue — 缓存异常', () => {
       cache: 'miss',
     });
   });
+
+  it('窗口内重查抛错 → 回落 anyDigestDue', async () => {
+    cacheMock.store.set(STATE_KEY, state());
+    dueMock.readDueSnapshot.mockRejectedValue(new Error('db down'));
+    dueMock.anyDigestDue.mockResolvedValue(true);
+
+    await expect(probeDue(NOW)).resolves.toEqual({
+      due: true,
+      checked: true,
+      cache: 'hit',
+      window: true,
+    });
+    expect(dueMock.anyDigestDue).toHaveBeenCalledTimes(1);
+  });
+
+  it('未命中重建抛错 → 回落 anyDigestDue', async () => {
+    dueMock.readDueSnapshot.mockRejectedValue(new Error('db down'));
+    dueMock.anyDigestDue.mockResolvedValue(true);
+
+    await expect(probeDue(NOW)).resolves.toEqual({
+      due: true,
+      checked: true,
+      cache: 'miss',
+      window: false,
+    });
+    expect(dueMock.anyDigestDue).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('invalidateDueState / refreshDueState', () => {
-  it('失效只按 tag 过期，不查库', async () => {
+  it('失效写 epoch 并按 tag 过期，不查库', async () => {
     await invalidateDueState();
+    expect(cacheMock.set).toHaveBeenCalledWith(
+      DUE_STATE_EPOCH_KEY,
+      expect.any(Number),
+      expect.objectContaining({ ttl: 26 * 60 * 60 }),
+    );
     expect(cacheMock.expireTag).toHaveBeenCalledWith(DUE_STATE_TAG);
     expect(dueMock.readDueSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('epoch 写失败仍会 expireTag', async () => {
+    cacheMock.throwOnSet = true;
+    await invalidateDueState();
+    expect(cacheMock.expireTag).toHaveBeenCalledWith(DUE_STATE_TAG);
   });
 
   it('失效失败静默吞掉', async () => {

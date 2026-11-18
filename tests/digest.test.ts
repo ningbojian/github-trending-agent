@@ -63,6 +63,8 @@ const dbMock = vi.hoisted(() => ({
     condition: unknown;
     kind: 'claim' | 'update';
   }[],
+  /** 普通 update 抛错（claim 之外）。 */
+  updateError: undefined as Error | undefined,
   /** 抢占 RETURNING 结果队列：逐次 shift；耗尽后默认返回一行（抢占成功）。 */
   claimResults: [] as Record<string, unknown>[][],
 }));
@@ -138,7 +140,10 @@ vi.mock('../src/db/client', () => ({
                 recordedPlain = true;
                 dbMock.updateCalls.push({ ...record, kind: 'update' });
               }
-              return Promise.resolve(undefined).then(onFulfilled, onRejected);
+              const result = dbMock.updateError
+                ? Promise.reject(dbMock.updateError)
+                : Promise.resolve(undefined);
+              return result.then(onFulfilled, onRejected);
             },
           };
         },
@@ -348,6 +353,7 @@ beforeEach(() => {
   dbMock.insertError = undefined;
   dbMock.deleteError = undefined;
   dbMock.updateCalls.length = 0;
+  dbMock.updateError = undefined;
   dbMock.claimResults.length = 0;
   // 默认：简介降级（空 Map，等价 LLM 失败后的无简介输出），发送全部成功。
   summaryMock.loadRepoSummaries.mockResolvedValue(new Map());
@@ -1673,6 +1679,12 @@ describe('markDigestSent — 首日简报发送成功后的当日去重', () => 
     expect(compiled.params).toContain('alice');
     expect(dueStateMock.invalidateDueState).toHaveBeenCalledTimes(1);
   });
+
+  it('更新失败也要失效 due 缓存（可能已提交的写入不能继续被缓存当权威）', async () => {
+    dbMock.updateError = new Error('db down');
+    await expect(markDigestSent('alice')).rejects.toThrow('db down');
+    expect(dueStateMock.invalidateDueState).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1764,6 +1776,8 @@ describe('api/cron-push-digest — CRON_SECRET 校验', () => {
       weekly: { sent: 0, skipped: 0, failed: 0 },
       tracking: { sent: 0, skipped: 0, failed: 0, checked: 0 },
       dueState: 'miss',
+      dueWindow: true,
+      dueChecked: true,
     });
     expect(res.headers['content-type']).toContain('application/json');
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);

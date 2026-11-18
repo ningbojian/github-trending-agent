@@ -190,6 +190,8 @@ export async function ensureSubscriber(msg: InboundMessage): Promise<boolean> {
         preferences: { languages: [], keywords: [] },
         active: true,
       });
+    // 新用户默认 09:00 可发：立刻让 due 缓存失效，别让当天的旧窗口挡住他。
+    await invalidateDueState();
     return true;
   } catch (err) {
     console.warn('ensureSubscriber failed:', err);

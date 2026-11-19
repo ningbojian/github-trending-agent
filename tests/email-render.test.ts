@@ -62,42 +62,42 @@ describe('renderDigestEmail — HTML', () => {
     expect(html).toContain('<table role="presentation"');
   });
 
-  it('shows the greeting, abstract block and preheader', () => {
+  it('shows the compact intro, abstract block and preheader', () => {
     const { html } = renderDigestEmail(BASE);
-    expect(html).toContain('你好，这是今天的 GitHub 热榜简报。');
+    expect(html).toContain('今天 1 个项目');
     expect(html).toContain(BASE.abstract);
-    expect(html).toContain('今日 1 个热榜项目：owner/repo');
+    expect(html).toContain('今天 1 个项目：owner/repo');
   });
 
   it('explains how many candidates were filtered down', () => {
     const { html, text } = renderDigestEmail({ ...BASE, poolSize: 120 });
-    expect(html).toContain('从 120 个候选里筛出 1 个');
-    expect(text).toContain('从 120 个候选里筛出 1 个');
+    expect(html).toContain('今天 1 个项目（从 120 个候选里筛出）');
+    expect(text).toContain('今天 1 个项目（从 120 个候选里筛出）');
   });
 
-  it('adds a stats strip and growth bars without external images', () => {
+  it('uses a compact list without stats strip or growth bars', () => {
     const { html, text } = renderDigestEmail({
       ...BASE,
       poolSize: 100,
       items: [item({ starsDelta: 500 }), item({ fullName: 'b/c', starsDelta: 100 })],
     });
-    expect(html).toContain('今日候选');
-    expect(html).toContain('总涨幅');
-    // 涨幅条：table + bgcolor，不引入任何图片。
-    expect(html).toContain('bgcolor="#22D3EE"');
+    expect(html).toContain('今天 2 个项目（从 100 个候选里筛出）');
+    expect(html).not.toContain('今日候选');
+    expect(html).not.toContain('总涨幅');
+    expect(html).not.toContain('bgcolor="#22D3EE"');
     expect(html).not.toContain('<img');
-    expect(text).toContain('总涨幅');
+    expect(text).not.toContain('总涨幅');
   });
 
   it('omits the abstract block when the snapshot has no abstract', () => {
     const { html, text } = renderDigestEmail({ ...BASE, abstract: null });
     expect(html).not.toContain(BASE.abstract);
-    expect(html).toContain('你好，这是今天的 GitHub 热榜简报。');
-    // 纯文本同样不留空行占位（问候之后直接是首条）。
+    expect(html).not.toContain('你好，这是今天的 GitHub 热榜简报。');
+    // 纯文本同样不留空行占位。
     expect(text).not.toContain(BASE.abstract);
   });
 
-  it('renders rank, linked repo name, star/delta/new badges and summary', () => {
+  it('renders compact rank, repo, stars/delta/new and summary', () => {
     const { html } = renderDigestEmail({
       ...BASE,
       items: [
@@ -110,15 +110,14 @@ describe('renderDigestEmail — HTML', () => {
         }),
       ],
     });
-    expect(html).toContain('#1');
-    expect(html).toContain('#2');
+    expect(html).toContain('1.');
+    expect(html).toContain('2.');
     expect(html).toContain('href="https://github.com/owner/repo"');
     expect(html).toContain('★ 12,345');
-    expect(html).toContain('+567 今日');
-    expect(html).toContain('新上榜');
+    expect(html).toContain('+567');
+    expect(html).toContain(' · 新');
     expect(html).toContain('一个命令行工具。');
-    // starsDelta = 0 → 不显示「+0 今日」胶囊。
-    expect(html).not.toContain('+0 今日');
+    expect(html).not.toContain('+0');
   });
 
   it('escapes every dynamic text（仓库名 / 简介 / 概览）', () => {
@@ -173,7 +172,7 @@ describe('renderDigestEmail — HTML', () => {
       }),
     );
     const { html, text } = renderDigestEmail({ ...BASE, items });
-    expect(html).toContain('#20');
+    expect(html).toContain('20.');
     expect(html).toContain('owner/repo-20');
     expect(html).toContain('第 20 个项目的中文简介。');
     expect(html).not.toContain('已截断');
@@ -188,18 +187,18 @@ describe('renderDigestEmail — HTML', () => {
 });
 
 describe('renderDigestEmail — plain text', () => {
-  it('includes greeting, meta line, full URL and summary', () => {
+  it('includes intro, meta line, full URL and summary', () => {
     const { text } = renderDigestEmail({
       ...BASE,
       items: [item({ summary: '一个命令行工具。' })],
     });
-    expect(text).toContain('你好，这是今天的 GitHub 热榜简报（2026-10-25）。');
+    expect(text).toContain('今天 1 个项目');
     expect(text).toContain(BASE.abstract);
-    expect(text).toContain('1. owner/repo（★ 12,345 / +567 今日）');
+    expect(text).toContain('1. owner/repo（★ 12,345 · +567）');
     expect(text).toContain('https://github.com/owner/repo');
     expect(text).toContain('一个命令行工具。');
     expect(text).toContain(
-      '调整推送时间 / 频率：https://agent.example.com/api/email-settings?t=tok%20en%2F1',
+      '调整设置：https://agent.example.com/api/email-settings?t=tok%20en%2F1',
     );
     expect(text).toContain(
       '退订：https://agent.example.com/api/email-unsubscribe?t=tok%20en%2F1',
@@ -211,14 +210,14 @@ describe('renderDigestEmail — plain text', () => {
       ...BASE,
       items: [item({ isNew: true, htmlUrl: '' })],
     });
-    expect(text).toContain('新上榜');
+    expect(text).toContain('· 新');
     expect(text).toContain('https://github.com/owner/repo');
   });
 
   it('renders an empty day without crashing', () => {
     const { html, text } = renderDigestEmail({ ...BASE, items: [] });
     expect(html).toContain('今日暂无热榜项目');
-    expect(text).toContain('你好，这是今天的 GitHub 热榜简报（2026-10-25）。');
+    expect(text).toContain('今天 0 个项目');
     // 序号单元格形如「>#1<」；不能直接断言 '#1'，品牌色 #1f2328 里也含该子串。
     expect(html).not.toContain('>#1<');
   });
@@ -253,7 +252,7 @@ describe('确认信 / 管理信', () => {
   });
 });
 
-describe('邮件里的仓库按钮', () => {
+describe('邮件里的仓库链接', () => {
   const confirm = renderConfirmEmail({
     subject: '确认订阅 GitHub 热榜简报',
     lead: '你好，点击下面的按钮确认订阅 GitHub 热榜简报。',
@@ -265,15 +264,20 @@ describe('邮件里的仓库按钮', () => {
     unsubscribeUrl: 'https://agent.example.com/api/email-unsubscribe?t=a',
   });
 
-  it('简报、确认信、管理信都带纯图标仓库按钮', () => {
-    for (const html of [renderDigestEmail(BASE).html, confirm, manage]) {
+  it('确认信、管理信保留图标按钮；简报用文字链接', () => {
+    for (const html of [confirm, manage]) {
       expect(html).toContain(`href="${BRAND.repoUrl}"`);
       expect(html).toContain('aria-label="GitHub 仓库"');
       expect(html).toContain('<svg');
-      // 纯图标：不再有可见文案；也不能用外链图片。
       expect(html).not.toContain('GitHub 仓库 ↗');
       expect(html).not.toMatch(/<img/i);
     }
+    const digest = renderDigestEmail(BASE).html;
+    expect(digest).toContain(`href="${BRAND.repoUrl}"`);
+    expect(digest).toContain('>GitHub 仓库</a>');
+    expect(digest).not.toContain('aria-label="GitHub 仓库"');
+    expect(digest).not.toContain('<svg');
+    expect(digest).not.toMatch(/<img/i);
   });
 
   it('简报纯文本附上仓库地址，方便纯文本客户端', () => {
@@ -281,14 +285,13 @@ describe('邮件里的仓库按钮', () => {
     expect(text).toContain(`GitHub 仓库：${BRAND.repoUrl}`);
   });
 
-  it('按钮与网页共用 GitHub 黑白标色板', () => {
-    const { html } = renderDigestEmail(BASE);
-    expect(html).toContain(`background:${BRAND.repoButton.background}`);
-    expect(html).toContain(`border:1px solid ${BRAND.repoButton.border}`);
-    expect(html).toContain(`fill="${BRAND.repoButton.text}"`);
+  it('确认信按钮与网页共用 GitHub 黑白标色板', () => {
+    expect(confirm).toContain(`background:${BRAND.repoButton.background}`);
+    expect(confirm).toContain(`border:1px solid ${BRAND.repoButton.border}`);
+    expect(confirm).toContain(`fill="${BRAND.repoButton.text}"`);
   });
 
-  it('周一附带的「本周机会」同时出现在 HTML 和纯文本', () => {
+  it('每天附带的「今日机会」同时出现在 HTML 和纯文本，且在热榜之后', () => {
     const opportunity: OpportunityItem = {
       id: 'contribute:acme/agent#12',
       kind: 'contribute',
@@ -319,10 +322,18 @@ describe('邮件里的仓库按钮', () => {
       evidence: [],
     };
     const rendered = renderDigestEmail({ ...BASE, opportunities: [opportunity] });
-    expect(rendered.html).toContain('本周机会');
+    expect(rendered.html).toContain('今日机会');
+    expect(rendered.html).not.toContain('本周机会');
     expect(rendered.html).toContain('acme/agent #12');
     expect(rendered.html).toContain('https://github.com/acme/agent/issues/12');
-    expect(rendered.text).toContain('本周机会');
+    expect(rendered.text).toContain('今日机会');
+    expect(rendered.text).not.toContain('本周机会');
     expect(rendered.text).toContain('https://github.com/acme/agent/issues/12');
+    expect(rendered.html.indexOf('owner/repo')).toBeLessThan(
+      rendered.html.indexOf('今日机会'),
+    );
+    expect(rendered.text.indexOf('owner/repo')).toBeLessThan(
+      rendered.text.indexOf('今日机会'),
+    );
   });
 });

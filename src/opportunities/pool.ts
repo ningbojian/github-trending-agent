@@ -214,7 +214,11 @@ export async function buildOpportunityPool(
       return { pool: null, reason: 'no-data' };
     }
 
-    const selected = selectOpportunityItems(facts, now.getTime());
+    // 邮件每天 2+1、7 天不重复：20+10 给一周多留余量；仍只做一次共享 LLM call。
+    const selected = selectOpportunityItems(facts, now.getTime(), {
+      contribute: 20,
+      research: 10,
+    });
     if (selected.length === 0) {
       return { pool: null, reason: 'no-qualified' };
     }

@@ -21,7 +21,18 @@ import { renderDigestEmail } from './render.js';
 import { emailConfigured, sendEmail } from './send.js';
 import { resolveBaseUrl } from './tokens.js';
 import { readOpportunityPool } from '../opportunities/pool.js';
-import { rankOpportunities } from '../opportunities/rank.js';
+import {
+  opportunitySignature,
+  rankOpportunities,
+} from '../opportunities/rank.js';
+import {
+  markOpportunitiesShown,
+  readShownOpportunities,
+} from '../opportunities/store.js';
+import type {
+  OpportunityItem,
+  OpportunityPool,
+} from '../opportunities/types.js';
 
 /**
  * 邮件简报推送（每小时 cron 调用）。
@@ -39,6 +50,11 @@ const DEFAULT_DAILY_CAP = 300;
 const MAX_PER_RUN = 50;
 const MAX_CONSECUTIVE_FAILURES = 5;
 const DAILY_SENT_KEY_PREFIX = 'email_digest_sent:';
+const EMAIL_OPPORTUNITY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+function emailScope(id: number): string {
+  return `email:${id}`;
+}
 
 export interface PushEmailDigestsResult {
   sent: number;
@@ -190,8 +206,11 @@ export async function pushEmailDigests(
   const today = shanghaiToday(now);
   const baseUrl = options.baseUrl ?? resolveBaseUrl();
   const unsubscribeUrl = `${baseUrl}/api/email-unsubscribe?t=`;
-  const monday = new Date(`${today}T00:00:00.000Z`).getUTCDay() === 1;
-  const opportunityPool = monday ? await readOpportunityPool(now) : null;
+  let poolPromise: Promise<OpportunityPool | null> | null = null;
+  const getOpportunityPool = (): Promise<OpportunityPool | null> => {
+    poolPromise ??= readOpportunityPool(now);
+    return poolPromise;
+  };
   let remaining = Math.max(0, dailyCap - (await readDailySent(today)));
   let runRemaining = MAX_PER_RUN;
 
@@ -245,6 +264,32 @@ export async function pushEmailDigests(
         skipped += 1;
         continue;
       }
+      let opportunities: OpportunityItem[] | undefined;
+      if (preferences.weeklyOpportunities) {
+        const pool = await getOpportunityPool();
+        if (pool) {
+          const shown = await readShownOpportunities(
+            emailScope(row.id),
+            EMAIL_OPPORTUNITY_WINDOW_MS,
+          );
+          const ranked = rankOpportunities(
+            pool.items,
+            {
+              languages: preferences.languages,
+              topics: preferences.topics,
+              keywords: preferences.keywords,
+              languageBoost: new Map(),
+              topicBoost: new Map(),
+              favoriteRepos: new Set(),
+              trackedRepos: new Set(),
+              hidden: new Set(),
+              shown,
+            },
+            { limit: 3, contribute: 2, research: 1 },
+          );
+          if (ranked.length > 0) opportunities = ranked;
+        }
+      }
       const rendered = renderDigestEmail({
         date: snapshot.date,
         pushTime: preferences.pushTime,
@@ -253,24 +298,7 @@ export async function pushEmailDigests(
         poolSize: snapshot.items.length,
         baseUrl,
         unsubToken: row.unsubToken,
-        opportunities:
-          monday && preferences.weeklyOpportunities && opportunityPool
-            ? rankOpportunities(
-                opportunityPool.items,
-                {
-                  languages: preferences.languages,
-                  topics: preferences.topics,
-                  keywords: preferences.keywords,
-                  languageBoost: new Map(),
-                  topicBoost: new Map(),
-                  favoriteRepos: new Set(),
-                  trackedRepos: new Set(),
-                  hidden: new Set(),
-                  shown: new Set(),
-                },
-                { limit: 3, contribute: 2, research: 1 },
-              )
-            : undefined,
+        opportunities,
       });
       await sendEmail({
         to: row.email,
@@ -282,6 +310,21 @@ export async function pushEmailDigests(
           'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
         },
       });
+      if (opportunities && opportunities.length > 0) {
+        try {
+          await markOpportunitiesShown(
+            emailScope(row.id),
+            opportunities.map(opportunitySignature),
+            EMAIL_OPPORTUNITY_WINDOW_MS,
+          );
+        } catch (err) {
+          // 邮件已发出：标记失败只记日志，下一次可能重复，不能把发送判成失败。
+          console.warn(
+            `email opportunity mark failed for subscriber ${row.id}:`,
+            err,
+          );
+        }
+      }
       sent += 1;
       remaining -= 1;
       runRemaining -= 1;

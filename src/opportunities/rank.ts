@@ -20,7 +20,7 @@ export interface RankOptions {
 }
 
 export function opportunitySignature(item: OpportunityItem): string {
-  return item.id;
+  return `${item.repo.trim().toLowerCase()}#${item.issueNumber}`;
 }
 
 function normalize(value: string | null | undefined): string {
@@ -97,7 +97,11 @@ export function rankOpportunities(
 
   const ranked = items
     .filter((item) => {
-      if (signals.hidden.has(item.id) || signals.shown.has(item.id)) {
+      if (
+        signals.hidden.has(item.id) ||
+        signals.shown.has(item.id) ||
+        signals.shown.has(opportunitySignature(item))
+      ) {
         return false;
       }
       const language = normalize(item.language);

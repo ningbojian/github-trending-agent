@@ -153,12 +153,12 @@ function form(options: {
           value="${escapeHtml(preferences.keywords.join(', '))}">
       </div>
       <div class="p-field">
-        <span class="p-label">每周机会</span>
+        <span class="p-label">邮件附带机会</span>
         <label class="p-check">
           <input type="checkbox" name="weeklyOpportunities" value="on"${preferences.weeklyOpportunities ? ' checked' : ''}>
-          周一简报里附带 2 填坑 + 1 研究
+          每天简报里附带 2 填坑 + 1 研究
         </label>
-        <span class="p-hint">只加在周一那封邮件里，不额外发信。</span>
+        <span class="p-hint">不额外发信；当天没有未看过的新机会时只发热榜。</span>
       </div>
       <button class="p-btn block" type="submit">保存设置</button>
     </form>

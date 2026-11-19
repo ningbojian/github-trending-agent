@@ -39,7 +39,7 @@ export interface EmailPreferences {
   keywords: string[];
   /** 订阅方向（directions.ts 的 key）。 */
   topics: string[];
-  /** 周一邮件里是否附带「本周机会」；缺省 true。 */
+  /** 每日邮件是否附带「今日机会」；字段名保留 weeklyOpportunities 兼容存量 JSON，缺省 true。 */
   weeklyOpportunities: boolean;
 }
 

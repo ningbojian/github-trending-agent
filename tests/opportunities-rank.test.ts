@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  opportunitySignature,
   rankOpportunities,
   type OpportunitySignals,
 } from '../src/opportunities/rank';
@@ -56,6 +57,27 @@ function signals(
 }
 
 describe('rankOpportunities', () => {
+  it('签名按 repo#issue，不受 kind 影响', () => {
+    expect(opportunitySignature(item())).toBe('acme/agent#12');
+    expect(opportunitySignature(item({ kind: 'research' }))).toBe(
+      'acme/agent#12',
+    );
+  });
+
+  it('shown 存 repo#issue 也能过滤不同 kind 的同 issue', () => {
+    const research = item({
+      id: 'research:acme/agent#12',
+      kind: 'research',
+      labels: ['RFC'],
+    });
+    const ranked = rankOpportunities(
+      [research],
+      signals({ shown: new Set(['acme/agent#12']) }),
+      { limit: 1, contribute: 0, research: 1 },
+    );
+    expect(ranked).toEqual([]);
+  });
+
   it('语言过滤 + hidden/shown 过滤', () => {
     const items = [
       item(),

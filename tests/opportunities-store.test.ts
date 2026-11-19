@@ -91,9 +91,43 @@ describe('opportunity store', () => {
     await markOpportunitiesShown('u1', ['x', 'y', 'x']);
     const values = dbMock.writes[0]!.values as {
       key: string;
-      value: { ids: string[] };
+      value: { entries: Array<{ id: string; at: string }> };
     };
     expect(values.key).toBe('opportunity-shown:u1');
-    expect(values.value.ids).toEqual(['old', 'x', 'y']);
+    expect(values.value.entries.map((entry) => entry.id)).toEqual([
+      'old',
+      'x',
+      'y',
+    ]);
+    expect(
+      values.value.entries.every((entry) => Number.isFinite(Date.parse(entry.at))),
+    ).toBe(true);
+  });
+
+  it('shown 支持 7 天窗口，旧条目不影响新窗口', async () => {
+    const now = Date.now();
+    dbMock.rows = [
+      {
+        value: {
+          entries: [
+            {
+              id: 'fresh',
+              at: new Date(now - 6 * 24 * 60 * 60 * 1000).toISOString(),
+            },
+            {
+              id: 'old',
+              at: new Date(now - 8 * 24 * 60 * 60 * 1000).toISOString(),
+            },
+          ],
+        },
+      },
+    ];
+    const sevenDays = 7 * 24 * 60 * 60 * 1000;
+    await expect(
+      readShownOpportunities('email:1', sevenDays),
+    ).resolves.toEqual(new Set(['fresh']));
+    await expect(readShownOpportunities('email:1')).resolves.toEqual(
+      new Set(['fresh', 'old']),
+    );
   });
 });

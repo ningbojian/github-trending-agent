@@ -7,6 +7,7 @@ import {
   renderManageEmail,
 } from '../src/email/render.js';
 import type { DigestSnapshotItem } from '../src/agent/digest-snapshot.js';
+import type { OpportunityItem } from '../src/opportunities/types.js';
 
 /**
  * 邮件模板预览：不连网、不发信，把三封邮件写成 HTML 文件，直接用浏览器打开。
@@ -28,6 +29,36 @@ const previewItem = (fullName: string, stars: number, delta: number): DigestSnap
   summary: '示例简介：这里会放模型生成的一句中文短句。',
 });
 
+const previewOpportunity: OpportunityItem = {
+  id: 'contribute:astral-sh/ruff#123',
+  kind: 'contribute',
+  repo: 'astral-sh/ruff',
+  issueNumber: 123,
+  title: 'Windows 下 CUDA 检测失败',
+  body: '示例 issue 正文。',
+  url: 'https://github.com/astral-sh/ruff/issues/123',
+  language: 'rust',
+  topics: ['lint'],
+  stars: 42000,
+  license: 'MIT',
+  archived: false,
+  pushedAt: '2026-11-10T00:00:00Z',
+  labels: ['good first issue'],
+  comments: 4,
+  reactions: 6,
+  createdAt: '2026-11-01T00:00:00Z',
+  updatedAt: '2026-11-16T00:00:00Z',
+  maintainerEngaged: true,
+  assigned: false,
+  linkedPr: false,
+  score: 86,
+  why: '复现路径清晰，维护者刚回复过。',
+  firstStep: '按 issue 里的步骤跑一遍，贴 log 并认领。',
+  effort: '小',
+  confidence: '高',
+  evidence: [],
+};
+
 const digest = renderDigestEmail({
   date: '2026-10-29',
   pushTime: '09:00',
@@ -37,6 +68,8 @@ const digest = renderDigestEmail({
     previewItem('astral-sh/ruff', 42000, 180),
     previewItem('obra/superpowers', 1095, 1095),
   ],
+  poolSize: 20,
+  opportunities: [previewOpportunity],
   baseUrl: base,
   unsubToken: 'preview-token',
 });

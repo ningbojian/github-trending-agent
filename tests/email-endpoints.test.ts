@@ -649,6 +649,10 @@ describe('/api/email-settings', () => {
     expect(res.body).toContain('value="20" selected');
     expect(res.body).toContain('value="rust" checked');
     expect(res.body).toContain('value="ai"');
+    expect(res.body).toContain('邮件附带机会');
+    expect(res.body).toContain('每天简报里附带 2 填坑 + 1 研究');
+    expect(res.body).toContain('name="weeklyOpportunities" value="on" checked');
+    expect(res.body).not.toContain('每周机会');
   });
 
   it('rejects an out-of-window push time without writing', async () => {

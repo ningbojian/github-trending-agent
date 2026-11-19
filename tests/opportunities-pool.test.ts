@@ -198,6 +198,40 @@ describe('buildOpportunityPool', () => {
     );
   });
 
+  it('池最多 20 填坑 + 10 研究', async () => {
+    const facts = [
+      ...Array.from({ length: 25 }, (_, index) =>
+        fact({
+          id: `contribute:acme/c${index}#${index + 1}`,
+          repo: `acme/c${index}`,
+          issueNumber: index + 1,
+        }),
+      ),
+      ...Array.from({ length: 12 }, (_, index) =>
+        fact({
+          id: `research:acme/r${index}#${index + 100}`,
+          kind: 'research',
+          repo: `acme/r${index}`,
+          issueNumber: index + 100,
+          labels: ['RFC'],
+          assigned: true,
+        }),
+      ),
+    ];
+
+    const result = await buildOpportunityPool(NOW, {
+      ...deps,
+      readRawFacts: async () => facts,
+    });
+
+    expect(
+      result.pool?.items.filter((item) => item.kind === 'contribute'),
+    ).toHaveLength(20);
+    expect(
+      result.pool?.items.filter((item) => item.kind === 'research'),
+    ).toHaveLength(10);
+  });
+
   it('没有原始数据返回 no-data', async () => {
     const result = await buildOpportunityPool(NOW, {
       ...deps,

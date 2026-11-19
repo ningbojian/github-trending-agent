@@ -49,7 +49,7 @@ export interface DigestEmailInput {
   /** 站点根地址（无尾斜杠），用于设置/退订链接。 */
   baseUrl: string;
   unsubToken: string;
-  /** 周一可选：本周机会（2 填坑 + 1 研究）。 */
+  /** 每天可选：今日机会（2 填坑 + 1 研究）。 */
   opportunities?: OpportunityItem[];
 }
 
@@ -78,48 +78,29 @@ function unsubscribeUrl(baseUrl: string, unsubToken: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/api/email-unsubscribe?t=${encodeURIComponent(unsubToken)}`;
 }
 
-/** 深色胶囊：实色底 + 细描边，Outlook 也能画出边界。 */
-function pill(text: string, tone: 'default' | 'growth' = 'default'): string {
-  const bg = tone === 'growth' ? EMAIL.growthBg : EMAIL.pillBg;
-  const fg = tone === 'growth' ? EMAIL.growthText : EMAIL.pillText;
-  const border = tone === 'growth' ? 'transparent' : EMAIL.pillBorder;
-  return `<span style="display:inline-block;background:${bg};border:1px solid ${border};border-radius:999px;padding:1px 7px;margin:0 4px 2px 0;font-size:11px;line-height:1.5;color:${fg};">${text}</span>`;
-}
-
-/** 单条：序号徽章与仓库名一行，徽章一行，涨幅条一行，简介一行。 */
+/** 单条紧凑行：序号 + 仓库 + 星标/涨幅，最多两行简介；不再用卡片/涨幅条。 */
 function renderItemHtml(
   index: number,
   item: DigestSnapshotItem,
   last: boolean,
-  maxDelta: number,
 ): string {
-  const badges = [pill(`★ ${formatNumber(item.stars)}`)];
-  if (item.starsDelta > 0) badges.push(pill(`+${formatNumber(item.starsDelta)} 今日`, 'growth'));
-  if (item.isNew) badges.push(pill('新上榜', 'growth'));
   const url = item.htmlUrl || `https://github.com/${item.fullName}`;
   const summary = item.summary?.trim();
-  // 涨幅条：按本批最大涨幅归一化；纯 table 宽度，Gmail/QQ 都能画。
-  const pct =
-    maxDelta > 0 && item.starsDelta > 0
-      ? Math.max(6, Math.round((item.starsDelta / maxDelta) * 100))
-      : 0;
-  const bar =
-    pct > 0
-      ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;">
-          <tr>
-            <td width="${pct}%" height="4" bgcolor="${EMAIL.accent}" style="border-radius:2px;font-size:0;line-height:0;">&nbsp;</td>
-            <td width="${100 - pct}%" height="4" bgcolor="#222C38" style="border-radius:2px;font-size:0;line-height:0;">&nbsp;</td>
-          </tr>
-        </table>`
-      : '';
+  const meta = [
+    `★ ${formatNumber(item.stars)}`,
+    item.starsDelta > 0 ? `+${formatNumber(item.starsDelta)}` : null,
+    item.isNew ? '新' : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(' · ');
   return `<tr>
   <td style="padding:8px 0;${last ? '' : `border-bottom:1px solid ${EMAIL.divider};`}">
-    <div style="font-size:14px;line-height:1.4;">
-      <span style="display:inline-block;min-width:22px;padding:1px 6px;margin-right:6px;border-radius:6px;background:${EMAIL.pillBg};border:1px solid ${EMAIL.pillBorder};color:${EMAIL.faint};font-size:11px;text-align:center;">#${index}</span><a href="${escapeHtml(url)}" style="color:${EMAIL.accent};text-decoration:none;font-family:${BRAND.monoFontFamily};font-size:14px;font-weight:600;">${escapeHtml(item.fullName)}</a>
+    <div style="font-size:13px;line-height:1.5;">
+      <span style="color:${EMAIL.faint};">${index}.</span>
+      <a href="${escapeHtml(url)}" style="color:${EMAIL.accent};text-decoration:none;font-family:${BRAND.monoFontFamily};font-size:13px;font-weight:600;">${escapeHtml(item.fullName)}</a>
+      <span style="color:${EMAIL.muted};font-size:11px;"> ${meta}</span>
     </div>
-    <div style="margin-top:2px;">${badges.join('')}</div>
-    ${bar}
-    ${summary ? `<div style="margin-top:4px;font-size:13px;line-height:1.55;color:${EMAIL.summary};">${escapeHtml(summary)}</div>` : ''}
+    ${summary ? `<div style="margin-top:2px;font-size:12px;line-height:1.55;color:${EMAIL.summary};">${escapeHtml(summary)}</div>` : ''}
   </td>
 </tr>`;
 }
@@ -131,57 +112,23 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
   const settings = settingsUrl(baseUrl, unsubToken);
   const unsubscribe = unsubscribeUrl(baseUrl, unsubToken);
 
+  const opportunityCount = opportunities?.length ?? 0;
   const preheaderText =
     items.length > 0
-      ? `今日 ${items.length} 个热榜项目：${items.slice(0, 3).map((item) => item.fullName).join('、')}`
+      ? `今天 ${items.length} 个项目${opportunityCount > 0 ? ` · ${opportunityCount} 个机会` : ''}：${items.slice(0, 3).map((item) => item.fullName).join('、')}`
       : '今日暂无热榜项目';
-
-  // 顶部数据条与每条涨幅条的归一化基准。
-  const candidateCount =
-    typeof poolSize === 'number' && poolSize > 0 ? poolSize : items.length;
-  const freshCount = items.filter((item) => item.isNew).length;
-  const totalDelta = items.reduce(
-    (sum, item) => sum + Math.max(0, item.starsDelta),
-    0,
-  );
-  const maxDelta = items.reduce(
-    (max, item) => Math.max(max, item.starsDelta),
-    0,
-  );
-  const stats =
-    items.length > 0
-      ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:9px;">
-          <tr>
-            <td width="32%" align="center" style="background:${EMAIL.abstractBg};border-radius:8px;padding:7px 4px;">
-              <div style="font-size:11px;color:${EMAIL.muted};">今日候选</div>
-              <div style="font-size:17px;font-weight:700;color:${EMAIL.text};">${candidateCount}</div>
-            </td>
-            <td width="4"></td>
-            <td width="32%" align="center" style="background:${EMAIL.abstractBg};border-radius:8px;padding:7px 4px;">
-              <div style="font-size:11px;color:${EMAIL.muted};">新上榜</div>
-              <div style="font-size:17px;font-weight:700;color:${EMAIL.text};">${freshCount}</div>
-            </td>
-            <td width="4"></td>
-            <td width="32%" align="center" style="background:${EMAIL.abstractBg};border-radius:8px;padding:7px 4px;">
-              <div style="font-size:11px;color:${EMAIL.muted};">总涨幅</div>
-              <div style="font-size:17px;font-weight:700;color:${EMAIL.accent};">+${formatNumber(totalDelta)}</div>
-            </td>
-          </tr>
-        </table>`
-      : '';
 
   const opportunitySection =
     opportunities && opportunities.length > 0
-      ? `<tr><td style="padding:8px 16px 0;">
-          <div style="margin-top:10px;padding-top:10px;border-top:1px dashed ${EMAIL.divider};">
-            <div style="font-size:13px;font-weight:700;color:${EMAIL.text};">本周机会</div>
-            <div style="font-size:12px;color:${EMAIL.muted};margin-top:2px;">从公开 GitHub 里筛出的动手机会，点链接去原 issue。</div>
+      ? `<tr><td style="padding:12px 20px 0;">
+          <div style="border-top:1px solid ${EMAIL.divider};padding-top:10px;">
+            <div style="font-size:12px;font-weight:700;color:${EMAIL.muted};">今日机会</div>
             ${opportunities
               .map(
-                (item) => `<div style="margin-top:9px;">
-              <a href="${escapeHtml(item.url)}" style="color:${EMAIL.accent};font-size:13px;font-weight:700;text-decoration:none;">[${item.kind === 'contribute' ? '填坑' : '研究'}] ${escapeHtml(item.repo)} #${item.issueNumber}</a>
-              <div style="font-size:12px;line-height:1.6;color:${EMAIL.text};">${escapeHtml(item.title)}</div>
-              <div style="font-size:12px;line-height:1.6;color:${EMAIL.muted};">${escapeHtml(item.why)} 第一步：${escapeHtml(item.firstStep)}</div>
+                (item) => `<div style="margin-top:7px;">
+              <a href="${escapeHtml(item.url)}" style="color:${EMAIL.accent};font-size:13px;font-weight:600;text-decoration:none;">[${item.kind === 'contribute' ? '填坑' : '研究'}] ${escapeHtml(item.repo)} #${item.issueNumber}</a>
+              <div style="margin-top:1px;font-size:12px;line-height:1.5;color:${EMAIL.text};">${escapeHtml(item.title)}</div>
+              <div style="font-size:12px;line-height:1.5;color:${EMAIL.muted};">${escapeHtml(item.why)} · 第一步：${escapeHtml(item.firstStep)}</div>
             </div>`,
               )
               .join('')}
@@ -203,47 +150,46 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" bgcolor="${EMAIL.page}" style="background:${EMAIL.page};padding:16px 10px;">
   <tr>
     <td align="center">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:${BRAND.maxWidth}px;background:${EMAIL.card};border:1px solid ${EMAIL.cardBorder};border-radius:14px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:${BRAND.maxWidth}px;background:${EMAIL.card};border:1px solid ${EMAIL.cardBorder};border-radius:12px;">
         <tr>
-          <td style="background:${EMAIL.headerBg};border-bottom:1px solid ${EMAIL.cardBorder};border-radius:14px 14px 0 0;padding:12px 16px;">
-            <div style="font-size:17px;font-weight:700;letter-spacing:.2px;">${BRAND.name}</div>
-            <div style="margin-top:2px;font-size:12px;color:${EMAIL.muted};">${BRAND.subtitle} · ${escapeHtml(date)} · 北京时间 ${escapeHtml(pushTime)}</div>
+          <td style="padding:18px 20px 0;">
+            <div style="font-size:16px;font-weight:700;letter-spacing:.2px;">${BRAND.name}</div>
+            <div style="margin-top:1px;font-size:12px;color:${EMAIL.muted};">${escapeHtml(date)} · 北京时间 ${escapeHtml(pushTime)}</div>
           </td>
         </tr>
         <tr>
-          <td style="padding:12px 16px 0;">
-            <div style="font-size:13px;line-height:1.6;color:${EMAIL.muted};">你好，这是今天的 GitHub 热榜简报。</div>
-            ${
+          <td style="padding:10px 20px 0;">
+            <div style="font-size:13px;line-height:1.6;color:${EMAIL.muted};">今天 ${items.length} 个项目${opportunities && opportunities.length > 0 ? ` · ${opportunities.length} 个机会` : ''}${
               typeof poolSize === 'number' && poolSize > items.length
-                ? `<div style="margin-top:3px;font-size:12px;line-height:1.5;color:${EMAIL.faint};">今天从 ${poolSize} 个候选里筛出 ${items.length} 个。</div>`
+                ? `（从 ${poolSize} 个候选里筛出）`
                 : ''
-            }
+            }</div>
             ${
               abstract
-                ? `<div style="margin-top:8px;padding:9px 12px;background:${EMAIL.abstractBg};border-left:2px solid ${EMAIL.accent};border-radius:6px;font-size:13px;line-height:1.6;color:${EMAIL.abstractText};">${escapeHtml(abstract)}</div>`
+                ? `<div style="margin-top:6px;font-size:13px;line-height:1.65;color:${EMAIL.abstractText};">${escapeHtml(abstract)}</div>`
                 : ''
             }
-            ${stats}
           </td>
         </tr>
         <tr>
-          <td style="padding:4px 16px 0;">
+          <td style="padding:6px 20px 0;">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-              ${items.map((item, index) => renderItemHtml(index + 1, item, index === items.length - 1, maxDelta)).join('\n')}
+              ${items.map((item, index) => renderItemHtml(index + 1, item, index === items.length - 1)).join('\n')}
             </table>
           </td>
         </tr>
         ${opportunitySection}
         <tr>
-          <td style="padding:10px 16px 14px;border-top:1px solid ${EMAIL.divider};color:${EMAIL.muted};font-size:12px;line-height:1.6;">
-            <div>数据来源：GitHub Trending（近 7 天）。</div>
-            <div style="margin-top:5px;">
-              <a href="${escapeHtml(settings)}" style="color:${EMAIL.accent};text-decoration:none;">调整推送时间 / 频率</a>
+          <td style="padding:14px 20px 18px;border-top:1px solid ${EMAIL.divider};color:${EMAIL.muted};font-size:11px;line-height:1.6;">
+            <div>数据来源：GitHub Trending（近 7 天）</div>
+            <div style="margin-top:3px;">
+              <a href="${escapeHtml(settings)}" style="color:${EMAIL.accent};text-decoration:none;">调整设置</a>
               &nbsp;·&nbsp;
               <a href="${escapeHtml(unsubscribe)}" style="color:${EMAIL.muted};text-decoration:none;">退订</a>
+              &nbsp;·&nbsp;
+              <a href="${BRAND.repoUrl}" style="color:${EMAIL.muted};text-decoration:none;">GitHub 仓库</a>
             </div>
-            ${emailRepoButton()}
-            <div style="margin-top:8px;color:${EMAIL.faint};">${BRAND.name} · 非 GitHub 官方产品</div>
+            <div style="margin-top:4px;color:${EMAIL.faint};">${BRAND.name} · 非 GitHub 官方产品</div>
           </td>
         </tr>
       </table>
@@ -254,38 +200,42 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
 </html>`;
 
   const textLines = [
-    `你好，这是今天的 GitHub 热榜简报（${date}）。`,
-    ...(typeof poolSize === 'number' && poolSize > items.length
-      ? [`今天从 ${poolSize} 个候选里筛出 ${items.length} 个。`]
-      : []),
-    ...(items.length > 0
-      ? [`今日 ${items.length} 项 · 新上榜 ${freshCount} · 总涨幅 +${formatNumber(totalDelta)}`]
-      : []),
+    `${BRAND.name} · ${date} · 北京时间 ${pushTime}`,
+    `今天 ${items.length} 个项目${opportunities && opportunities.length > 0 ? ` · ${opportunities.length} 个机会` : ''}${
+      typeof poolSize === 'number' && poolSize > items.length
+        ? `（从 ${poolSize} 个候选里筛出）`
+        : ''
+    }`,
     '',
     ...(abstract ? [abstract, ''] : []),
-    ...(opportunities && opportunities.length > 0
-      ? [
-          '本周机会：',
-          ...opportunities.flatMap((item, index) => [
-            `${index + 1}. [${item.kind === 'contribute' ? '填坑' : '研究'}] ${item.repo} #${item.issueNumber}`,
-            item.url,
-            `${item.why} 第一步：${item.firstStep}`,
-            '',
-          ]),
-        ]
-      : []),
     ...items.flatMap((item, index) => {
-      const meta = [`★ ${formatNumber(item.stars)}`, `+${formatNumber(item.starsDelta)} 今日`];
-      if (item.isNew) meta.push('新上榜');
+      const meta = [
+        `★ ${formatNumber(item.stars)}`,
+        item.starsDelta > 0 ? `+${formatNumber(item.starsDelta)}` : null,
+        item.isNew ? '新' : null,
+      ]
+        .filter((part): part is string => part !== null)
+        .join(' · ');
       const summary = item.summary?.trim();
       return [
-        `${index + 1}. ${item.fullName}（${meta.join(' / ')}）`,
+        `${index + 1}. ${item.fullName}（${meta}）`,
         item.htmlUrl || `https://github.com/${item.fullName}`,
         ...(summary ? [summary] : []),
         '',
       ];
     }),
-    `调整推送时间 / 频率：${settings}`,
+    ...(opportunities && opportunities.length > 0
+      ? [
+          '今日机会：',
+          ...opportunities.flatMap((item, index) => [
+            `${index + 1}. [${item.kind === 'contribute' ? '填坑' : '研究'}] ${item.repo} #${item.issueNumber}`,
+            item.url,
+            `${item.why} · 第一步：${item.firstStep}`,
+            '',
+          ]),
+        ]
+      : []),
+    `调整设置：${settings}`,
     `退订：${unsubscribe}`,
     `GitHub 仓库：${BRAND.repoUrl}`,
     '',

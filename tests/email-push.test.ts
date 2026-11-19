@@ -63,6 +63,15 @@ vi.mock('../src/opportunities/pool', () => ({
   readOpportunityPool: poolMock.readOpportunityPool,
 }));
 
+const oppStoreMock = vi.hoisted(() => ({
+  readShownOpportunities: vi.fn(async () => new Set<string>()),
+  markOpportunitiesShown: vi.fn(async () => undefined),
+}));
+vi.mock('../src/opportunities/store', () => ({
+  readShownOpportunities: oppStoreMock.readShownOpportunities,
+  markOpportunitiesShown: oppStoreMock.markOpportunitiesShown,
+}));
+
 const mailState = vi.hoisted(() => ({
   configured: true,  sendCalls: [] as Array<{
     to: string;
@@ -175,6 +184,46 @@ function emailRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const OPPORTUNITY = {
+  id: 'contribute:acme/agent#12',
+  kind: 'contribute',
+  repo: 'acme/agent',
+  issueNumber: 12,
+  title: 'Windows 下 CUDA 检测失败',
+  body: '...',
+  url: 'https://github.com/acme/agent/issues/12',
+  language: 'typescript',
+  topics: ['agent'],
+  stars: 500,
+  license: 'MIT',
+  archived: false,
+  pushedAt: '2026-11-10T00:00:00.000Z',
+  labels: ['good first issue'],
+  comments: 3,
+  reactions: 2,
+  createdAt: '2026-11-01T00:00:00.000Z',
+  updatedAt: '2026-11-16T00:00:00.000Z',
+  maintainerEngaged: true,
+  assigned: false,
+  linkedPr: false,
+  score: 80,
+  why: '值得修。',
+  firstStep: '复现并认领。',
+  effort: '小',
+  confidence: '高',
+  evidence: [],
+};
+
+function poolOf(items: unknown[]) {
+  return {
+    version: 1,
+    date: '2026-10-25',
+    dataDate: '2026-10-25',
+    generatedAt: '2026-10-25T00:00:00.000Z',
+    items,
+  };
+}
+
 beforeEach(() => {
   dbState.emailRows = [];
   dbState.kvRows = [];
@@ -185,6 +234,10 @@ beforeEach(() => {
   mailState.sendCalls = [];
   poolMock.readOpportunityPool.mockReset();
   poolMock.readOpportunityPool.mockResolvedValue(null);
+  oppStoreMock.readShownOpportunities.mockReset();
+  oppStoreMock.readShownOpportunities.mockResolvedValue(new Set());
+  oppStoreMock.markOpportunitiesShown.mockReset();
+  oppStoreMock.markOpportunitiesShown.mockResolvedValue(undefined);
   mailState.failFor = new Set();
   snapshotState.snapshot = {
     date: '2026-10-25',
@@ -516,57 +569,30 @@ describe('pushEmailDigests — sending', () => {
     expect(dbState.updateCalls).toHaveLength(0);
   });
 
-  it('周一且开启偏好 → 简报带本周机会', async () => {
+  it('每天且开启偏好 → 简报带今日机会，发送后按 email 身份标记', async () => {
     dbState.emailRows = [emailRow()];
-    poolMock.readOpportunityPool.mockResolvedValue({
-      version: 1,
-      date: '2026-10-26',
-      dataDate: '2026-10-26',
-      generatedAt: '2026-10-26T00:00:00.000Z',
-      items: [
-        {
-          id: 'contribute:acme/agent#12',
-          kind: 'contribute',
-          repo: 'acme/agent',
-          issueNumber: 12,
-          title: 'Windows 下 CUDA 检测失败',
-          body: '...',
-          url: 'https://github.com/acme/agent/issues/12',
-          language: 'typescript',
-          topics: ['agent'],
-          stars: 500,
-          license: 'MIT',
-          archived: false,
-          pushedAt: '2026-11-10T00:00:00.000Z',
-          labels: ['good first issue'],
-          comments: 3,
-          reactions: 2,
-          createdAt: '2026-11-01T00:00:00.000Z',
-          updatedAt: '2026-11-16T00:00:00.000Z',
-          maintainerEngaged: true,
-          assigned: false,
-          linkedPr: false,
-          score: 80,
-          why: '值得修。',
-          firstStep: '复现并认领。',
-          effort: '小',
-          confidence: '高',
-          evidence: [],
-        },
-      ],
-    });
+    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
 
-    const result = await pushEmailDigests({
-      now: new Date('2026-10-26T01:30:00Z'),
-      gapMs: 0,
-    });
+    const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
 
     expect(result.sent).toBe(1);
-    expect(mailState.sendCalls[0]!.html).toContain('本周机会');
-    expect(mailState.sendCalls[0]!.text).toContain('本周机会');
+    const sent = mailState.sendCalls[0]!;
+    expect(sent.html).toContain('今日机会');
+    expect(sent.html).not.toContain('本周机会');
+    expect(sent.text).toContain('今日机会');
+    expect(poolMock.readOpportunityPool).toHaveBeenCalledTimes(1);
+    expect(oppStoreMock.readShownOpportunities).toHaveBeenCalledWith(
+      'email:1',
+      7 * 24 * 60 * 60 * 1000,
+    );
+    expect(oppStoreMock.markOpportunitiesShown).toHaveBeenCalledWith(
+      'email:1',
+      ['acme/agent#12'],
+      7 * 24 * 60 * 60 * 1000,
+    );
   });
 
-  it('周一但偏好关闭 → 不带本周机会', async () => {
+  it('偏好关闭 → 不读池、不带今日机会', async () => {
     dbState.emailRows = [
       emailRow({
         preferences: {
@@ -579,20 +605,52 @@ describe('pushEmailDigests — sending', () => {
         },
       }),
     ];
-    poolMock.readOpportunityPool.mockResolvedValue({
-      version: 1,
-      date: '2026-10-26',
-      dataDate: '2026-10-26',
-      generatedAt: '2026-10-26T00:00:00.000Z',
-      items: [],
-    });
+    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
 
-    const result = await pushEmailDigests({
-      now: new Date('2026-10-26T01:30:00Z'),
-      gapMs: 0,
-    });
+    const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
 
     expect(result.sent).toBe(1);
-    expect(mailState.sendCalls[0]!.html).not.toContain('本周机会');
+    expect(mailState.sendCalls[0]!.html).not.toContain('今日机会');
+    expect(poolMock.readOpportunityPool).not.toHaveBeenCalled();
+    expect(oppStoreMock.readShownOpportunities).not.toHaveBeenCalled();
+    expect(oppStoreMock.markOpportunitiesShown).not.toHaveBeenCalled();
+  });
+
+  it('全部已展示 → 只发 trending，不标记', async () => {
+    dbState.emailRows = [emailRow()];
+    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
+    oppStoreMock.readShownOpportunities.mockResolvedValue(
+      new Set(['acme/agent#12']),
+    );
+
+    const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
+
+    expect(result.sent).toBe(1);
+    expect(mailState.sendCalls[0]!.html).not.toContain('今日机会');
+    expect(oppStoreMock.markOpportunitiesShown).not.toHaveBeenCalled();
+  });
+
+  it('发送失败不标记机会', async () => {
+    dbState.emailRows = [emailRow()];
+    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
+    mailState.failFor.add('reader@example.com');
+
+    const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
+
+    expect(result.failed).toBe(1);
+    expect(oppStoreMock.markOpportunitiesShown).not.toHaveBeenCalled();
+  });
+
+  it('标记失败不影响已发送的邮件', async () => {
+    dbState.emailRows = [emailRow()];
+    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
+    oppStoreMock.markOpportunitiesShown.mockRejectedValueOnce(
+      new Error('db down'),
+    );
+
+    const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
+
+    expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
+    expect(mailState.sendCalls).toHaveLength(1);
   });
 });

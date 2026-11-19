@@ -125,7 +125,7 @@ export const emailSubscribers = pgTable(
         keywords: string[];
         /** 订阅方向（directions.ts 的 key）。 */
         topics?: string[];
-        /** 周一邮件附带机会开关；缺省 true。 */
+        /** 每日邮件附带机会开关；缺省 true。 */
         weeklyOpportunities?: boolean;
       }>()
       .notNull()

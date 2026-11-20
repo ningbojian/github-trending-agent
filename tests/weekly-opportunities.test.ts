@@ -64,9 +64,13 @@ vi.mock('../src/opportunities/store', () => ({
   markOpportunitiesShown: storeMock.markOpportunitiesShown,
 }));
 
-const apiMock = vi.hoisted(() => ({ sendWeComText: vi.fn() }));
+const apiMock = vi.hoisted(() => ({
+  sendWeComText: vi.fn(),
+  sendWeComNews: vi.fn(),
+}));
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
+  sendWeComNews: apiMock.sendWeComNews,
 }));
 
 import { pushWeeklyOpportunities } from '../src/agent/weekly-opportunities';
@@ -146,17 +150,28 @@ beforeEach(() => {
   storeMock.markOpportunitiesShown.mockClear();
   apiMock.sendWeComText.mockReset();
   apiMock.sendWeComText.mockResolvedValue(undefined);
+  apiMock.sendWeComNews.mockReset();
+  apiMock.sendWeComNews.mockResolvedValue(undefined);
 });
 
 describe('pushWeeklyOpportunities', () => {
-  it('默认开启：给 A/C 各发一次，B 关闭跳过', async () => {
+  it('默认开启：给 A/C 各发一次 news 卡片，B 关闭跳过', async () => {
     const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
 
     expect(result).toEqual({ sent: 2, skipped: 1, failed: 0 });
-    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(2);
-    const text = apiMock.sendWeComText.mock.calls[0]![1] as string;
-    expect(text).toContain('本周机会');
-    expect(text).toContain('[填坑]');
+    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(2);
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    const articles = apiMock.sendWeComNews.mock.calls[0]![1] as Array<{
+      title: string;
+      description?: string;
+      url: string;
+      picurl?: string;
+    }>;
+    expect(articles).toHaveLength(3);
+    expect(articles[0]!.title).toContain('acme/agent');
+    expect(articles[0]!.description).toContain('第一步');
+    expect(articles[0]!.picurl).toContain('opengraph');
+    expect(articles[1]!.picurl).toBeUndefined();
     expect(storeMock.markOpportunitiesShown).toHaveBeenCalledTimes(2);
   });
 
@@ -164,6 +179,7 @@ describe('pushWeeklyOpportunities', () => {
     poolMock.readLatestOpportunityPool.mockResolvedValue(null);
     const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
     expect(result).toEqual({ sent: 0, skipped: 0, failed: 0 });
+    expect(apiMock.sendWeComNews).not.toHaveBeenCalled();
     expect(apiMock.sendWeComText).not.toHaveBeenCalled();
   });
 
@@ -174,10 +190,23 @@ describe('pushWeeklyOpportunities', () => {
     expect(result.skipped).toBe(3);
   });
 
-  it('单个用户发送失败只计 failed，不影响其他用户', async () => {
-    apiMock.sendWeComText
-      .mockRejectedValueOnce(new Error('wecom down'))
+  it('news 失败回退文本仍计 sent', async () => {
+    apiMock.sendWeComNews.mockRejectedValueOnce(new Error('news down'));
+
+    const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
+
+    expect(result).toEqual({ sent: 2, skipped: 1, failed: 0 });
+    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText.mock.calls[0]![1] as string).toContain(
+      '本周机会',
+    );
+  });
+
+  it('news 与文本都失败只计 failed，不影响其他用户', async () => {
+    apiMock.sendWeComNews
+      .mockRejectedValueOnce(new Error('news down'))
       .mockResolvedValueOnce(undefined);
+    apiMock.sendWeComText.mockRejectedValueOnce(new Error('wecom down'));
 
     const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
     expect(result).toEqual({ sent: 1, skipped: 1, failed: 1 });
@@ -191,9 +220,12 @@ describe('pushWeeklyOpportunities', () => {
     const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
 
     expect(result.sent).toBe(2);
-    const text = apiMock.sendWeComText.mock.calls[0]![1] as string;
-    expect(text).not.toContain('https://github.com/acme/agent/issues/12');
-    expect(text).toContain('https://github.com/acme/two/issues/2');
+    const articles = apiMock.sendWeComNews.mock.calls[0]![1] as Array<{
+      url: string;
+    }>;
+    const urls = articles.map((article) => article.url);
+    expect(urls).not.toContain('https://github.com/acme/agent/issues/12');
+    expect(urls).toContain('https://github.com/acme/two/issues/2');
   });
 
   it('超过 50 个订阅者也不丢人', async () => {
@@ -205,6 +237,6 @@ describe('pushWeeklyOpportunities', () => {
     const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
 
     expect(result.sent).toBe(60);
-    expect(apiMock.sendWeComText).toHaveBeenCalledTimes(60);
+    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(60);
   });
 });

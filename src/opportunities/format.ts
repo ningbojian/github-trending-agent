@@ -1,3 +1,4 @@
+import type { NewsArticle } from '../wecom/news.js';
 import type { OpportunityItem } from './types.js';
 
 function truncateChars(text: string, maxChars: number): string {
@@ -45,4 +46,35 @@ export function fitOpportunityText(
   }
   const fallback = [header, '', cards[0] ?? '', footer].join('\n\n');
   return truncateUtf8(fallback, maxBytes);
+}
+
+function clipTitle(text: string, maxBytes = 120): string {
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
+  const ellipsis = '…';
+  const budget = maxBytes - Buffer.byteLength(ellipsis, 'utf8');
+  let out = '';
+  for (const char of text) {
+    if (Buffer.byteLength(out + char, 'utf8') > budget) break;
+    out += char;
+  }
+  return `${out.trimEnd()}${ellipsis}`;
+}
+
+/** 企微 news 卡片：仓库名在最前，why/第一步放在 description；首篇带仓库 OG 图。 */
+export function buildOpportunityArticles(
+  items: OpportunityItem[],
+): NewsArticle[] {
+  return items.map((item, index) => {
+    const kind = item.kind === 'contribute' ? '填坑' : '研究';
+    return {
+      title: clipTitle(
+        `[${kind}] ${item.repo} #${item.issueNumber} · ${item.why}`,
+      ),
+      description: `${item.why} · 第一步：${item.firstStep}`,
+      url: item.url,
+      ...(index === 0
+        ? { picurl: `https://opengraph.githubassets.com/1/${item.repo}` }
+        : {}),
+    };
+  });
 }

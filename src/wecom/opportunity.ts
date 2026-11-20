@@ -1,4 +1,4 @@
-import { fitOpportunityText } from '../opportunities/format.js';
+import { fitOpportunityText, buildOpportunityArticles } from '../opportunities/format.js';
 import { normalizePreferences } from '../agent/preferences.js';
 import { readSubscription } from '../agent/subscription-store.js';
 import { loadUserSignals } from '../agent/taste.js';
@@ -9,7 +9,7 @@ import {
 } from '../opportunities/rank.js';
 import { readHiddenOpportunities } from '../opportunities/store.js';
 import type { OpportunityItem } from '../opportunities/types.js';
-import { sendWeComText } from './api.js';
+import { sendWeComNews, sendWeComText } from './api.js';
 import type { InboundMessage } from './router.js';
 
 const EMPTY_TEXT = '今天的机会池还没准备好，晚点再试。';
@@ -77,7 +77,13 @@ export async function handleOpportunities(
       await sendWeComText(userid, NO_MATCH_TEXT);
       return;
     }
-    await sendWeComText(userid, formatOpportunityReply(items));
+    try {
+      await sendWeComNews(userid, buildOpportunityArticles(items));
+    } catch (err) {
+      // news 被拒（标题/图片/客户端限制）时回退到现有文本卡片。
+      console.warn('opportunity news failed, falling back to text:', err);
+      await sendWeComText(userid, formatOpportunityReply(items));
+    }
   } catch (err) {
     console.error('handleOpportunities failed:', err);
     try {

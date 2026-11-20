@@ -1,7 +1,10 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { kvCache, subscribers } from '../db/schema.js';
-import { fitOpportunityText } from '../opportunities/format.js';
+import {
+  buildOpportunityArticles,
+  fitOpportunityText,
+} from '../opportunities/format.js';
 import { readLatestOpportunityPool } from '../opportunities/pool.js';
 import { rankOpportunities } from '../opportunities/rank.js';
 import {
@@ -9,7 +12,8 @@ import {
   readHiddenOpportunities,
   readShownOpportunities,
 } from '../opportunities/store.js';
-import { sendWeComText } from '../wecom/api.js';
+import { sendWeComNews, sendWeComText } from '../wecom/api.js';
+import type { NewsArticle } from '../wecom/news.js';
 import { normalizePreferences } from './preferences.js';
 import { loadUserSignals } from './taste.js';
 import { shanghaiToday } from './time.js';
@@ -54,7 +58,8 @@ async function tryClaim(
 export async function pushWeeklyOpportunities(
   now: Date = new Date(),
   options: {
-    send?: (userid: string, text: string) => Promise<void>;
+    sendNews?: (userid: string, articles: NewsArticle[]) => Promise<void>;
+    sendText?: (userid: string, text: string) => Promise<void>;
   } = {},
 ): Promise<{ sent: number; skipped: number; failed: number }> {
   const pool = await readLatestOpportunityPool(now);
@@ -69,7 +74,8 @@ export async function pushWeeklyOpportunities(
     .where(eq(subscribers.active, true));
 
   const date = shanghaiToday(now);
-  const send = options.send ?? sendWeComText;
+  const sendNews = options.sendNews ?? sendWeComNews;
+  const sendText = options.sendText ?? sendWeComText;
   let sent = 0;
   let skipped = 0;
   let failed = 0;
@@ -118,7 +124,15 @@ export async function pushWeeklyOpportunities(
         items,
         '想关掉：到面板设置里关闭「每周机会」。',
       );
-      await send(row.userid, text);
+      try {
+        await sendNews(row.userid, buildOpportunityArticles(items));
+      } catch (err) {
+        console.warn(
+          'weekly opportunity news failed, falling back to text:',
+          err,
+        );
+        await sendText(row.userid, text);
+      }
       await markOpportunitiesShown(
         row.userid,
         items.map((item) => item.id),

@@ -37,9 +37,13 @@ vi.mock('../src/opportunities/store', () => ({
   readHiddenOpportunities: storeMock.readHiddenOpportunities,
 }));
 
-const apiMock = vi.hoisted(() => ({ sendWeComText: vi.fn() }));
+const apiMock = vi.hoisted(() => ({
+  sendWeComText: vi.fn(),
+  sendWeComNews: vi.fn(),
+}));
 vi.mock('../src/wecom/api', () => ({
   sendWeComText: apiMock.sendWeComText,
+  sendWeComNews: apiMock.sendWeComNews,
 }));
 
 import {
@@ -118,10 +122,42 @@ beforeEach(() => {
   storeMock.readHiddenOpportunities.mockResolvedValue(new Set());
   apiMock.sendWeComText.mockReset();
   apiMock.sendWeComText.mockResolvedValue(undefined);
+  apiMock.sendWeComNews.mockReset();
+  apiMock.sendWeComNews.mockResolvedValue(undefined);
 });
 
 describe('handleOpportunities', () => {
-  it('回复 2 填坑 + 1 研究，控制在 1900 字节内', async () => {
+  it('默认发 3 篇 news 卡片，首篇带仓库 OG 图', async () => {
+    await handleOpportunities({
+      toUserName: 'corp',
+      fromUserName: 'u1',
+      createTime: 0,
+      msgType: 'text',
+      content: '机会',
+      msgId: '1',
+    });
+
+    expect(apiMock.sendWeComNews).toHaveBeenCalledTimes(1);
+    expect(apiMock.sendWeComText).not.toHaveBeenCalled();
+    const articles = apiMock.sendWeComNews.mock.calls[0]![1] as Array<{
+      title: string;
+      description?: string;
+      url: string;
+      picurl?: string;
+    }>;
+    expect(articles).toHaveLength(3);
+    expect(articles[0]!.title).toContain('acme/agent');
+    expect(articles[0]!.description).toContain('第一步');
+    expect(articles[0]!.picurl).toContain('opengraph');
+    expect(articles[1]!.picurl).toBeUndefined();
+    expect(articles.map((article) => article.url)).toContain(
+      'https://github.com/acme/agent/issues/12',
+    );
+  });
+
+  it('news 被拒 → 回退到文本卡片', async () => {
+    apiMock.sendWeComNews.mockRejectedValueOnce(new Error('news rejected'));
+
     await handleOpportunities({
       toUserName: 'corp',
       fromUserName: 'u1',
@@ -134,8 +170,6 @@ describe('handleOpportunities', () => {
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const text = apiMock.sendWeComText.mock.calls[0]![1] as string;
     expect(text).toContain('[填坑]');
-    expect(text).toContain('[研究]');
-    expect(text).toContain('https://github.com/acme/agent/issues/12');
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1900);
   });
 
@@ -151,6 +185,7 @@ describe('handleOpportunities', () => {
     });
     const text = apiMock.sendWeComText.mock.calls[0]![1] as string;
     expect(text).toContain('还没准备好');
+    expect(apiMock.sendWeComNews).not.toHaveBeenCalled();
   });
 
   it('hidden 条目被过滤', async () => {
@@ -165,8 +200,12 @@ describe('handleOpportunities', () => {
       content: '机会',
       msgId: '1',
     });
-    const text = apiMock.sendWeComText.mock.calls[0]![1] as string;
-    expect(text).not.toContain('https://github.com/acme/agent/issues/12');
+    const articles = apiMock.sendWeComNews.mock.calls[0]![1] as Array<{
+      url: string;
+    }>;
+    expect(articles.map((article) => article.url)).not.toContain(
+      'https://github.com/acme/agent/issues/12',
+    );
   });
 });
 

@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { kvCache, subscribers } from '../db/schema.js';
 import { fitOpportunityText } from '../opportunities/format.js';
-import { readOpportunityPool } from '../opportunities/pool.js';
+import { readLatestOpportunityPool } from '../opportunities/pool.js';
 import { rankOpportunities } from '../opportunities/rank.js';
 import {
   markOpportunitiesShown,
@@ -57,7 +57,7 @@ export async function pushWeeklyOpportunities(
     send?: (userid: string, text: string) => Promise<void>;
   } = {},
 ): Promise<{ sent: number; skipped: number; failed: number }> {
-  const pool = await readOpportunityPool(now);
+  const pool = await readLatestOpportunityPool(now);
   if (!pool) return { sent: 0, skipped: 0, failed: 0 };
 
   const rows = await db()

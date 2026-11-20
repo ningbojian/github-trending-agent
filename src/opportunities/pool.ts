@@ -167,12 +167,12 @@ async function writePool(pool: OpportunityPool, now: Date): Promise<void> {
     });
 }
 
-/** 读当天池；形状不对/过期/查询失败一律 null（调用方降级，不抛）。 */
-export async function readOpportunityPool(
-  now: Date = new Date(),
+/** 读指定日期的池；形状不对/过期/查询失败一律 null（调用方降级，不抛）。 */
+async function readPoolByDate(
+  date: string,
+  now: Date,
 ): Promise<OpportunityPool | null> {
   try {
-    const date = shanghaiToday(now);
     const rows = await db()
       .select({ value: kvCache.value, expiresAt: kvCache.expiresAt })
       .from(kvCache)
@@ -184,6 +184,29 @@ export async function readOpportunityPool(
   } catch {
     return null;
   }
+}
+
+/** 读当天池。 */
+export async function readOpportunityPool(
+  now: Date = new Date(),
+): Promise<OpportunityPool | null> {
+  return readPoolByDate(shanghaiToday(now), now);
+}
+
+/**
+ * 读最近的池：GitHub Actions 的每日管线经常晚点/漏跑，邮件 09:00 发信时
+ * 当天池可能还没生成。回退到最近 1–2 天的池，避免机会区块直接消失。
+ */
+export async function readLatestOpportunityPool(
+  now: Date = new Date(),
+  maxAgeDays = 2,
+): Promise<OpportunityPool | null> {
+  for (let offset = 0; offset <= maxAgeDays; offset += 1) {
+    const date = shanghaiToday(new Date(now.getTime() - offset * 24 * 60 * 60 * 1000));
+    const pool = await readPoolByDate(date, now);
+    if (pool) return pool;
+  }
+  return null;
 }
 
 /**

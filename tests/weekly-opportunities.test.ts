@@ -35,10 +35,10 @@ vi.mock('../src/db/client', async () => {
 });
 
 const poolMock = vi.hoisted(() => ({
-  readOpportunityPool: vi.fn(async (): Promise<unknown> => null),
+  readLatestOpportunityPool: vi.fn(async (): Promise<unknown> => null),
 }));
 vi.mock('../src/opportunities/pool', () => ({
-  readOpportunityPool: poolMock.readOpportunityPool,
+  readLatestOpportunityPool: poolMock.readLatestOpportunityPool,
 }));
 
 const tasteMock = vi.hoisted(() => ({
@@ -137,8 +137,8 @@ beforeEach(() => {
   dbMock.claimRows = [{ key: 'claimed' }];
   dbMock.claimCalls = [];
   dbMock.failSelect = false;
-  poolMock.readOpportunityPool.mockReset();
-  poolMock.readOpportunityPool.mockResolvedValue(POOL as unknown);
+  poolMock.readLatestOpportunityPool.mockReset();
+  poolMock.readLatestOpportunityPool.mockResolvedValue(POOL as unknown);
   tasteMock.loadUserSignals.mockClear();
   storeMock.readHiddenOpportunities.mockClear();
   storeMock.readShownOpportunities.mockReset();
@@ -161,7 +161,7 @@ describe('pushWeeklyOpportunities', () => {
   });
 
   it('池为空 → 全部跳过，不发消息', async () => {
-    poolMock.readOpportunityPool.mockResolvedValue(null);
+    poolMock.readLatestOpportunityPool.mockResolvedValue(null);
     const result = await pushWeeklyOpportunities(new Date('2026-11-18T02:00:00.000Z'));
     expect(result).toEqual({ sent: 0, skipped: 0, failed: 0 });
     expect(apiMock.sendWeComText).not.toHaveBeenCalled();

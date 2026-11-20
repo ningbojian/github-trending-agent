@@ -20,7 +20,7 @@ import {
 import { renderDigestEmail } from './render.js';
 import { emailConfigured, sendEmail } from './send.js';
 import { resolveBaseUrl } from './tokens.js';
-import { readOpportunityPool } from '../opportunities/pool.js';
+import { readLatestOpportunityPool } from '../opportunities/pool.js';
 import {
   opportunitySignature,
   rankOpportunities,
@@ -208,7 +208,7 @@ export async function pushEmailDigests(
   const unsubscribeUrl = `${baseUrl}/api/email-unsubscribe?t=`;
   let poolPromise: Promise<OpportunityPool | null> | null = null;
   const getOpportunityPool = (): Promise<OpportunityPool | null> => {
-    poolPromise ??= readOpportunityPool(now);
+    poolPromise ??= readLatestOpportunityPool(now);
     return poolPromise;
   };
   let remaining = Math.max(0, dailyCap - (await readDailySent(today)));

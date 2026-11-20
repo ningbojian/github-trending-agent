@@ -57,10 +57,10 @@ vi.mock('../src/db/client', async () => {
 });
 
 const poolMock = vi.hoisted(() => ({
-  readOpportunityPool: vi.fn(async (): Promise<unknown> => null),
+  readLatestOpportunityPool: vi.fn(async (): Promise<unknown> => null),
 }));
 vi.mock('../src/opportunities/pool', () => ({
-  readOpportunityPool: poolMock.readOpportunityPool,
+  readLatestOpportunityPool: poolMock.readLatestOpportunityPool,
 }));
 
 const oppStoreMock = vi.hoisted(() => ({
@@ -232,8 +232,8 @@ beforeEach(() => {
   dbState.insertCalls = [];
   mailState.configured = true;
   mailState.sendCalls = [];
-  poolMock.readOpportunityPool.mockReset();
-  poolMock.readOpportunityPool.mockResolvedValue(null);
+  poolMock.readLatestOpportunityPool.mockReset();
+  poolMock.readLatestOpportunityPool.mockResolvedValue(null);
   oppStoreMock.readShownOpportunities.mockReset();
   oppStoreMock.readShownOpportunities.mockResolvedValue(new Set());
   oppStoreMock.markOpportunitiesShown.mockReset();
@@ -571,7 +571,7 @@ describe('pushEmailDigests — sending', () => {
 
   it('每天且开启偏好 → 简报带今日机会，发送后按 email 身份标记', async () => {
     dbState.emailRows = [emailRow()];
-    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
+    poolMock.readLatestOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
 
     const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
 
@@ -580,7 +580,7 @@ describe('pushEmailDigests — sending', () => {
     expect(sent.html).toContain('今日机会');
     expect(sent.html).not.toContain('本周机会');
     expect(sent.text).toContain('今日机会');
-    expect(poolMock.readOpportunityPool).toHaveBeenCalledTimes(1);
+    expect(poolMock.readLatestOpportunityPool).toHaveBeenCalledTimes(1);
     expect(oppStoreMock.readShownOpportunities).toHaveBeenCalledWith(
       'email:1',
       7 * 24 * 60 * 60 * 1000,
@@ -605,20 +605,20 @@ describe('pushEmailDigests — sending', () => {
         },
       }),
     ];
-    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
+    poolMock.readLatestOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
 
     const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
 
     expect(result.sent).toBe(1);
     expect(mailState.sendCalls[0]!.html).not.toContain('今日机会');
-    expect(poolMock.readOpportunityPool).not.toHaveBeenCalled();
+    expect(poolMock.readLatestOpportunityPool).not.toHaveBeenCalled();
     expect(oppStoreMock.readShownOpportunities).not.toHaveBeenCalled();
     expect(oppStoreMock.markOpportunitiesShown).not.toHaveBeenCalled();
   });
 
   it('全部已展示 → 只发 trending，不标记', async () => {
     dbState.emailRows = [emailRow()];
-    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
+    poolMock.readLatestOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
     oppStoreMock.readShownOpportunities.mockResolvedValue(
       new Set(['acme/agent#12']),
     );
@@ -632,7 +632,7 @@ describe('pushEmailDigests — sending', () => {
 
   it('发送失败不标记机会', async () => {
     dbState.emailRows = [emailRow()];
-    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
+    poolMock.readLatestOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
     mailState.failFor.add('reader@example.com');
 
     const result = await pushEmailDigests({ now: NOW, gapMs: 0 });
@@ -643,7 +643,7 @@ describe('pushEmailDigests — sending', () => {
 
   it('标记失败不影响已发送的邮件', async () => {
     dbState.emailRows = [emailRow()];
-    poolMock.readOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
+    poolMock.readLatestOpportunityPool.mockResolvedValue(poolOf([OPPORTUNITY]));
     oppStoreMock.markOpportunitiesShown.mockRejectedValueOnce(
       new Error('db down'),
     );

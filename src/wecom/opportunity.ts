@@ -2,7 +2,7 @@ import { fitOpportunityText } from '../opportunities/format.js';
 import { normalizePreferences } from '../agent/preferences.js';
 import { readSubscription } from '../agent/subscription-store.js';
 import { loadUserSignals } from '../agent/taste.js';
-import { readOpportunityPool } from '../opportunities/pool.js';
+import { readLatestOpportunityPool } from '../opportunities/pool.js';
 import {
   rankOpportunities,
   type OpportunitySignals,
@@ -37,7 +37,7 @@ export async function handleOpportunities(
   const userid = msg.fromUserName;
   try {
     const now = new Date();
-    const pool = await readOpportunityPool(now);
+    const pool = await readLatestOpportunityPool(now);
     if (!pool) {
       await sendWeComText(userid, EMPTY_TEXT);
       return;

@@ -34,7 +34,7 @@ import { readDailySnapshotCache, type DigestSnapshotItem } from '../src/agent/di
 import { DIRECTIONS } from '../src/agent/directions.js';
 import { clearUserLlm } from '../src/agent/user-llm.js';
 import { loadUserSignals } from '../src/agent/taste.js';
-import { readOpportunityPool } from '../src/opportunities/pool.js';
+import { readLatestOpportunityPool } from '../src/opportunities/pool.js';
 import { rankOpportunities } from '../src/opportunities/rank.js';
 import {
   hideOpportunity,
@@ -1104,7 +1104,7 @@ async function renderOpportunities(
 ): Promise<string> {
   const now = new Date();
   const [pool, sub, taste, hidden] = await Promise.all([
-    readOpportunityPool(now),
+    readLatestOpportunityPool(now),
     readSubscriber(userid),
     loadUserSignals(userid, now),
     readHiddenOpportunities(userid),

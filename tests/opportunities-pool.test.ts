@@ -44,6 +44,7 @@ vi.mock('../src/db/client', async () => {
 import {
   buildOpportunityPool,
   poolKey,
+  readLatestOpportunityPool,
   readOpportunityPool,
   type OpportunityPool,
 } from '../src/opportunities/pool';
@@ -120,6 +121,34 @@ describe('readOpportunityPool', () => {
 
     dbMock.failSelect = true;
     await expect(readOpportunityPool(NOW)).resolves.toBeNull();
+  });
+
+  it('当天池缺失时回退到最近 2 天的池', async () => {
+    dbMock.kvRows = [
+      {
+        value: pool({ date: '2026-11-17' }),
+        expiresAt: new Date(NOW.getTime() + 60_000),
+      },
+    ];
+    await expect(readLatestOpportunityPool(NOW)).resolves.toMatchObject({
+      date: '2026-11-17',
+    });
+  });
+
+  it('当天池存在时优先用当天', async () => {
+    dbMock.kvRows = [
+      {
+        value: pool({ date: '2026-11-18' }),
+        expiresAt: new Date(NOW.getTime() + 60_000),
+      },
+      {
+        value: pool({ date: '2026-11-17' }),
+        expiresAt: new Date(NOW.getTime() + 60_000),
+      },
+    ];
+    await expect(readLatestOpportunityPool(NOW)).resolves.toMatchObject({
+      date: '2026-11-18',
+    });
   });
 });
 

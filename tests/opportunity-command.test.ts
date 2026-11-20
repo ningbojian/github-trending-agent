@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OpportunityItem } from '../src/opportunities/types';
 
 const poolMock = vi.hoisted(() => ({
-  readOpportunityPool: vi.fn(async (): Promise<unknown> => null),
+  readLatestOpportunityPool: vi.fn(async (): Promise<unknown> => null),
 }));
 vi.mock('../src/opportunities/pool', () => ({
-  readOpportunityPool: poolMock.readOpportunityPool,
+  readLatestOpportunityPool: poolMock.readLatestOpportunityPool,
 }));
 
 const subMock = vi.hoisted(() => ({
@@ -110,8 +110,8 @@ function pool(items: OpportunityItem[]) {
 }
 
 beforeEach(() => {
-  poolMock.readOpportunityPool.mockReset();
-  poolMock.readOpportunityPool.mockResolvedValue(pool(ITEMS));
+  poolMock.readLatestOpportunityPool.mockReset();
+  poolMock.readLatestOpportunityPool.mockResolvedValue(pool(ITEMS));
   subMock.readSubscription.mockClear();
   tasteMock.loadUserSignals.mockClear();
   storeMock.readHiddenOpportunities.mockReset();
@@ -140,7 +140,7 @@ describe('handleOpportunities', () => {
   });
 
   it('池为空 → 友好提示，不发卡片', async () => {
-    poolMock.readOpportunityPool.mockResolvedValue(null);
+    poolMock.readLatestOpportunityPool.mockResolvedValue(null);
     await handleOpportunities({
       toUserName: 'corp',
       fromUserName: 'u1',

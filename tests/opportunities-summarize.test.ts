@@ -144,6 +144,6 @@ describe('summarizeOpportunities', () => {
     });
     expect([...long.get(A.id)!.why].length).toBeLessThanOrEqual(80);
     expect([...long.get(A.id)!.firstStep].length).toBeLessThanOrEqual(80);
-    expect([...long.get(A.id)!.short].length).toBeLessThanOrEqual(18);
+    expect([...long.get(A.id)!.short].length).toBeLessThanOrEqual(12);
   });
 });

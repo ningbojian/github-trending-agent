@@ -131,7 +131,7 @@ function evidenceFor(
   ];
 }
 
-function clipDisplay(text: string, maxWidth = 32): string {
+function clipDisplay(text: string, maxWidth = 24): string {
   let width = 0;
   let out = '';
   for (const char of text) {

@@ -14,7 +14,7 @@ export function opportunityShort(item: OpportunityItem): string {
   const first =
     item.title.split(/[，。；：、,.;:!?！？]/u)[0]?.trim() ?? '';
   return (
-    truncateChars(first, 18) ||
+    truncateChars(first, 12) ||
     (item.kind === 'contribute' ? '可上手的 issue' : '开放问题')
   );
 }
@@ -79,7 +79,7 @@ export function buildOpportunityArticles(
     const kind = item.kind === 'contribute' ? '填坑' : '研究';
     const short = opportunityShort(item);
     return {
-      title: clipTitle(`[${kind}] ${short}`),
+      title: clipTitle(`${item.kind === 'contribute' ? '🛠' : '🔎'} ${short}`),
       description: `${item.repo} #${item.issueNumber} · 第一步：${item.firstStep}`,
       url: item.url,
       ...(index === 0

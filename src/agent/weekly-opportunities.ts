@@ -120,7 +120,7 @@ export async function pushWeeklyOpportunities(
       ).length;
       const research = items.filter((item) => item.kind === 'research').length;
       const text = fitOpportunityText(
-        `🧭 本周机会（${contribute} 填坑 + ${research} 研究）`,
+        `本周机会（${contribute} 填坑 + ${research} 研究）`,
         items,
         '想关掉：到面板设置里关闭「每周机会」。',
       );

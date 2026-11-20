@@ -24,7 +24,7 @@ export function formatOpportunityReply(items: OpportunityItem[]): string {
   const contribute = items.filter((item) => item.kind === 'contribute').length;
   const research = items.filter((item) => item.kind === 'research').length;
   return fitOpportunityText(
-    `🧭 今天的机会（${contribute} 填坑 + ${research} 研究）`,
+    `今天的机会（${contribute} 填坑 + ${research} 研究）`,
     items,
     '面板里可以追踪/不感兴趣；回复「面板」打开。',
   );

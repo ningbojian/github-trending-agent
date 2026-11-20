@@ -33,12 +33,20 @@ const SUMMARY_SCHEMA = z.object({
 export function templateSummary(item: OpportunityItem): OpportunitySummary {
   return {
     id: item.id,
-    short: item.short?.trim() || item.title.trim().slice(0, 12),
-    why: item.why,
-    firstStep: item.firstStep,
+    short: sanitize(item.short ?? '') || sanitize(item.title).slice(0, 12),
+    why: sanitize(item.why),
+    firstStep: sanitize(item.firstStep),
     effort: item.effort,
     confidence: item.confidence,
   };
+}
+
+function sanitize(text: string): string {
+  return text
+    .replace(/[\p{Extended_Pictographic}️‍]/gu, '')
+    .replace(/[·•｜|#]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function promptFor(items: OpportunityItem[]): string {
@@ -66,6 +74,7 @@ function promptFor(items: OpportunityItem[]): string {
     '- effort：小 / 中 / 大',
     '- confidence：高 / 中 / 低',
     '只输出 {"items":[...]}；id 必须来自输入；不要编造仓库、issue、数字或链接。',
+    '不要使用 emoji、装饰符号（·、｜、#）或 Markdown；只写纯中文短句。',
     JSON.stringify({ items: candidates }, null, 2),
   ].join('\n');
 }
@@ -82,9 +91,9 @@ function normalize(
       const item = byId.get(row.id);
       if (!item) continue;
       const fallback = templateSummary(item);
-      const short = capText(row.short, 12);
-      const why = capText(row.why);
-      const firstStep = capText(row.firstStep);
+      const short = capText(sanitize(row.short), 12);
+      const why = capText(sanitize(row.why));
+      const firstStep = capText(sanitize(row.firstStep));
       summaries.set(row.id, {
         id: row.id,
         short: short === '' ? fallback.short : short,

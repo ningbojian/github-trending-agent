@@ -169,9 +169,9 @@ describe('pushWeeklyOpportunities', () => {
       picurl?: string;
     }>;
     expect(articles).toHaveLength(3);
-    expect(articles[0]!.title).toContain('🛠');
+    expect(articles[0]!.title).toContain('填坑：');
     expect(articles[0]!.title).toContain('修 Windows 检测');
-    expect(articles[0]!.description).toContain('acme/agent #12');
+    expect(articles[0]!.description).toContain('acme/agent，issue 12');
     expect(articles[0]!.description).toContain('第一步');
     expect(articles[0]!.picurl).toContain('opengraph');
     expect(articles[1]!.picurl).toBeUndefined();

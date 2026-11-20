@@ -7,12 +7,20 @@ function truncateChars(text: string, maxChars: number): string {
   return `${chars.slice(0, Math.max(0, maxChars - 1)).join('')}…`;
 }
 
+/** 机会卡片只用纯中文/常规标点：去掉 emoji、装饰符号和多余空白。 */
+export function plainText(value: string): string {
+  return value
+    .replace(/[\p{Extended_Pictographic}️‍]/gu, '')
+    .replace(/[·•｜|]/g, '，')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** 卡片/标题用的短句：优先用池里的 short，旧池没有则从 issue title 派生。 */
 export function opportunityShort(item: OpportunityItem): string {
-  const short = item.short?.trim();
-  if (short !== undefined && short !== '') return short;
-  const first =
-    item.title.split(/[，。；：、,.;:!?！？]/u)[0]?.trim() ?? '';
+  const short = plainText(item.short ?? '');
+  if (short !== '') return short;
+  const first = plainText(item.title).split(/[，。；：、,.;:!?！？]/u)[0]?.trim() ?? '';
   return (
     truncateChars(first, 12) ||
     (item.kind === 'contribute' ? '可上手的 issue' : '开放问题')
@@ -24,10 +32,10 @@ export function formatOpportunityCards(items: OpportunityItem[]): string[] {
   return items.map((item, index) => {
     const kind = item.kind === 'contribute' ? '填坑' : '研究';
     return [
-      `${index + 1}. [${kind}] ${opportunityShort(item)}`,
-      `${truncateChars(item.repo, 80)} #${item.issueNumber}`,
-      `第一步：${truncateChars(item.firstStep, 100)}`,
-      `难度：${item.effort} · 置信度：${item.confidence}`,
+      `${index + 1}. ${kind}：${opportunityShort(item)}`,
+      `${plainText(item.repo)}，issue ${item.issueNumber}`,
+      `第一步：${truncateChars(plainText(item.firstStep), 100)}`,
+      `难度：${item.effort}，置信度：${item.confidence}`,
       item.url,
     ].join('\n');
   });
@@ -79,8 +87,8 @@ export function buildOpportunityArticles(
     const kind = item.kind === 'contribute' ? '填坑' : '研究';
     const short = opportunityShort(item);
     return {
-      title: clipTitle(`${item.kind === 'contribute' ? '🛠' : '🔎'} ${short}`),
-      description: `${item.repo} #${item.issueNumber} · 第一步：${item.firstStep}`,
+      title: clipTitle(`${kind}：${short}`),
+      description: `${plainText(item.repo)}，issue ${item.issueNumber}。第一步：${plainText(item.firstStep)}`,
       url: item.url,
       ...(index === 0
         ? { picurl: `https://opengraph.githubassets.com/1/${item.repo}` }

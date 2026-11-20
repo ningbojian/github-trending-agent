@@ -58,6 +58,7 @@ describe('summarizeOpportunities', () => {
           items: [
             {
               id: A.id,
+              short: '修 Windows 检测',
               why: '这个坑值得修，因为它影响 Windows 用户。',
               firstStep: '按复现步骤跑一遍，贴 log 并认领。',
               effort: '小',
@@ -65,6 +66,7 @@ describe('summarizeOpportunities', () => {
             },
             {
               id: 'contribute:other/repo#1',
+              short: '多余',
               why: '多余',
               firstStep: '多余',
               effort: '小',
@@ -76,6 +78,7 @@ describe('summarizeOpportunities', () => {
     });
 
     expect(map.get(A.id)).toMatchObject({
+      short: '修 Windows 检测',
       why: '这个坑值得修，因为它影响 Windows 用户。',
       firstStep: '按复现步骤跑一遍，贴 log 并认领。',
       effort: '小',
@@ -108,6 +111,7 @@ describe('summarizeOpportunities', () => {
           items: [
             {
               id: A.id,
+              short: '',
               why: '',
               firstStep: '   ',
               effort: '小',
@@ -129,6 +133,7 @@ describe('summarizeOpportunities', () => {
           items: [
             {
               id: A.id,
+              short: '短'.repeat(50),
               why: '很'.repeat(200),
               firstStep: '步'.repeat(200),
               effort: '小',
@@ -139,5 +144,6 @@ describe('summarizeOpportunities', () => {
     });
     expect([...long.get(A.id)!.why].length).toBeLessThanOrEqual(80);
     expect([...long.get(A.id)!.firstStep].length).toBeLessThanOrEqual(80);
+    expect([...long.get(A.id)!.short].length).toBeLessThanOrEqual(18);
   });
 });

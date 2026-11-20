@@ -37,6 +37,8 @@ export interface RawOpportunityFact {
 /** 池里最终给用户看的条目；why/firstStep 由 LLM 或模板生成。 */
 export interface OpportunityItem extends RawOpportunityFact {
   score: number;
+  /** 卡片标题用的短句（≤18 个汉字）；旧池没有时由 format 层从 title 派生。 */
+  short?: string;
   why: string;
   firstStep: string;
   effort: OpportunityEffort;

@@ -74,6 +74,7 @@ function item(overrides: Partial<OpportunityItem> = {}): OpportunityItem {
     maintainerEngaged: true,
     assigned: false,
     linkedPr: false,
+    short: '修 Windows 检测',
     score: 80,
     why: '这个坑值得修。',
     firstStep: '按复现步骤跑一遍并认领。',
@@ -146,7 +147,9 @@ describe('handleOpportunities', () => {
       picurl?: string;
     }>;
     expect(articles).toHaveLength(3);
-    expect(articles[0]!.title).toContain('acme/agent');
+    expect(articles[0]!.title).toContain('[填坑]');
+    expect(articles[0]!.title).toContain('修 Windows 检测');
+    expect(articles[0]!.description).toContain('acme/agent #12');
     expect(articles[0]!.description).toContain('第一步');
     expect(articles[0]!.picurl).toContain('opengraph');
     expect(articles[1]!.picurl).toBeUndefined();
@@ -213,7 +216,7 @@ describe('formatOpportunityReply', () => {
   it('标题、证据、链接都在，且不超字节上限', () => {
     const text = formatOpportunityReply(ITEMS);
     expect(text).toContain('2 填坑 + 1 研究');
-    expect(text).toContain('为什么：');
+    expect(text).toContain('修 Windows 检测');
     expect(text).toContain('第一步：');
     expect(text).toContain('难度：小');
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1900);

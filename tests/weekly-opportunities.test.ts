@@ -98,6 +98,7 @@ function item(overrides: Partial<OpportunityItem> = {}): OpportunityItem {
     maintainerEngaged: true,
     assigned: false,
     linkedPr: false,
+    short: '修 Windows 检测',
     score: 80,
     why: '值得修。',
     firstStep: '复现并认领。',
@@ -168,7 +169,9 @@ describe('pushWeeklyOpportunities', () => {
       picurl?: string;
     }>;
     expect(articles).toHaveLength(3);
-    expect(articles[0]!.title).toContain('acme/agent');
+    expect(articles[0]!.title).toContain('[填坑]');
+    expect(articles[0]!.title).toContain('修 Windows 检测');
+    expect(articles[0]!.description).toContain('acme/agent #12');
     expect(articles[0]!.description).toContain('第一步');
     expect(articles[0]!.picurl).toContain('opengraph');
     expect(articles[1]!.picurl).toBeUndefined();

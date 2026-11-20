@@ -1,4 +1,5 @@
 import { escapeHtml } from '../http/html.js';
+import { opportunityShort } from '../opportunities/format.js';
 import type { OpportunityItem } from '../opportunities/types.js';
 
 function href(token: string, view: string): string {
@@ -25,8 +26,7 @@ function card(item: OpportunityItem, token: string): string {
   return `<section class="p-card">
     <div class="p-chips">${chips}</div>
     <h2 class="p-card-title"><a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.repo)} #${item.issueNumber}</a></h2>
-    <div class="p-hint">${escapeHtml(item.title)}</div>
-    <p>${escapeHtml(item.why)}</p>
+    <div class="p-hint">${escapeHtml(opportunityShort(item))}</div>
     <p><strong>第一步：</strong>${escapeHtml(item.firstStep)}</p>
     <div class="p-actions">
       <form method="post" action="${action}">

@@ -261,6 +261,7 @@ export async function buildOpportunityPool(
       return summary
         ? {
             ...item,
+            short: summary.short,
             why: summary.why,
             firstStep: summary.firstStep,
             effort: summary.effort,

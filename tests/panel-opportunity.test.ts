@@ -25,6 +25,7 @@ function item(overrides: Partial<OpportunityItem> = {}): OpportunityItem {
     maintainerEngaged: true,
     assigned: false,
     linkedPr: false,
+    short: '<script>alert(1)</script>',
     score: 80,
     why: '值得修。',
     firstStep: '复现并认领。',

@@ -1,3 +1,4 @@
+import { displayWidth } from '../text-width.js';
 import type {
   OpportunityConfidence,
   OpportunityEffort,
@@ -130,6 +131,27 @@ function evidenceFor(
   ];
 }
 
+function clipDisplay(text: string, maxWidth = 32): string {
+  let width = 0;
+  let out = '';
+  for (const char of text) {
+    const next = displayWidth(char);
+    if (width + next > maxWidth) break;
+    width += next;
+    out += char;
+  }
+  return out.trim();
+}
+
+function templateShort(fact: RawOpportunityFact): string {
+  const first =
+    fact.title.split(/[，。；：、,.;:!?！？]/u)[0]?.trim() ?? '';
+  return (
+    clipDisplay(first) ||
+    (fact.kind === 'contribute' ? '可上手的 issue' : '开放问题')
+  );
+}
+
 /** 事实 → 池条目；LLM 失败时这就是最终文案。 */
 export function toOpportunityItem(
   fact: RawOpportunityFact,
@@ -138,6 +160,7 @@ export function toOpportunityItem(
   return {
     ...fact,
     score: scoreOpportunity(fact, now),
+    short: templateShort(fact),
     why: templateWhy(fact),
     firstStep: templateFirstStep(fact),
     effort: effortFor(fact),

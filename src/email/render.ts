@@ -2,7 +2,11 @@ import { BRAND, GITHUB_MARK_SVG } from '../brand.js';
 import { escapeHtml } from '../http/html.js';
 import type { DigestSnapshotItem } from '../agent/digest-snapshot.js';
 import type { OpportunityItem } from '../opportunities/types.js';
-import { opportunityShort, plainText } from '../opportunities/format.js';
+import {
+  opportunityFirstStep,
+  opportunityShort,
+  plainText,
+} from '../opportunities/format.js';
 
 /**
  * 品牌化每日简报邮件：内联样式 + table 布局 + 无外链图片/追踪像素。
@@ -50,7 +54,7 @@ export interface DigestEmailInput {
   /** 站点根地址（无尾斜杠），用于设置/退订链接。 */
   baseUrl: string;
   unsubToken: string;
-  /** 每天可选：今日机会（2 填坑 + 1 研究）。 */
+  /** 每天可选：今日机会（默认 3 条）。 */
   opportunities?: OpportunityItem[];
 }
 
@@ -127,9 +131,9 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
             ${opportunities
               .map(
                 (item) => `<div style="margin-top:7px;">
-              <a href="${escapeHtml(item.url)}" style="color:${EMAIL.accent};font-size:13px;font-weight:600;text-decoration:none;">${item.kind === 'contribute' ? '填坑' : '研究'}：${escapeHtml(plainText(item.repo))}，issue ${item.issueNumber}</a>
+              <a href="${escapeHtml(item.url)}" style="color:${EMAIL.accent};font-size:13px;font-weight:600;text-decoration:none;">${escapeHtml(plainText(item.repo))}，issue ${item.issueNumber}</a>
               <div style="margin-top:1px;font-size:12px;line-height:1.5;color:${EMAIL.text};">${escapeHtml(opportunityShort(item))}</div>
-              <div style="font-size:12px;line-height:1.5;color:${EMAIL.muted};">第一步：${escapeHtml(plainText(item.firstStep))}</div>
+              <div style="font-size:12px;line-height:1.5;color:${EMAIL.muted};">第一步：${escapeHtml(opportunityFirstStep(item))}</div>
             </div>`,
               )
               .join('')}
@@ -229,9 +233,9 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
       ? [
           '今日机会：',
           ...opportunities.flatMap((item, index) => [
-            `${index + 1}. ${item.kind === 'contribute' ? '填坑' : '研究'}：${plainText(item.repo)}，issue ${item.issueNumber}`,
+            `${index + 1}. ${plainText(item.repo)}，issue ${item.issueNumber}`,
             item.url,
-            `${opportunityShort(item)}，第一步：${plainText(item.firstStep)}`,
+            `${opportunityShort(item)}，第一步：${opportunityFirstStep(item)}`,
             '',
           ]),
         ]

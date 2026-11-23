@@ -1,5 +1,9 @@
 import { escapeHtml } from '../http/html.js';
-import { opportunityShort, plainText } from '../opportunities/format.js';
+import {
+  opportunityFirstStep,
+  opportunityShort,
+  plainText,
+} from '../opportunities/format.js';
 import type { OpportunityItem } from '../opportunities/types.js';
 
 function href(token: string, view: string): string {
@@ -8,14 +12,9 @@ function href(token: string, view: string): string {
   return `?${qs.toString()}`;
 }
 
-function kindLabel(item: OpportunityItem): string {
-  return item.kind === 'contribute' ? '填坑' : '研究';
-}
-
 function card(item: OpportunityItem, token: string): string {
   const action = href(token, 'opportunities');
   const chips = [
-    `<span class="p-chip">${kindLabel(item)}</span>`,
     `<span class="p-chip">难度 ${escapeHtml(item.effort)}</span>`,
     `<span class="p-chip">置信度 ${escapeHtml(item.confidence)}</span>`,
     ...item.evidence.map(
@@ -27,7 +26,7 @@ function card(item: OpportunityItem, token: string): string {
     <div class="p-chips">${chips}</div>
     <h2 class="p-card-title"><a href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(plainText(item.repo))} issue ${item.issueNumber}</a></h2>
     <div class="p-hint">${escapeHtml(opportunityShort(item))}</div>
-    <p><strong>第一步：</strong>${escapeHtml(plainText(item.firstStep))}</p>
+    <p><strong>第一步：</strong>${escapeHtml(opportunityFirstStep(item))}</p>
     <div class="p-actions">
       <form method="post" action="${action}">
         <input type="hidden" name="action" value="opp-hide">

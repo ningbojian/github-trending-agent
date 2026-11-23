@@ -37,17 +37,29 @@ beforeEach(() => {
 });
 
 describe('buildAbstractPrompt', () => {
-  it('要求 3–5 句、320 字以内，并带上仓库名与中文简介', () => {
+  it('要求 3–4 句、不重复、不写免责声明，带上仓库名与中文简介', () => {
     const prompt = buildAbstractPrompt(
       [item('a/one'), item('b/two')],
       new Map([['a/one', '一个 AI 工具']]),
     );
-    expect(prompt).toContain('3 到 5 句');
+    expect(prompt).toContain('3 到 4 句');
     expect(prompt).toContain(String(ABSTRACT_MAX_CHARS));
     expect(prompt).toContain('a/one：一个 AI 工具');
     // 没有简介的仓库仍然出现在列表里（只是没有冒号后段）。
     expect(prompt).toContain('- b/two');
     expect(prompt).not.toContain('b/two：');
+    expect(prompt).toContain('不要重复');
+    expect(prompt).toContain('无法核对');
+  });
+
+  it('提供前几日概览时把它交给模型对比，而不是让模型凭空猜', () => {
+    const prompt = buildAbstractPrompt(
+      [item('a/one')],
+      new Map(),
+      ['昨天集中在数据库与存储。'],
+    );
+    expect(prompt).toContain('前几日概览');
+    expect(prompt).toContain('昨天集中在数据库与存储。');
   });
 });
 
@@ -84,6 +96,23 @@ describe('loadAbstractSafe', () => {
   it('模型返回空白概览时返回 null（不写空段落）', async () => {
     llmState.result = { abstract: '   ' };
     expect(await loadAbstractSafe([item('a/one')], new Map())).toBeNull();
+  });
+
+  it('重复的句子只保留一条', async () => {
+    llmState.result = {
+      abstract: '今天集中在智能体技能。今天集中在智能体技能。另外出现协议与沙箱。',
+    };
+    expect(await loadAbstractSafe([item('a/one')], new Map())).toBe(
+      '今天集中在智能体技能。另外出现协议与沙箱。',
+    );
+  });
+
+  it('把前几日概览传给模型', async () => {
+    llmState.result = { abstract: '今天的概览。' };
+    await loadAbstractSafe([item('a/one')], new Map(), [
+      '昨天集中在数据库。',
+    ]);
+    expect(llmState.prompts[0]).toContain('昨天集中在数据库。');
   });
 
   it('没有条目时直接返回 null，不调用模型', async () => {

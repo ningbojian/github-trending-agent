@@ -121,6 +121,32 @@ describe('toOpportunityItem', () => {
     expect(item.confidence).toBe('中');
   });
 
+  it('模板短句去掉 [Tag] 前缀，直接描述问题；firstStep 带 issue 编号', () => {
+    const first = toOpportunityItem(
+      fact({
+        title: '[Bug]: ag-ui-langgraph __init__ eagerly imports fastapi',
+      }),
+      NOW,
+    );
+    expect(first.short).toBe(
+      'ag-ui-langgraph __init__ eagerly imports fastapi',
+    );
+    expect(first.firstStep).toContain('#12');
+
+    const second = toOpportunityItem(
+      fact({
+        id: 'contribute:acme/two#2',
+        repo: 'acme/two',
+        issueNumber: 2,
+        title: '[Bug]: another problem',
+      }),
+      NOW,
+    );
+    expect(second.short).toBe('another problem');
+    expect(second.firstStep).toContain('#2');
+    expect(second.firstStep).not.toBe(first.firstStep);
+  });
+
   it('维护者参与 + 有讨论 → 高置信度', () => {
     const item = toOpportunityItem(fact({ maintainerEngaged: true }), NOW);
     expect(item.confidence).toBe('高');

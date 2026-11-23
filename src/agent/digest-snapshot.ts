@@ -1,4 +1,4 @@
-import { eq, sql, type SQL } from 'drizzle-orm';
+import { eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
 import { shanghaiToday } from './time.js';
@@ -152,12 +152,13 @@ export function selectSnapshotPool(candidates: DigestSnapshotItem[]): DigestSnap
   return picked;
 }
 
-async function loadSummariesSafe(
+async function loadSummaryBatch(
   items: DigestSnapshotItem[],
+  batchSize: number,
 ): Promise<Map<string, string>> {
   const merged = new Map<string, string>();
-  for (let start = 0; start < items.length; start += SUMMARY_BATCH) {
-    const batch = items.slice(start, start + SUMMARY_BATCH);
+  for (let start = 0; start < items.length; start += batchSize) {
+    const batch = items.slice(start, start + batchSize);
     try {
       const result = await loadRepoSummaries(batch);
       for (const [fullName, zh] of result) {
@@ -168,6 +169,37 @@ async function loadSummariesSafe(
     }
   }
   return merged;
+}
+
+async function loadSummariesSafe(
+  items: DigestSnapshotItem[],
+): Promise<Map<string, string>> {
+  const merged = await loadSummaryBatch(items, SUMMARY_BATCH);
+  // 批间失败会丢掉整批简介：对缺口再补一轮小批次，避免整天没描述。
+  const missing = items.filter((item) => !merged.has(item.fullName));
+  if (missing.length === 0) return merged;
+  const retried = await loadSummaryBatch(missing, 10);
+  for (const [fullName, zh] of retried) merged.set(fullName, zh);
+  return merged;
+}
+
+interface ShortSource {
+  fullName: string;
+  zh: string;
+  description: string | null;
+  topics: string[];
+}
+
+async function loadShortsOnce(
+  items: ShortSource[],
+): Promise<Map<string, string>> {
+  try {
+    return await loadRepoShortSummaries(items);
+  } catch (err) {
+    // 卡片标题会退回「完整分句」或不写简介，快照本身绝不能因此失败。
+    console.error('snapshot short summaries failed (degrade to clause):', err);
+    return new Map();
+  }
 }
 
 async function loadShortsSafe(
@@ -183,13 +215,13 @@ async function loadShortsSafe(
       topics: item.topics,
     }));
   if (withSummary.length === 0) return new Map();
-  try {
-    return await loadRepoShortSummaries(withSummary);
-  } catch (err) {
-    // 卡片标题会退回「完整分句」或不写简介，快照本身绝不能因此失败。
-    console.error('snapshot short summaries failed (degrade to clause):', err);
-    return new Map();
-  }
+  const merged = await loadShortsOnce(withSummary);
+  // 模型漏条目时标题只剩仓库名：对缺口再补一轮。
+  const missing = withSummary.filter((item) => !merged.has(item.fullName));
+  if (missing.length === 0) return merged;
+  const retried = await loadShortsOnce(missing);
+  for (const [fullName, short] of retried) merged.set(fullName, short);
+  return merged;
 }
 
 function isSnapshot(value: unknown): value is DigestSnapshot {
@@ -240,6 +272,38 @@ async function writeCache(snapshot: DigestSnapshot): Promise<void> {
     });
 }
 
+/** 'YYYY-MM-DD' 往前推 N 天（UTC 计算，只用于拼缓存键）。 */
+function shiftDate(date: string, days: number): string {
+  const [year, month, day] = date.split('-').map(Number);
+  const shifted = Date.UTC(year, month - 1, day) - days * 24 * 60 * 60 * 1000;
+  return new Date(shifted).toISOString().slice(0, 10);
+}
+
+/**
+ * 前两天的 abstract：给概览生成做对比用。
+ * 不检查 expiresAt——历史行过期后仍留在 kv_cache 里，读到就是赚到。
+ */
+async function loadPreviousAbstracts(date: string): Promise<string[]> {
+  try {
+    const keys = [1, 2].map((days) => snapshotKey(shiftDate(date, days)));
+    const rows = await db()
+      .select({ key: kvCache.key, value: kvCache.value })
+      .from(kvCache)
+      .where(inArray(kvCache.key, keys));
+    const byKey = new Map(rows.map((row) => [row.key, row.value]));
+    const abstracts: string[] = [];
+    for (const key of keys) {
+      const value = byKey.get(key);
+      if (!isSnapshot(value)) continue;
+      const text = typeof value.abstract === 'string' ? value.abstract.trim() : '';
+      if (text !== '') abstracts.push(text);
+    }
+    return abstracts;
+  } catch {
+    return [];
+  }
+}
+
 async function buildSnapshot(
   date: string,
   candidates: DigestSnapshotItem[],
@@ -256,7 +320,15 @@ async function buildSnapshot(
     const short = shorts.get(item.fullName);
     if (short !== undefined) item.short = short;
   }
-  const abstract = await loadAbstractSafe(items, summaries);
+  const previousAbstracts = await loadPreviousAbstracts(date);
+  const abstract = await loadAbstractSafe(items, summaries, previousAbstracts);
+  // 极少数仓库没有 description 且模型也漏了：给一条完整的诚实兜底，
+  // 保证简报里每条都有描述。放在 abstract 之后，避免兜底文案污染概览。
+  for (const item of items) {
+    if (item.summary === undefined && item.description == null) {
+      item.summary = item.language ? `${item.language} 项目，暂无简介` : '暂无简介';
+    }
+  }
   return { date, dataDate, abstract, items };
 }
 

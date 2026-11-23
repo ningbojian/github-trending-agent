@@ -29,25 +29,53 @@ export function truncateChars(text: string, max: number): string {
 /**
  * 概览提示词：只要求概括共同主题/方向，**不逐个列举仓库**——
  * 列表紧跟在这一段后面，逐条复述会让第一屏变成两份榜单。
+ *
+ * 有前几日的概览就一并给模型（否则它只能在结尾写「列表未提供前几日数据，
+ * 无法核对变化」）。同时明确禁止重复和免责声明。
  */
 export function buildAbstractPrompt(
   items: AbstractSourceItem[],
   summaries: Map<string, string>,
+  previousAbstracts: string[] = [],
 ): string {
   const lines = items.map((item) => {
     const zh = summaries.get(item.fullName)?.trim();
     return `- ${item.fullName}${zh ? `：${zh}` : ''}`;
   });
+  const hasHistory = previousAbstracts.length > 0;
   return [
-    `下面是今天 GitHub 热榜的仓库列表。请写 3 到 5 句话、不超过 ${ABSTRACT_MAX_CHARS} 个汉字的今日概览：`,
+    `下面是今天 GitHub 热榜的仓库列表。请写 3 到 4 句话、不超过 ${ABSTRACT_MAX_CHARS} 个汉字的今日概览：`,
     '1. 概括共同主题或方向，可以点名 2–3 个代表仓库作为证据，但不要逐个列举；',
-    '2. 说清楚这些项目在集中解决什么问题，以及和前几天相比有什么变化；',
-    '3. 只使用列表里的事实，不编造；语气客观中性，不用营销词、不用 emoji；',
-    '4. 以 JSON 输出：{"abstract":"..."}。',
+    hasHistory
+      ? '2. 说清楚这些项目在集中解决什么问题，并对比前几日的方向变化（只讲变化，不要复述旧内容）；'
+      : '2. 说清楚这些项目在集中解决什么问题；',
+    '3. 每句话讲一个不同的方面，不要重复同一句话或同义反复；',
+    '4. 不要写「列表未提供前几日数据」「无法核对变化」这类免责声明；没有历史就只写今天；',
+    '5. 只使用列表里的事实，不编造；语气客观中性，不用营销词、不用 emoji；',
+    '6. 以 JSON 输出：{"abstract":"..."}。',
+    ...(hasHistory
+      ? ['', '前几日概览（只用于对比，不要复述）：', ...previousAbstracts.map((text) => `- ${text}`)]
+      : []),
     '',
     '仓库列表：',
     ...lines,
   ].join('\n');
+}
+
+/** 去掉模型偶尔逐字重复的句子（保留首次出现的顺序）。 */
+export function dedupeSentences(text: string): string {
+  const parts = text.match(/[^。！？!?]+[。！？!?]?/gu) ?? [];
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const part of parts) {
+    const sentence = part.trim();
+    if (sentence === '') continue;
+    const key = sentence.replace(/\s+/g, '');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(sentence);
+  }
+  return kept.join('');
 }
 
 /**
@@ -57,6 +85,7 @@ export function buildAbstractPrompt(
 export async function loadAbstractSafe(
   items: AbstractSourceItem[],
   summaries: Map<string, string>,
+  previousAbstracts: string[] = [],
 ): Promise<string | null> {
   if (items.length === 0) {
     return null;
@@ -64,9 +93,9 @@ export async function loadAbstractSafe(
   try {
     const out = await generateObjectSafe(
       abstractSchema,
-      buildAbstractPrompt(items, summaries),
+      buildAbstractPrompt(items, summaries, previousAbstracts),
     );
-    const text = out?.abstract?.trim();
+    const text = dedupeSentences(out?.abstract?.trim() ?? '');
     if (!text) return null;
     return truncateChars(text, ABSTRACT_MAX_CHARS);
   } catch {

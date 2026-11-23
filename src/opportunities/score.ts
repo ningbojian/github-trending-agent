@@ -1,4 +1,4 @@
-import { displayWidth } from '../text-width.js';
+import { cleanIssueTitle } from './format.js';
 import type {
   OpportunityConfidence,
   OpportunityEffort,
@@ -96,8 +96,8 @@ function templateWhy(fact: RawOpportunityFact): string {
 
 function templateFirstStep(fact: RawOpportunityFact): string {
   return fact.kind === 'contribute'
-    ? '先按 issue 描述复现，再在评论里说明你要接手。'
-    : '先读 issue 里的未决问题，补一个复现或 benchmark。';
+    ? `先读 issue #${fact.issueNumber} 的复现步骤，能复现后在评论里说明你要接手。`
+    : `先读 issue #${fact.issueNumber} 的讨论和未决问题，补一个复现或 benchmark。`;
 }
 
 function effortFor(fact: RawOpportunityFact): OpportunityEffort {
@@ -131,23 +131,9 @@ function evidenceFor(
   ];
 }
 
-function clipDisplay(text: string, maxWidth = 24): string {
-  let width = 0;
-  let out = '';
-  for (const char of text) {
-    const next = displayWidth(char);
-    if (width + next > maxWidth) break;
-    width += next;
-    out += char;
-  }
-  return out.trim();
-}
-
 function templateShort(fact: RawOpportunityFact): string {
-  const first =
-    fact.title.split(/[，。；：、,.;:!?！？]/u)[0]?.trim() ?? '';
   return (
-    clipDisplay(first) ||
+    cleanIssueTitle(fact.title) ||
     (fact.kind === 'contribute' ? '可上手的 issue' : '开放问题')
   );
 }

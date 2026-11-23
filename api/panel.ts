@@ -1046,7 +1046,7 @@ async function renderSettings(
            <span class="p-label">每周机会</span>
            <label class="p-check"><input type="checkbox" name="weeklyOpportunities" value="on"${
              prefs.weeklyOpportunities ? ' checked' : ''
-           }> 周一推送 2 填坑 + 1 研究</label>
+           }> 周一推送 3 条机会</label>
            <span class="p-hint">和每日简报分开，只在周一发一条。</span>
          </div>`,
       )}
@@ -1094,7 +1094,7 @@ interface ActionOutcome {
   error?: string;
 }
 
-/** 机会视图：读共享池 + 本地信号，面板里最多展示 4 填坑 + 2 研究。 */
+/** 机会视图：读共享池 + 本地信号，面板里最多展示 6 条机会。 */
 async function renderOpportunities(
   userid: string,
   token: string,
@@ -1144,8 +1144,6 @@ async function renderOpportunities(
     },
     { limit: 6, contribute: 4, research: 2 },
   );
-  const contribute = items.filter((item) => item.kind === 'contribute').length;
-  const research = items.filter((item) => item.kind === 'research').length;
   const cards = renderOpportunityCards(items, token);
 
   return page(
@@ -1156,7 +1154,7 @@ async function renderOpportunities(
      ${viewHead(
        '机会',
        items.length > 0
-         ? `${items.length} 条 · ${contribute} 填坑 + ${research} 研究`
+         ? `${items.length} 条机会`
          : '今天没有通过质量门槛的机会',
        weather,
        error ? 'alert' : notice ? 'happy' : 'idle',

@@ -147,7 +147,7 @@ describe('handleOpportunities', () => {
       picurl?: string;
     }>;
     expect(articles).toHaveLength(3);
-    expect(articles[0]!.title).toContain('填坑：');
+    expect(articles[0]!.title).not.toContain('填坑');
     expect(articles[0]!.title).toContain('修 Windows 检测');
     expect(articles[0]!.description).toContain('acme/agent，issue 12');
     expect(articles[0]!.description).toContain('第一步');
@@ -172,7 +172,7 @@ describe('handleOpportunities', () => {
 
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const text = apiMock.sendWeComText.mock.calls[0]![1] as string;
-    expect(text).toContain('填坑：');
+    expect(text).not.toContain('填坑');
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1900);
   });
 
@@ -215,7 +215,8 @@ describe('handleOpportunities', () => {
 describe('formatOpportunityReply', () => {
   it('标题、证据、链接都在，且不超字节上限', () => {
     const text = formatOpportunityReply(ITEMS);
-    expect(text).toContain('2 填坑 + 1 研究');
+    expect(text).toContain('今天的机会（3 条）');
+    expect(text).not.toContain('填坑');
     expect(text).toContain('修 Windows 检测');
     expect(text).toContain('第一步：');
     expect(text).toContain('难度：小');

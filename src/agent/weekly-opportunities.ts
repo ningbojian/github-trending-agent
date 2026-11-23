@@ -53,7 +53,7 @@ async function tryClaim(
 
 /**
  * 周一 10:00–12:00 由 cron 的 weekly gate 调用；每人每天最多一次。
- * 2 填坑 + 1 研究；池空/关掉偏好/无合格条目都跳过。
+ * 默认 3 条；池空/关掉偏好/无合格条目都跳过。
  */
 export async function pushWeeklyOpportunities(
   now: Date = new Date(),
@@ -115,12 +115,8 @@ export async function pushWeeklyOpportunities(
         skipped += 1;
         continue;
       }
-      const contribute = items.filter(
-        (item) => item.kind === 'contribute',
-      ).length;
-      const research = items.filter((item) => item.kind === 'research').length;
       const text = fitOpportunityText(
-        `本周机会（${contribute} 填坑 + ${research} 研究）`,
+        `本周机会（${items.length} 条）`,
         items,
         '想关掉：到面板设置里关闭「每周机会」。',
       );

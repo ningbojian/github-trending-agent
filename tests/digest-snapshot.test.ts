@@ -59,11 +59,15 @@ const summaryState = vi.hoisted(() => ({
   summaries: new Map<string, string>(),
   /** 命中该 fullName 的批次抛错（模拟批间失败）。 */
   failFor: new Set<string>(),
+  /** 首次调用抛错、之后恢复（模拟瞬时失败，用于验证重试）。 */
+  failFirstCallFor: new Set<string>(),
   calls: [] as string[][],
 }));
 
 const shortState = vi.hoisted(() => ({
   shorts: new Map<string, string>(),
+  /** 首次调用故意遗漏、之后恢复（模拟模型漏条目，用于验证重试）。 */
+  missFirstCallFor: new Set<string>(),
   calls: [] as string[][],
 }));
 
@@ -72,6 +76,15 @@ vi.mock('../src/agent/repo-summary', () => ({
     summaryState.calls.push(items.map((item) => item.fullName));
     if (items.some((item) => summaryState.failFor.has(item.fullName))) {
       throw new Error('summary batch failed');
+    }
+    const flaky = items.some((item) =>
+      summaryState.failFirstCallFor.has(item.fullName),
+    );
+    if (flaky) {
+      for (const item of items) {
+        summaryState.failFirstCallFor.delete(item.fullName);
+      }
+      throw new Error('summary batch failed once');
     }
     const out = new Map<string, string>();
     for (const item of items) {
@@ -84,6 +97,10 @@ vi.mock('../src/agent/repo-summary', () => ({
     shortState.calls.push(items.map((item) => item.fullName));
     const out = new Map<string, string>();
     for (const item of items) {
+      if (shortState.missFirstCallFor.has(item.fullName)) {
+        shortState.missFirstCallFor.delete(item.fullName);
+        continue;
+      }
       const short = shortState.shorts.get(item.fullName);
       if (short !== undefined) out.set(item.fullName, short);
     }
@@ -146,8 +163,10 @@ beforeEach(() => {
   llmState.prompts = [];
   summaryState.summaries = new Map();
   summaryState.failFor = new Set();
+  summaryState.failFirstCallFor = new Set();
   summaryState.calls = [];
   shortState.shorts = new Map();
+  shortState.missFirstCallFor = new Set();
   shortState.calls = [];
 });
 
@@ -167,7 +186,8 @@ describe('getDailySnapshot', () => {
     ]);
     expect(snapshot?.items[0].summary).toBe('第一个项目。');
     expect(snapshot?.items[1].summary).toBeUndefined();
-    expect(summaryState.calls).toEqual([['a/one', 'b/two']]);
+    // 首次缺 b/two 的简介，缺口会再补一次小批次。
+    expect(summaryState.calls).toEqual([['a/one', 'b/two'], ['b/two']]);
   });
 
   it('为有摘要的条目生成卡片短句（≤10 字），没有摘要的不生成', async () => {
@@ -180,6 +200,61 @@ describe('getDailySnapshot', () => {
     expect(snapshot?.items[0].short).toBe('第一个项目');
     expect(snapshot?.items[1].short).toBeUndefined();
     expect(shortState.calls).toEqual([['a/one']]);
+  });
+
+  it('简介批次瞬时失败时重试一次，避免整天缺描述', async () => {
+    dbState.executeRows = [row('a/one')];
+    summaryState.summaries.set('a/one', '第一个项目。');
+    summaryState.failFirstCallFor.add('a/one');
+
+    const snapshot = await getDailySnapshot(NOW);
+
+    expect(snapshot?.items[0].summary).toBe('第一个项目。');
+    expect(summaryState.calls).toHaveLength(2);
+  });
+
+  it('短句批次漏条目时重试一次，避免标题只剩仓库名', async () => {
+    dbState.executeRows = [row('a/one')];
+    summaryState.summaries.set('a/one', '第一个项目。');
+    shortState.shorts.set('a/one', '第一个项目');
+    shortState.missFirstCallFor.add('a/one');
+
+    const snapshot = await getDailySnapshot(NOW);
+
+    expect(snapshot?.items[0].short).toBe('第一个项目');
+    expect(shortState.calls).toHaveLength(2);
+  });
+
+  it('确实拿不到简介时给一个完整兜底，绝不留空描述', async () => {
+    dbState.executeRows = [
+      row('a/one', { description: null, topics: [], language: 'Lua' }),
+    ];
+
+    const snapshot = await getDailySnapshot(NOW);
+
+    expect(snapshot?.items[0].summary).toBe('Lua 项目，暂无简介');
+    // 兜底文案只给展示，不喂给 abstract 生成。
+    expect(llmState.prompts.join('\n')).not.toContain('暂无简介');
+  });
+
+  it('把前几日的 abstract 带进概览提示词，模型不必凭空对比', async () => {
+    dbState.cacheRows = [
+      {
+        key: 'digest-snapshot:2026-10-24',
+        value: {
+          date: '2026-10-24',
+          dataDate: '2026-10-24',
+          abstract: '昨天集中在数据库与存储。',
+          items: [],
+        },
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    ];
+    dbState.executeRows = [row('a/one')];
+
+    await getDailySnapshot(NOW);
+
+    expect(llmState.prompts.join('\n')).toContain('昨天集中在数据库与存储。');
   });
 
   it('writes the snapshot to kv_cache under digest-snapshot:<date>', async () => {
@@ -203,7 +278,8 @@ describe('getDailySnapshot', () => {
     // 当日快照每次都会读一次候选池（用于校验 dataDate），但命中后不重建。
     expect(dbState.executeCalls).toBe(2);
     expect(dbState.insertCalls).toHaveLength(1);
-    expect(summaryState.calls).toHaveLength(1);
+    // 首次构建 + 缺口重试；命中缓存后不再调用。
+    expect(summaryState.calls).toHaveLength(2);
     expect(second).toEqual(first);
   });
 
@@ -229,7 +305,8 @@ describe('getDailySnapshot', () => {
     expect(snapshot?.dataDate).toBe('2026-10-25');
     expect(snapshot?.items.map((entry) => entry.fullName)).toEqual(['a/one']);
     expect(dbState.insertCalls).toHaveLength(1);
-    expect(summaryState.calls).toHaveLength(1);
+    // 首次构建 + 缺口重试（mock 没有配置简介）。
+    expect(summaryState.calls).toHaveLength(2);
   });
 
   it('keeps the cache when the data date matches', async () => {

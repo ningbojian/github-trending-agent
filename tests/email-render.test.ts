@@ -325,6 +325,8 @@ describe('邮件里的仓库链接', () => {
     expect(rendered.html).toContain('今日机会');
     expect(rendered.html).not.toContain('本周机会');
     expect(rendered.html).toContain('acme/agent，issue 12');
+    expect(rendered.html).not.toContain('填坑：');
+    expect(rendered.text).not.toContain('填坑：');
     expect(rendered.html).toContain('https://github.com/acme/agent/issues/12');
     expect(rendered.text).toContain('今日机会');
     expect(rendered.text).not.toContain('本周机会');

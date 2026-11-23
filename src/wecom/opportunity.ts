@@ -17,14 +17,12 @@ const NO_MATCH_TEXT = '今天没有通过质量门槛的机会，明天再看。
 const FAIL_TEXT = '机会暂时取不到，稍后再试。';
 
 /**
- * 企微「机会」回复：2 填坑 + 1 研究，纯文本 ≤1900 字节。
+ * 企微「机会」回复：默认 3 条，纯文本 ≤1900 字节。
  * 顺序由 rankOpportunities 决定；事实/链接来自池，不调模型。
  */
 export function formatOpportunityReply(items: OpportunityItem[]): string {
-  const contribute = items.filter((item) => item.kind === 'contribute').length;
-  const research = items.filter((item) => item.kind === 'research').length;
   return fitOpportunityText(
-    `今天的机会（${contribute} 填坑 + ${research} 研究）`,
+    `今天的机会（${items.length} 条）`,
     items,
     '面板里可以追踪/不感兴趣；回复「面板」打开。',
   );

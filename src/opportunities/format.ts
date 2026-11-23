@@ -24,8 +24,9 @@ export function plainText(value: string): string {
 export function cleanIssueTitle(title: string): string {
   return title
     .replace(/^\s*(?:\[[^\]]{1,24}\]\s*[:：\-–—]?\s*)+/u, '')
+    .replace(/^(?:tracking issue for|discussion on)\s+/i, '')
     .replace(
-      /^(?:proposal|tracking issue for|discussion on|feature request|bug report|bug|rfc|help wanted|enhancement)\s*[:：]?\s+/i,
+      /^(?:proposal|feature request|bug report|bug|rfc|help wanted|enhancement)\s*[:：]\s*/i,
       '',
     )
     .replace(/\s+/g, ' ')

@@ -72,6 +72,15 @@ describe('cleanIssueTitle', () => {
       ),
     ).toBe('D3D12: SYSTEM_TIMESTAMP frequency for Write64BitValueBottomOfPipeX (info wanted)');
   });
+
+  it('不误删正文里的 Bug/RFC 单词（只有冒号前缀才剥）', () => {
+    expect(cleanIssueTitle('Bug in parser when input is empty')).toBe(
+      'Bug in parser when input is empty',
+    );
+    expect(cleanIssueTitle('RFC on async drop semantics')).toBe(
+      'RFC on async drop semantics',
+    );
+  });
 });
 
 describe('opportunityShort', () => {

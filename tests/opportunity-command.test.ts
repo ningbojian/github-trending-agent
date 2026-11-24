@@ -75,6 +75,7 @@ function item(overrides: Partial<OpportunityItem> = {}): OpportunityItem {
     assigned: false,
     linkedPr: false,
     short: '修 Windows 检测',
+    repoDescription: 'agent toolkit',
     score: 80,
     why: '这个坑值得修。',
     firstStep: '按复现步骤跑一遍并认领。',
@@ -148,9 +149,11 @@ describe('handleOpportunities', () => {
     }>;
     expect(articles).toHaveLength(3);
     expect(articles[0]!.title).not.toContain('填坑');
+    expect(articles[0]!.title.startsWith('agent toolkit｜')).toBe(true);
     expect(articles[0]!.title).toContain('修 Windows 检测');
     expect(articles[0]!.description).toContain('acme/agent，issue 12');
-    expect(articles[0]!.description).toContain('第一步');
+    expect(articles[0]!.description).toContain('修 Windows 检测');
+    expect(articles[0]!.description).not.toContain('第一步');
     expect(articles[0]!.picurl).toContain('opengraph');
     expect(articles[1]!.picurl).toBeUndefined();
     expect(articles.map((article) => article.url)).toContain(
@@ -173,6 +176,9 @@ describe('handleOpportunities', () => {
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
     const text = apiMock.sendWeComText.mock.calls[0]![1] as string;
     expect(text).not.toContain('填坑');
+    expect(text).not.toContain('第一步');
+    expect(text).toContain('agent toolkit');
+    expect(text).toContain('修 Windows 检测');
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1900);
   });
 
@@ -217,8 +223,9 @@ describe('formatOpportunityReply', () => {
     const text = formatOpportunityReply(ITEMS);
     expect(text).toContain('今天的机会（3 条）');
     expect(text).not.toContain('填坑');
+    expect(text).toContain('agent toolkit');
     expect(text).toContain('修 Windows 检测');
-    expect(text).toContain('第一步：');
+    expect(text).not.toContain('第一步');
     expect(text).toContain('难度：小');
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(1900);
   });

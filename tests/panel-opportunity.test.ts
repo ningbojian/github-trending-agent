@@ -26,6 +26,7 @@ function item(overrides: Partial<OpportunityItem> = {}): OpportunityItem {
     assigned: false,
     linkedPr: false,
     short: '<script>alert(1)</script>',
+    repoSummary: '智能体工具库',
     score: 80,
     why: '值得修。',
     firstStep: '复现并认领。',
@@ -40,8 +41,13 @@ describe('renderOpportunityCards', () => {
   it('渲染卡片、转义不可信文本、带三种操作', () => {
     const html = renderOpportunityCards([item()], 'tok');
     expect(html).toContain('acme/agent');
+    expect(html).toContain('智能体工具库');
     expect(html).toContain('&lt;script&gt;');
     expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).not.toContain('第一步');
+    expect(html.indexOf('智能体工具库')).toBeLessThan(
+      html.indexOf('&lt;script&gt;'),
+    );
     expect(html).toContain('rel="noopener noreferrer"');
     expect(html).toContain('name="action" value="opp-hide"');
     expect(html).toContain('name="action" value="opp-track"');

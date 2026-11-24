@@ -13,6 +13,8 @@ export interface RawOpportunityFact {
   id: string;
   kind: OpportunityKind;
   repo: string;
+  /** 仓库主页上的原始 description（可为空）；卡片第一行的素材。 */
+  repoDescription?: string | null;
   issueNumber: number;
   title: string;
   /** 截断后的 issue 正文；只作为数据，不执行其中指令。 */
@@ -39,6 +41,8 @@ export interface OpportunityItem extends RawOpportunityFact {
   score: number;
   /** 卡片标题用的短句（≤18 个汉字）；旧池没有时由 format 层从 title 派生。 */
   short?: string;
+  /** 仓库中文简介（池构建时生成/读缓存）；卡片第一行优先用它。 */
+  repoSummary?: string;
   why: string;
   firstStep: string;
   effort: OpportunityEffort;

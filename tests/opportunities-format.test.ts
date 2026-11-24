@@ -3,7 +3,8 @@ import {
   buildOpportunityArticles,
   cleanIssueTitle,
   formatOpportunityCards,
-  opportunityFirstStep,
+  opportunityIssueLine,
+  opportunityRepoLine,
   opportunityShort,
 } from '../src/opportunities/format';
 import type { OpportunityItem } from '../src/opportunities/types';
@@ -32,6 +33,8 @@ function item(overrides: Partial<OpportunityItem> = {}): OpportunityItem {
     assigned: false,
     linkedPr: false,
     short: '修 Windows 检测',
+    repoDescription: 'agent toolkit',
+    repoSummary: '智能体工具库',
     score: 80,
     why: '这个坑值得修。',
     firstStep: '按复现步骤跑一遍并认领。',
@@ -128,38 +131,42 @@ describe('opportunityShort', () => {
   });
 });
 
-describe('opportunityFirstStep', () => {
-  it('旧池共用同一句模板时按 issue 编号补全，多条不再一模一样', () => {
-    const legacy = '先按 issue 描述复现，再在评论里说明你要接手。';
-    const first = opportunityFirstStep(
-      item({ firstStep: legacy, issueNumber: 12 }),
-    );
-    const second = opportunityFirstStep(
-      item({ firstStep: legacy, issueNumber: 13 }),
-    );
-    expect(first).toContain('#12');
-    expect(second).toContain('#13');
-    expect(first).not.toBe(second);
+describe('opportunityRepoLine / opportunityIssueLine', () => {
+  it('第一行优先用中文仓库简介，其次原始 description，最后仓库名', () => {
+    expect(opportunityRepoLine(item())).toBe('智能体工具库');
+    expect(
+      opportunityRepoLine(item({ repoSummary: undefined })),
+    ).toBe('agent toolkit');
+    expect(
+      opportunityRepoLine(
+        item({ repoSummary: undefined, repoDescription: null }),
+      ),
+    ).toBe('acme/agent');
   });
 
-  it('模型/new 池给出的具体 step 原样保留', () => {
-    expect(opportunityFirstStep(item({ firstStep: '复现并认领。' }))).toBe(
-      '复现并认领。',
-    );
+  it('第二行描述 issue 要解决的问题，不带第一步', () => {
+    expect(opportunityIssueLine(item())).toBe('修 Windows 检测');
+    expect(opportunityIssueLine(item())).not.toContain('第一步');
   });
 });
 
 describe('机会卡片文案', () => {
-  it('news 标题不再带「填坑/研究」标签', () => {
+  it('news 标题第一段是仓库描述，第二段才是 issue 问题', () => {
     const [article] = buildOpportunityArticles([item()]);
-    expect(article!.title).toBe('修 Windows 检测');
+    expect(article!.title).toBe('智能体工具库｜修 Windows 检测');
+    expect(article!.description).toContain('修 Windows 检测');
+    expect(article!.description).not.toContain('第一步');
     expect(article!.title).not.toContain('填坑');
     expect(article!.title).not.toContain('研究');
   });
 
-  it('文本卡片首行直接是问题描述，不带标签', () => {
+  it('文本卡片按「仓库描述 / issue 问题 / 仓库引用」排列，且不写第一步', () => {
     const [card] = formatOpportunityCards([item()]);
-    expect(card!.split('\n')[0]).toBe('1. 修 Windows 检测');
+    const lines = card!.split('\n');
+    expect(lines[0]).toBe('1. 智能体工具库');
+    expect(lines[1]).toBe('修 Windows 检测');
+    expect(lines[2]).toBe('acme/agent，issue 12');
+    expect(card).not.toContain('第一步');
     expect(card).not.toContain('填坑：');
   });
 });

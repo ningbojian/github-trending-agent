@@ -34,6 +34,23 @@ export function cleanIssueTitle(title: string): string {
 }
 
 /**
+ * 卡片第一行：仓库描述。优先池里生成好的中文简介，其次 GitHub 原始
+ * description，最后退回仓库名——保证第一行永远有内容。
+ */
+export function opportunityRepoLine(item: OpportunityItem): string {
+  const summary = plainText(item.repoSummary ?? '');
+  if (summary !== '') return truncateChars(summary, 120);
+  const description = plainText(item.repoDescription ?? '');
+  if (description !== '') return truncateChars(description, 120);
+  return plainText(item.repo);
+}
+
+/** 卡片第二行：这个 issue 要解决的问题（不带「第一步」）。 */
+export function opportunityIssueLine(item: OpportunityItem): string {
+  return opportunityShort(item);
+}
+
+/**
  * 卡片/标题用的短句：优先用池里的中文 short。
  * 旧池的模板短句是英文碎片（`[Bug]`、`D3D12`、`proposal`），没有信息量，
  * 直接改用清洗后的完整 issue 标题描述问题。
@@ -48,31 +65,13 @@ export function opportunityShort(item: OpportunityItem): string {
   return item.kind === 'contribute' ? '可上手的 issue' : '开放问题';
 }
 
-/**
- * 第一步：旧池里所有条目共用同一句模板，邮件里会出现三条一模一样的话。
- * 读到旧模板时按 issue 编号补全，渲染层立即去重，不必等新池重建。
- */
-const LEGACY_CONTRIBUTE_STEP = '先按 issue 描述复现，再在评论里说明你要接手。';
-const LEGACY_RESEARCH_STEP = '先读 issue 里的未决问题，补一个复现或 benchmark。';
-
-export function opportunityFirstStep(item: OpportunityItem): string {
-  const text = plainText(item.firstStep);
-  if (text === LEGACY_CONTRIBUTE_STEP) {
-    return `先读 issue #${item.issueNumber} 的复现步骤，能复现后在评论里说明你要接手。`;
-  }
-  if (text === LEGACY_RESEARCH_STEP) {
-    return `先读 issue #${item.issueNumber} 的讨论和未决问题，补一个复现或 benchmark。`;
-  }
-  return text;
-}
-
-/** 一条机会的文本卡片（5 行），供命令与周一推送共用。 */
+/** 一条机会的文本卡片（5 行）：仓库描述 → issue 问题 → 仓库引用。 */
 export function formatOpportunityCards(items: OpportunityItem[]): string[] {
   return items.map((item, index) => {
     return [
-      `${index + 1}. ${opportunityShort(item)}`,
+      `${index + 1}. ${opportunityRepoLine(item)}`,
+      opportunityIssueLine(item),
       `${plainText(item.repo)}，issue ${item.issueNumber}`,
-      `第一步：${truncateChars(opportunityFirstStep(item), 100)}`,
       `难度：${item.effort}，置信度：${item.confidence}`,
       item.url,
     ].join('\n');
@@ -117,14 +116,16 @@ function clipTitle(text: string, maxBytes = 120): string {
   return `${out.trimEnd()}${ellipsis}`;
 }
 
-/** 企微 news 卡片：标题直接写问题，仓库名/第一步放在 description。 */
+/** 企微 news 卡片：标题「仓库描述｜issue 问题」，description 里再放问题与引用。 */
 export function buildOpportunityArticles(
   items: OpportunityItem[],
 ): NewsArticle[] {
   return items.map((item, index) => {
+    const repoLine = opportunityRepoLine(item);
+    const issueLine = opportunityIssueLine(item);
     return {
-      title: clipTitle(opportunityShort(item)),
-      description: `${plainText(item.repo)}，issue ${item.issueNumber}。第一步：${opportunityFirstStep(item)}`,
+      title: clipTitle(`${repoLine}｜${issueLine}`),
+      description: `${issueLine}。${plainText(item.repo)}，issue ${item.issueNumber}`,
       url: item.url,
       ...(index === 0
         ? { picurl: `https://opengraph.githubassets.com/1/${item.repo}` }

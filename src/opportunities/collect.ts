@@ -71,6 +71,7 @@ function toFact(
     id: `${kind}:${repo.fullName}#${issue.number}`,
     kind,
     repo: repo.fullName,
+    repoDescription: repo.description,
     issueNumber: issue.number,
     title: issue.title,
     body: issue.body.slice(0, MAX_BODY_CHARS),
@@ -274,6 +275,7 @@ export async function upsertOpportunityFacts(
     raw: {
       kind: fact.kind,
       repo: fact.repo,
+      repoDescription: fact.repoDescription ?? null,
       issueNumber: fact.issueNumber,
       labels: fact.labels,
       language: fact.language,

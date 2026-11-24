@@ -74,6 +74,7 @@ function fact(overrides: Partial<RawOpportunityFact> = {}): RawOpportunityFact {
     maintainerEngaged: true,
     assigned: false,
     linkedPr: false,
+    repoDescription: 'agent toolkit',
     ...overrides,
   };
 }
@@ -97,6 +98,44 @@ beforeEach(() => {
 });
 
 describe('readOpportunityPool', () => {
+  it('旧池缺仓库描述时用 repos + repo-zh 缓存补上第一行', async () => {
+    dbMock.kvRows = [
+      {
+        value: pool({
+          items: [
+            {
+              ...fact(),
+              repoDescription: undefined,
+              score: 80,
+              why: '值得修。',
+              firstStep: '复现并认领。',
+              effort: '小',
+              confidence: '高',
+              evidence: [],
+            },
+          ],
+        }),
+        expiresAt: new Date(NOW.getTime() + 60_000),
+      },
+      {
+        key: 'repo-zh:acme/agent',
+        value: { zh: '智能体工具库', src: 'agent toolkit' },
+        // loadRepoSummaries 内部用 Date.now() 校验缓存，测试里给真实未来时间。
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    ];
+    dbMock.sourceRows = [
+      { fullName: 'acme/agent', description: 'agent toolkit' },
+    ];
+
+    const loaded = await readOpportunityPool(NOW);
+
+    expect(loaded?.items[0]).toMatchObject({
+      repoDescription: 'agent toolkit',
+      repoSummary: '智能体工具库',
+    });
+  });
+
   it('读取当天有效池', async () => {
     dbMock.kvRows = [
       {
@@ -156,7 +195,19 @@ describe('buildOpportunityPool', () => {
   const deps = {
     claim: async () => true,
     release: async () => {},
+    repoSummaries: async () => new Map<string, string>(),
   };
+
+  it('池条目带上仓库简介，供卡片第一行使用', async () => {
+    const result = await buildOpportunityPool(NOW, {
+      ...deps,
+      readRawFacts: async () => [fact()],
+      repoSummaries: async () => new Map([['acme/agent', '智能体工具库']]),
+    });
+
+    expect(result.pool?.items[0]?.repoSummary).toBe('智能体工具库');
+    expect(result.pool?.items[0]?.repoDescription).toBe('agent toolkit');
+  });
 
   it('当天已有池 → 直接返回，不重建、不再调 LLM', async () => {
     dbMock.kvRows = [

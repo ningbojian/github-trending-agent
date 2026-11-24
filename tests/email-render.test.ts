@@ -314,6 +314,7 @@ describe('邮件里的仓库链接', () => {
       maintainerEngaged: true,
       assigned: false,
       linkedPr: false,
+      repoSummary: '智能体工具库',
       score: 80,
       why: '值得修。',
       firstStep: '复现并认领。',
@@ -327,6 +328,15 @@ describe('邮件里的仓库链接', () => {
     expect(rendered.html).toContain('acme/agent，issue 12');
     expect(rendered.html).not.toContain('填坑：');
     expect(rendered.text).not.toContain('填坑：');
+    // 第一行仓库描述，第二行 issue 问题；不再显示第一步。
+    expect(rendered.html.indexOf('智能体工具库')).toBeLessThan(
+      rendered.html.indexOf('Windows 下 CUDA 检测失败'),
+    );
+    expect(rendered.text.indexOf('智能体工具库')).toBeLessThan(
+      rendered.text.indexOf('Windows 下 CUDA 检测失败'),
+    );
+    expect(rendered.html).not.toContain('第一步');
+    expect(rendered.text).not.toContain('第一步');
     expect(rendered.html).toContain('https://github.com/acme/agent/issues/12');
     expect(rendered.text).toContain('今日机会');
     expect(rendered.text).not.toContain('本周机会');

@@ -148,6 +148,7 @@ describe('collectOpportunities', () => {
       labels: ['good first issue'],
       stars: 500,
       license: 'MIT',
+      repoDescription: 'agent toolkit',
     });
     expect(result.requests).toBeGreaterThan(0);
   });
@@ -215,6 +216,7 @@ describe('collectOpportunities', () => {
       labels: ['good first issue'],
       maintainerEngaged: true,
       assigned: false,
+      repoDescription: 'agent toolkit',
     });
   });
 });

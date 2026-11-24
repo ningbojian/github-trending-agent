@@ -3,8 +3,8 @@ import { escapeHtml } from '../http/html.js';
 import type { DigestSnapshotItem } from '../agent/digest-snapshot.js';
 import type { OpportunityItem } from '../opportunities/types.js';
 import {
-  opportunityFirstStep,
-  opportunityShort,
+  opportunityIssueLine,
+  opportunityRepoLine,
   plainText,
 } from '../opportunities/format.js';
 
@@ -131,9 +131,9 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
             ${opportunities
               .map(
                 (item) => `<div style="margin-top:7px;">
-              <a href="${escapeHtml(item.url)}" style="color:${EMAIL.accent};font-size:13px;font-weight:600;text-decoration:none;">${escapeHtml(plainText(item.repo))}，issue ${item.issueNumber}</a>
-              <div style="margin-top:1px;font-size:12px;line-height:1.5;color:${EMAIL.text};">${escapeHtml(opportunityShort(item))}</div>
-              <div style="font-size:12px;line-height:1.5;color:${EMAIL.muted};">第一步：${escapeHtml(opportunityFirstStep(item))}</div>
+              <a href="${escapeHtml(item.url)}" style="color:${EMAIL.accent};font-size:13px;font-weight:600;text-decoration:none;">${escapeHtml(opportunityRepoLine(item))}</a>
+              <div style="margin-top:1px;font-size:12px;line-height:1.5;color:${EMAIL.text};">${escapeHtml(opportunityIssueLine(item))}</div>
+              <div style="font-size:11px;line-height:1.5;color:${EMAIL.muted};">${escapeHtml(plainText(item.repo))}，issue ${item.issueNumber}</div>
             </div>`,
               )
               .join('')}
@@ -233,9 +233,10 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
       ? [
           '今日机会：',
           ...opportunities.flatMap((item, index) => [
-            `${index + 1}. ${plainText(item.repo)}，issue ${item.issueNumber}`,
+            `${index + 1}. ${opportunityRepoLine(item)}`,
+            opportunityIssueLine(item),
+            `${plainText(item.repo)}，issue ${item.issueNumber}`,
             item.url,
-            `${opportunityShort(item)}，第一步：${opportunityFirstStep(item)}`,
             '',
           ]),
         ]

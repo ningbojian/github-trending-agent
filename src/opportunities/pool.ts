@@ -1,7 +1,11 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { shanghaiToday } from '../agent/time.js';
+import {
+  loadRepoSummaries,
+  type SummaryInput,
+} from '../agent/repo-summary.js';
 import { db } from '../db/client.js';
-import { kvCache, sourceItems } from '../db/schema.js';
+import { kvCache, repos, sourceItems } from '../db/schema.js';
 import { selectOpportunityItems } from './score.js';
 import {
   summarizeOpportunities,
@@ -27,6 +31,8 @@ export interface OpportunityBuildDeps {
   summarize?: (
     items: OpportunityItem[],
   ) => Promise<Map<string, OpportunitySummary>>;
+  /** 仓库中文简介（卡片第一行）；默认走共享缓存 + 运营方 LLM。 */
+  repoSummaries?: (items: SummaryInput[]) => Promise<Map<string, string>>;
   claim?: (date: string) => Promise<boolean>;
   release?: (date: string) => Promise<void>;
   /** 人工抽查/调门槛后强制重建当天池。 */
@@ -81,6 +87,7 @@ function toFactFromRow(row: {
     id: row.sourceId,
     kind,
     repo,
+    repoDescription: stringOrNull(raw.repoDescription),
     issueNumber,
     title: row.title,
     body: row.description ?? '',
@@ -167,6 +174,53 @@ async function writePool(pool: OpportunityPool, now: Date): Promise<void> {
     });
 }
 
+/**
+ * 旧池条目没有仓库描述（本字段是后加的）：读池时用 `repos` 表 + `repo-zh`
+ * 缓存补一次，让第一行立即有内容，不必等池重建。
+ * 新池已经有 repoSummary/repoDescription，直接跳过（零额外查询）。
+ */
+async function enrichRepoDescriptions(
+  pool: OpportunityPool,
+): Promise<OpportunityPool> {
+  const missing = pool.items.filter(
+    (item) => !item.repoSummary && !item.repoDescription,
+  );
+  if (missing.length === 0) return pool;
+  try {
+    const names = [...new Set(missing.map((item) => item.repo))];
+    const rows = await db()
+      .select({ fullName: repos.fullName, description: repos.description })
+      .from(repos)
+      .where(inArray(repos.fullName, names));
+    const descriptions = new Map(
+      rows.map((row) => [String(row.fullName), row.description]),
+    );
+    const summaries = await loadRepoSummaries(
+      names.map((name) => ({
+        fullName: name,
+        description: descriptions.get(name) ?? null,
+      })),
+      { kind: 'none' },
+    );
+    return {
+      ...pool,
+      items: pool.items.map((item) => {
+        if (item.repoSummary || item.repoDescription) return item;
+        const description = descriptions.get(item.repo);
+        const summary = summaries.get(item.repo);
+        if (description == null && summary === undefined) return item;
+        return {
+          ...item,
+          ...(description != null ? { repoDescription: description } : {}),
+          ...(summary !== undefined ? { repoSummary: summary } : {}),
+        };
+      }),
+    };
+  } catch {
+    return pool;
+  }
+}
+
 /** 读指定日期的池；形状不对/过期/查询失败一律 null（调用方降级，不抛）。 */
 async function readPoolByDate(
   date: string,
@@ -180,7 +234,9 @@ async function readPoolByDate(
     const row = rows[0];
     if (!row) return null;
     if (new Date(row.expiresAt).getTime() <= now.getTime()) return null;
-    return isValidPool(row.value, date) ? row.value : null;
+    return isValidPool(row.value, date)
+      ? enrichRepoDescriptions(row.value)
+      : null;
   } catch {
     return null;
   }
@@ -209,8 +265,47 @@ export async function readLatestOpportunityPool(
   return null;
 }
 
+/** 仓库简介每批 10 个：与卡片短句同款，避免单次调用过大超时。 */
+const REPO_SUMMARY_BATCH = 10;
+
+async function loadRepoSummariesSafe(
+  selected: OpportunityItem[],
+  loader: (items: SummaryInput[]) => Promise<Map<string, string>>,
+): Promise<Map<string, string>> {
+  const unique = [...new Map(selected.map((item) => [item.repo, item])).values()];
+  const batches: SummaryInput[][] = [];
+  for (let start = 0; start < unique.length; start += REPO_SUMMARY_BATCH) {
+    batches.push(
+      unique.slice(start, start + REPO_SUMMARY_BATCH).map((item) => ({
+        fullName: item.repo,
+        description: item.repoDescription ?? null,
+        topics: item.topics,
+      })),
+    );
+  }
+  const merged = new Map<string, string>();
+  const results = await Promise.all(
+    batches.map(async (batch) => {
+      try {
+        return await loader(batch);
+      } catch (err) {
+        console.warn(
+          'opportunity repo summaries batch failed (degrade to repo name):',
+          err instanceof Error ? err.message : err,
+        );
+        return new Map<string, string>();
+      }
+    }),
+  );
+  for (const result of results) {
+    for (const [repo, summary] of result) merged.set(repo, summary);
+  }
+  return merged;
+}
+
 /**
  * 构建当天共享池：读 source_items → 硬门槛/评分 → 一次 LLM 合成 → kv_cache。
+ * 仓库简介在机会文案之后生成；单批失败只降级对应条目。
  * 锁冲突/无数据/无合格条目都返回原因，不抛；写库失败才抛（端点记 500）。
  */
 export async function buildOpportunityPool(
@@ -246,6 +341,11 @@ export async function buildOpportunityPool(
       return { pool: null, reason: 'no-qualified' };
     }
 
+    const repoSummaryLoader =
+      deps.repoSummaries ??
+      ((inputs: SummaryInput[]) =>
+        loadRepoSummaries(inputs, { kind: 'operator' }));
+
     let summaries: Map<string, OpportunitySummary>;
     try {
       summaries = await (deps.summarize ?? summarizeOpportunities)(
@@ -255,10 +355,16 @@ export async function buildOpportunityPool(
       // LLM 不可用：保留 toOpportunityItem 的确定性文案。
       summaries = new Map();
     }
+    // 仓库简介单独成批、串行于机会文案：避免同一网关同时接 6 路请求。
+    const repoSummaries = await loadRepoSummariesSafe(
+      selected,
+      repoSummaryLoader,
+    );
 
     const items: OpportunityItem[] = selected.map((item) => {
       const summary = summaries.get(item.id);
-      return summary
+      const repoSummary = repoSummaries.get(item.repo);
+      const withSummary = summary
         ? {
             ...item,
             short: summary.short,
@@ -268,6 +374,7 @@ export async function buildOpportunityPool(
             confidence: summary.confidence,
           }
         : item;
+      return repoSummary ? { ...withSummary, repoSummary } : withSummary;
     });
 
     const pool: OpportunityPool = {

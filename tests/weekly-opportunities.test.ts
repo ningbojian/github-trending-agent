@@ -99,6 +99,7 @@ function item(overrides: Partial<OpportunityItem> = {}): OpportunityItem {
     assigned: false,
     linkedPr: false,
     short: '修 Windows 检测',
+    repoDescription: 'agent toolkit',
     score: 80,
     why: '值得修。',
     firstStep: '复现并认领。',
@@ -170,9 +171,11 @@ describe('pushWeeklyOpportunities', () => {
     }>;
     expect(articles).toHaveLength(3);
     expect(articles[0]!.title).not.toContain('填坑');
+    expect(articles[0]!.title.startsWith('agent toolkit｜')).toBe(true);
     expect(articles[0]!.title).toContain('修 Windows 检测');
     expect(articles[0]!.description).toContain('acme/agent，issue 12');
-    expect(articles[0]!.description).toContain('第一步');
+    expect(articles[0]!.description).toContain('修 Windows 检测');
+    expect(articles[0]!.description).not.toContain('第一步');
     expect(articles[0]!.picurl).toContain('opengraph');
     expect(articles[1]!.picurl).toBeUndefined();
     expect(storeMock.markOpportunitiesShown).toHaveBeenCalledTimes(2);

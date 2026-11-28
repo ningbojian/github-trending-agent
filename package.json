@@ -16,11 +16,13 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:audit": "tsx scripts/db-audit.ts",
+    "db:cleanup": "tsx scripts/cleanup.ts",
     "eval": "tsx evals/cli.ts --compare",
     "eval:ci": "tsx evals/cli.ts --compare",
     "eval:llm": "tsx evals/cli.ts --llm --compare",
     "eval:baseline": "tsx evals/cli.ts --update-baseline",
-    "eval:seed": "tsx evals/seed-from-intent-log.ts",
+    "eval:seed": "node --env-file=.env node_modules/tsx/dist/cli.mjs evals/seed-from-intent-log.ts",
+    "eval:sources": "node --env-file=.env node_modules/tsx/dist/cli.mjs evals/eval-sources.ts",
     "sources:run": "tsx src/sources/run-sources.ts"
   },
   "dependencies": {

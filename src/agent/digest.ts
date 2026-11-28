@@ -3,9 +3,9 @@ import { db } from '../db/client.js';
 import { repos, searchCaches, subscribers, trendingEntries } from '../db/schema.js';
 import { loadStarredNames } from '../github/starred-names.js';
 import { note, traceError, withTrace } from '../obs/trace.js';
-import { sendWeComNews, sendWeComText } from '../wecom/api.js';
-import { NEWS_MAX_ARTICLES, buildNewsArticles, type NewsArticle } from '../wecom/news.js';
-import { formatEntryLine } from '../wecom/text.js';
+import { sendWeComNews, sendWeComText } from '../shared/wecom-api.js';
+import { NEWS_MAX_ARTICLES, buildNewsArticles, type NewsArticle } from '../shared/news.js';
+import { formatEntryLine } from '../shared/text.js';
 import { loadAbstractSafe } from './abstract.js';
 import { applyHardFilters, passesGrowth } from './digest-filter.js';
 import {
@@ -440,12 +440,20 @@ export async function saveRecentResults(
     return;
   }
   const database = db();
-  await database
-    .delete(searchCaches)
-    .where(eq(searchCaches.wecomUserid, wecomUserid));
+  // 原子 upsert：一条语句由数据库保证「每用户至多一行」。
+  // 此前 delete+insert 两次 await 之间有并发窗口——用户刚收到简报就发
+  // 「收藏 N」时可能读到已删未插的空缓存。唯一约束 + onConflictDoUpdate
+  // 从根上消除这个中间态（迁移 0007）。
   await database
     .insert(searchCaches)
-    .values({ wecomUserid, results: items });
+    .values({ wecomUserid, results: items })
+    .onConflictDoUpdate({
+      target: searchCaches.wecomUserid,
+      set: {
+        results: sql`excluded.results`,
+        createdAt: sql`now()`,
+      },
+    });
 }
 
 /**

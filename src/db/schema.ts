@@ -251,12 +251,21 @@ export const sourceItems = pgTable(
 /**
  * 最近一次检索结果缓存，供"收藏 N"按序号引用。
  */
-export const searchCaches = pgTable('search_caches', {
-  id: serial('id').primaryKey(),
-  wecomUserid: text('wecom_userid').notNull(),
-  results: jsonb('results').notNull(),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-});
+export const searchCaches = pgTable(
+  'search_caches',
+  {
+    id: serial('id').primaryKey(),
+    wecomUserid: text('wecom_userid').notNull(),
+    results: jsonb('results').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (t) => [
+    // 每用户至多一行的数据库级保证：saveRecentResults 用 upsert 写入，
+    // 不再依赖 delete+insert 的约定（那个写法有并发中间态）。
+    unique('search_caches_wecom_userid_unique').on(t.wecomUserid),
+    index('search_caches_userid_idx').on(t.wecomUserid),
+  ],
+);
 
 /**
  * KV 缓存（存企业微信 access_token 等短命数据）。

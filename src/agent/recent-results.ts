@@ -1,35 +1,8 @@
-import { desc, eq } from 'drizzle-orm';
-import { db } from '../db/client.js';
-import { searchCaches } from '../db/schema.js';
-
 /**
- * 调用方最近一次检索缓存（search_caches 每用户至多一行，仍按创建时间倒序兜底）。
+ * 兼容转发层：实现已移到 `src/db/recent-results.ts`。
  *
- * 区分三态：无行（found=false，从未搜索/简报）/ 有行但结果为空 / 有行有结果——
- * 让「收藏 N」「感兴趣」能给出精确文案，不把"没有缓存"谎报成"没有第 N 条"。
+ * 保留这个文件是为了不打乱现有 import 与测试 mock；新代码请直接从 db 引入。
+ * 它只是一次 search_caches 只读查询，放 db 层名正言顺——
+ * github 层的「收藏 N」要用它，从 agent 层引入会形成依赖环。
  */
-
-/** 缓存条目只需 full_name；其余字段由检索流程写入，这里不消费。 */
-export interface RecentResultItem {
-  fullName: string;
-}
-
-export async function loadRecentResults(
-  wecomUserid: string,
-): Promise<{ found: boolean; items: RecentResultItem[] }> {
-  const rows = await db()
-    .select()
-    .from(searchCaches)
-    .where(eq(searchCaches.wecomUserid, wecomUserid))
-    .orderBy(desc(searchCaches.createdAt))
-    .limit(1);
-  const row = rows[0];
-  if (row === undefined) {
-    return { found: false, items: [] };
-  }
-  const results = row.results;
-  return {
-    found: true,
-    items: Array.isArray(results) ? (results as RecentResultItem[]) : [],
-  };
-}
+export { loadRecentResults, type RecentResultItem } from '../db/recent-results.js';

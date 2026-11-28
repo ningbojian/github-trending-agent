@@ -50,6 +50,13 @@
       "when": 1793251858492,
       "tag": "0006_handy_giant_man",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1795803455202,
+      "tag": "0007_search_caches_unique_user",
+      "breakpoints": true
     }
   ]
 }

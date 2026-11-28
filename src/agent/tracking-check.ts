@@ -3,8 +3,8 @@ import { env } from '../config.js';
 import { db } from '../db/client.js';
 import { kvCache, subscribers, trackedItems, type TrackedCursor } from '../db/schema.js';
 import { createGithubClient, type ReleaseInfo, type RepoInfo } from '../github/client.js';
-import { sendWeComNews, sendWeComText } from '../wecom/api.js';
-import type { NewsArticle } from '../wecom/news.js';
+import { sendWeComNews, sendWeComText } from '../shared/wecom-api.js';
+import type { NewsArticle } from '../shared/news.js';
 import { shanghaiToday } from './time.js';
 import {
   computeTrackedChanges,

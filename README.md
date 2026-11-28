@@ -6,7 +6,7 @@
 - **双模式交互、规则前置、查询解析缓存与今日简报**：被动定时推送 top10 简报（LLM 故障时降级为纯模板，仓库列表始终送达）；主动发送自然语言（如「本周 rust 的 ai 项目」）由 `src/agent/parse-query.ts` 解析查询条件进行多维度过滤；路由先用 `src/wecom/route-decision.ts` 与 `src/agent/intent.ts` 做零模型判定，只有「深挖 owner/repo」「这个项目靠不靠谱」等才进入工具循环（最多 3 步）；`src/agent/query-cache.ts` 对解析结果做 30 天缓存，key 带 `parse:v1:` 版本前缀，命中时不调用模型，过期、坏值或读库失败均按未命中处理；聊天中的「今日简报」复用 `pushDigests` 的统一推送与预算逻辑，未订阅先提示订阅、已退订提示恢复方式、今天已发则告知时间且不重复发送。
 - **OAuth 收藏同步、最近检索缓存、长期记忆与每周复盘**：`src/github/oauth.ts` 完成 GitHub 授权（scope 仅 public_repo）后，可在聊天中「收藏 N / 取消收藏 N」，自动同步 star 到用户账号，并支持「我的收藏」列表；`src/agent/recent-results.ts` 抽出最近一次检索缓存，供「收藏 N」与「感兴趣/不感兴趣」共用，并区分「没搜过」与「搜过但结果为空」；`src/wecom/memory.ts` 解析并回执「记住 / 忘掉 / 我的记忆」，支持「忘掉 全部」清空，记忆最多 20 条、每条 100 字（180 天 TTL），只影响措辞，不参与排序或是否推送，写入与查看都是 kv 操作，不消耗模型额度，没配 Key 的用户也能用；每周一复盘会重放本周推送、收藏与反馈，并在有明确口味信号时询问是否记住。
 - **企业微信接入完整、双触达渠道与控制面板**：`src/wecom/crypto.ts` 实现回调加解密，`src/wecom/router.ts` 分发指令（搜索、收藏、绑定、订阅偏好、退订、帮助、记忆），`src/wecom/onboarding.ts` 首条消息自动开通订阅；用户在个人微信里启用「企业微信插件」即可每天收简报并直接提问（无需安装企业微信 App）；`/api/join` 落地页提供企微加入引导 + 邮箱备用入口（Resend，双重确认、不截断、可退订）；控制面板中的仓库按钮为 34px 方形图标按钮，触屏默认显示 GitHub mark，悬停样式只在 `hover:hover` 设备生效并保持 GitHub 黑白配色。
-- **数据与工程化**：Drizzle ORM + SQL 迁移（`drizzle/`）管理用户、订阅、搜索结果、收藏与运行日志；请求级 trace 与工具调用流水落 `agent_runs` / `tool_calls`，`/api/metrics` 报出成功率、延迟分位、路由分布与 token 用量；`evals/` 98 条金标 + CI 回归门禁，规则改坏会让流水线变红；`tests/` 覆盖解析、检索、回调、加解密、查询缓存、最近检索、长期记忆、今日简报、Vercel 配置与面板样式等核心逻辑的 Vitest 用例
+- **数据与工程化**：Drizzle ORM + SQL 迁移（`drizzle/`）管理用户、订阅、搜索结果、收藏与运行日志；请求级 trace 与工具调用流水落 `agent_runs` / `tool_calls`，`/api/metrics` 报出成功率、延迟分位、路由分布与 token 用量；`evals/` 122 条金标 + CI 回归门禁，规则改坏会让流水线变红；`tests/` 覆盖解析、检索、回调、加解密、查询缓存、最近检索、长期记忆、今日简报、Vercel 配置与面板样式等核心逻辑的 Vitest 用例
 <!-- profile-agent:readme:end -->
 
 <p align="center">
@@ -70,7 +70,7 @@
 
 ## 评测与回归门禁
 
-「凭什么说这版比上版好」不靠感觉：`evals/golden/` 有 98 条金标（路由 56、解析 34、工具 7、答案 1），适配器**直接复用生产代码**（`decideTextRoute`、`classifyByRules` + `parseSearchQuery`、`formatSearchReply`），不维护第二套实现——评测里跑的必须就是线上跑的那份逻辑。
+「凭什么说这版比上版好」不靠感觉：`evals/golden/` 有 122 条金标（路由 80、解析 34、工具 7、答案 1），适配器**直接复用生产代码**（`decideTextRoute`、`classifyByRules` + `parseSearchQuery`、`formatSearchReply`），不维护第二套实现——评测里跑的必须就是线上跑的那份逻辑。
 
 - `npm run eval` 只跑**确定性指标**：路由准确率、规则误判率、解析 exact match、groundedness（回复里出现的仓库必须在结果集里）、工具路由与参数准确率、运行时错误数，并与入库基线逐条比较回归。
 - 阈值写死在 `evals/thresholds.ts`：路由/工具/groundedness 必须 1.0、规则误判 0、解析 ≥0.95、回归 0；任一不过退出码非 0。

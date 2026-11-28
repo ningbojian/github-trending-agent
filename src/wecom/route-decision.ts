@@ -217,7 +217,9 @@ export function decideTextRoute(content: string): RouteDecision {
   if (text === '我的记忆') {
     return { kind: 'handler', handler: 'memory' };
   }
-  if (text === '我的面板' || text === '面板') {
+  // 面板入口：允许「打开面板」这种带动词的自然说法。
+  // 仍用精确匹配（不做前缀），「打开面板的链接怎么拿」等长句照常落搜索。
+  if (text === '我的面板' || text === '面板' || text === '打开面板') {
     return { kind: 'handler', handler: 'panel' };
   }
   if (OPPORTUNITY_PATTERN.test(text)) {

@@ -58,3 +58,23 @@
 {"id":"route-opportunity-next-step","text":"下一步","expected":{"route":{"kind":"handler","name":"opportunity"}}}
 {"id":"route-opportunity-what","text":"我能做什么","expected":{"route":{"kind":"handler","name":"opportunity"}}}
 {"id":"route-opportunity-long","text":"机会成本是什么","notes":"精确词之外仍是搜索","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-panel-mine","text":"我的面板","notes":"panel handler 此前零覆盖","expected":{"route":{"kind":"handler","name":"panel"}}}
+{"id":"route-panel-short","text":"面板","expected":{"route":{"kind":"handler","name":"panel"}}}
+{"id":"route-panel-open","text":"打开面板","notes":"带动词的自然说法；用户确认应走 panel 而非 search","expected":{"route":{"kind":"handler","name":"panel"}}}
+{"id":"route-panel-open-punct","text":"打开面板。","notes":"尾标点在分发前剥除","expected":{"route":{"kind":"handler","name":"panel"}}}
+{"id":"route-panel-long","text":"打开面板的链接","notes":"带后缀不吞，照常搜索","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-track-repo","text":"追踪 vercel/next.js","notes":"track handler 此前零覆盖","expected":{"route":{"kind":"handler","name":"track"}}}
+{"id":"route-track-bare","text":"追踪","notes":"裸命令回用法提示","expected":{"route":{"kind":"usage","name":"track"}}}
+{"id":"route-track-synonym","text":"关注 rust 项目","expected":{"route":{"kind":"handler","name":"track"}}}
+{"id":"route-track-not-swallow","text":"关注度最高的项目","notes":"「关注度」不是跟踪命令","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-my-tracking","text":"我的追踪","notes":"myTracking 此前零覆盖","expected":{"route":{"kind":"handler","name":"myTracking"}}}
+{"id":"route-untrack-index","text":"取消追踪 2","notes":"untrack 此前零覆盖","expected":{"route":{"kind":"handler","name":"untrack"}}}
+{"id":"route-untrack-tight","text":"取消关注1","notes":"无空格同义词","expected":{"route":{"kind":"handler","name":"untrack"}}}
+{"id":"route-opportunity-trailing-space","text":"机会 ","notes":"尾空格归一后命中","expected":{"route":{"kind":"handler","name":"opportunity"}}}
+{"id":"route-opportunity-variant","text":"有什么可以做的","expected":{"route":{"kind":"handler","name":"opportunity"}}}
+{"id":"route-opportunity-suffix","text":"下一步做什么","notes":"带后缀落搜索","expected":{"route":{"kind":"handler","name":"search"}}}
+{"id":"route-favorite-boundary","text":"收藏 25","notes":"序号上界仍归 handler 校验","expected":{"route":{"kind":"handler","name":"favorite"}}}
+{"id":"route-favorite-over","text":"收藏 26","expected":{"route":{"kind":"handler","name":"favorite"}}}
+{"id":"route-unfavorite-cn","text":"取消收藏二十","expected":{"route":{"kind":"handler","name":"unfavorite"}}}
+{"id":"route-favorite-multi","text":"收藏 3 4","notes":"多参数回用法提示","expected":{"route":{"kind":"usage","name":"favorite"}}}
+{"id":"route-panel-tracking-alias","text":"追踪列表","notes":"myTracking 别名","expected":{"route":{"kind":"handler","name":"myTracking"}}}

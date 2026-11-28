@@ -61,6 +61,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: 清理 30 天前的可观测记录
+        # agent_runs / tool_calls 只增不减会拖慢 /api/metrics 并占存储。
+        # 清理失败不影响抓取主链路，下次 daily 会再试。
+        continue-on-error: true
+        run: npm run db:cleanup
+
       - name: 抓取 Trending 并入库
         run: npx tsx src/scraper/run-scraper.ts
 

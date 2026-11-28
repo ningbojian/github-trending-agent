@@ -385,7 +385,7 @@ curl -i https://<domain>/api/oauth-github
 4. **`WECOM_AGENT_ID` 必须存纯数字字符串**：`daily.yml` 告警 payload 用 `jq … tonumber`；Vercel 端代码也做 `Number(env.WECOM_AGENT_ID)`——两侧都要求纯数字（如 `1000001`），存带引号/字母的值会把失败告警本身打挂。
 5. **Vercel Node runtime ≥ 22**：`package.json` engines 地板 + AI SDK v7 依赖硬要求；部署日志确认 22.x，别在项目设置里回退到 20。
 6. **真库验证 distinct-on 去重**：选一个同时出现在总榜（`language='all'`）与语言榜的仓库，搜该语言 → 结果里该 `owner/repo` **只出现一次**（单测只能钉 SQL 形状与 JS 安全网，真库执行属本任务验证）。
-7. **`search_caches` 写入非原子**：当前为 delete + insert 两次 `await`（已记账未改）。如并发搜索时偶发丢缓存（「收藏 N」读到旧列表），改用 `db.batch` 一轮原子提交；MVP 可接受，先知悉即可。
+7. **`search_caches` 写入已原子化**（2026-11-28）：此前 delete + insert 两次 `await` 有并发中间态，用户刚收到简报就「收藏 N」可能读到空缓存。迁移 0007 加了 `wecom_userid` 唯一约束，`saveRecentResults` 改为 `onConflictDoUpdate` 单语句 upsert——中间态由数据库消除。
 8. **`subscribers.display_name` 以空串占位**：schema 为 `NOT NULL` 无默认值，onboarding 插入 `''`（企微回调只带 userid，暂无名称来源，且无任何运行时读取方）。可选后续迁移改为可空，不阻塞 MVP。
 9. **本地跑 CLI 报 `fetch failed`（TLS 拦截环境）**：部分企业网络/安全软件会对 HTTPS 做中间人拦截——curl 能通（用 Windows 证书库）但 Node fetch 报 `unable to verify the first certificate`。本地执行时加 `NODE_OPTIONS="--use-system-ca"` 即可（如 `NODE_OPTIONS="--use-system-ca" npx tsx src/scraper/run-scraper.ts`）；GitHub Actions 托管 runner 无此问题，管线不受影响。
 10. **Vercel 函数对 `src/` 的相对导入必须带 `.js` 扩展名**（如 `from '../src/config.js'`）：Vercel 构建用项目本地 TypeScript 逐文件转译、不做打包，产物按原样保留在函数包里由 Node ESM 运行时直接加载；Node ESM 不做无扩展名解析，漏写 `.js` 会导致**全部**端点 `FUNCTION_INVOCATION_FAILED`（平台通用 500，运行时日志里是 `ERR_MODULE_NOT_FOUND`）。`package.json` 必须保留 `"type": "module"`（缺了它 ESM 语法的产物会被当 CJS 解析，同样全站 500）。vitest/tsx 均支持 `.js → .ts` 映射，本地不受影响，所以**只有线上会炸**——新增相对导入时务必带上 `.js`。
@@ -610,7 +610,7 @@ curl -sS https://<domain>/api/join | grep -o 'work.weixin.qq.com[^"]*'
 
 ### 10.4 运行日志：每次调用走了哪条路 + 规则层怎么长大
 
-**一次调用 = 一条 trace**（`src/obs/trace.ts`，写 `agent_runs` 正式表；写表失败或迁移未执行时降级到 `kv_cache`，7 天 TTL。主表目前没有自动清理）。一条入站消息的「路由 → 规则意图 → 模型选择 → 解析来源 → 检索条数 → 简介命中 → 发送字节」按顺序记在 `steps` 里，每步带距上一步的 `ms`，一眼看出慢在哪一段。每日推送同理（`kind=push`，每个真正发送的订阅者一条）。
+**一次调用 = 一条 trace**（`src/obs/trace.ts`，写 `agent_runs` 正式表；写表失败或迁移未执行时降级到 `kv_cache`，7 天 TTL。主表由 `npm run db:cleanup` 每天清理 30 天前的行，见 `scripts/cleanup.ts`，挂在 `daily.yml`）。一条入站消息的「路由 → 规则意图 → 模型选择 → 解析来源 → 检索条数 → 简介命中 → 发送字节」按顺序记在 `steps` 里，每步带距上一步的 `ms`，一眼看出慢在哪一段。每日推送同理（`kind=push`，每个真正发送的订阅者一条）。
 
 打开（手机浏览器也能看，服务端渲染，无需登录）：
 

@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
-import { normalizeRepoName } from '../agent/repo-name.js';
+import { normalizeRepoName } from '../shared/repo-name.js';
 import { decryptSecret } from './oauth.js';
 
 /**

@@ -1,14 +1,12 @@
 import { sendWeComText } from './api.js';
 import type { InboundMessage } from './router.js';
 import {
-  buildSuggestionFact,
   clearPending,
   setPending,
-  suggestionText,
   type Confirmation,
   type PendingProfileSuggestion,
 } from '../agent/pending.js';
-import { readProfile, rememberFact } from '../agent/profile.js';
+import { rememberFact } from '../agent/profile.js';
 import { handleSubscribe } from './onboarding.js';
 
 /**
@@ -81,30 +79,5 @@ export async function handlePendingReply(
   await sendWeComText(msg.fromUserName, '⚠️ 没记住，请稍后再试。');
 }
 
-/**
- * 每周复盘后的一条建议：把「多推/少推」翻译成用户能确认的一句话。
- *
- * 只在有净正/净负信号时出现；已经在记忆里的不再问；发送成功之后才落 pending，
- * 避免用户没看见提示、之后随手一个「对」被当成确认。
- */
-export async function suggestProfileFromWeek(
-  wecomUserid: string,
-  stats: { more: string[]; less: string[] },
-  now: Date = new Date(),
-): Promise<void> {
-  const fact = buildSuggestionFact(stats);
-  if (fact === '') return;
-
-  const profile = await readProfile(wecomUserid, now);
-  const alreadyKnown = (profile?.facts ?? []).some(
-    (entry) => entry.toLowerCase() === fact.toLowerCase(),
-  );
-  if (alreadyKnown) return;
-
-  await sendWeComText(wecomUserid, suggestionText(fact));
-  await setPending(
-    wecomUserid,
-    { kind: 'profile-suggestion', fact, at: now.toISOString() },
-    now,
-  );
-}
+// 每周复盘的画像建议已移到 `src/agent/profile-suggestion.ts`：
+// 它读画像、写 pending、发消息，全是 agent 层业务，留在 wecom 会让 agent → wecom 成环。

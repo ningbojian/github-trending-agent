@@ -12,8 +12,8 @@ import {
   readHiddenOpportunities,
   readShownOpportunities,
 } from '../opportunities/store.js';
-import { sendWeComNews, sendWeComText } from '../wecom/api.js';
-import type { NewsArticle } from '../wecom/news.js';
+import { sendWeComNews, sendWeComText } from '../shared/wecom-api.js';
+import type { NewsArticle } from '../shared/news.js';
 import { normalizePreferences } from './preferences.js';
 import { loadUserSignals } from './taste.js';
 import { shanghaiToday } from './time.js';

@@ -76,7 +76,7 @@ vi.mock('../src/db/client', async () => {
   };
 });
 
-vi.mock('../src/wecom/api', () => ({
+vi.mock('../src/shared/wecom-api', () => ({
   sendWeComText: vi.fn(async () => {
     if (state.sendError) throw new Error('send failed');
   }),

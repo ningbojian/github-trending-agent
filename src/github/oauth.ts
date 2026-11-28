@@ -3,8 +3,8 @@ import { eq } from 'drizzle-orm';
 import { env } from '../config.js';
 import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
-import { sendWeComText } from '../wecom/api.js';
-import type { InboundMessage } from '../wecom/router.js';
+import { sendWeComText } from '../shared/wecom-api.js';
+import type { InboundMessage } from '../shared/wecom-types.js';
 
 /**
  * GitHub OAuth 绑定：

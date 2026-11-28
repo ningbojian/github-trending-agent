@@ -1,10 +1,10 @@
 import { and, asc, eq, sql } from 'drizzle-orm';
-import { loadRecentResults } from '../agent/recent-results.js';
+import { loadRecentResults } from '../db/recent-results.js';
 import { db } from '../db/client.js';
 import { favorites, subscribers } from '../db/schema.js';
-import { sendWeComText } from '../wecom/api.js';
-import { NUMBER_TOKEN_PATTERN, parseCnNumber } from '../wecom/cn-number.js';
-import type { InboundMessage } from '../wecom/router.js';
+import { sendWeComText } from '../shared/wecom-api.js';
+import { NUMBER_TOKEN_PATTERN, parseCnNumber } from '../shared/cn-number.js';
+import type { InboundMessage } from '../shared/wecom-types.js';
 import { decryptSecret } from './oauth.js';
 
 /**

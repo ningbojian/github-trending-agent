@@ -80,7 +80,7 @@ const apiMock = vi.hoisted(() => ({
   // mock 工厂必须提供该导出，否则 ESM 绑定期报「No export is defined on the mock」。
 }));
 
-vi.mock('../src/wecom/api', () => ({
+vi.mock('../src/shared/wecom-api', () => ({
   sendWeComText: apiMock.sendWeComText,
 }));
 

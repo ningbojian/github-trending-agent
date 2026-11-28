@@ -68,7 +68,7 @@ const apiMock = vi.hoisted(() => ({
   sendWeComText: vi.fn(),
   sendWeComNews: vi.fn(),
 }));
-vi.mock('../src/wecom/api', () => ({
+vi.mock('../src/shared/wecom-api', () => ({
   sendWeComText: apiMock.sendWeComText,
   sendWeComNews: apiMock.sendWeComNews,
 }));

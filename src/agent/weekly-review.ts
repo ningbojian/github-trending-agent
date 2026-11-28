@@ -4,8 +4,8 @@ import { favorites, kvCache, subscribers } from '../db/schema.js';
 import { readPushHistory, type PushHistory } from './push-history.js';
 import { readFeedback, feedbackWeights, type FeedbackEvent } from './taste.js';
 import { shanghaiHHMM, shanghaiToday } from './time.js';
-import { sendWeComText } from '../wecom/api.js';
-import { suggestProfileFromWeek } from '../wecom/pending.js';
+import { sendWeComText } from '../shared/wecom-api.js';
+import { suggestProfileFromWeek } from './profile-suggestion.js';
 
 /**
  * 每周复盘：把「这周推了什么、你做了什么」说清楚，并给出下周的方向。

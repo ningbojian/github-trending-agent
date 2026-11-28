@@ -65,16 +65,11 @@ import {
   type QuotaDecision,
 } from '../agent/rate-limit.js';
 
-export interface InboundMessage {
-  toUserName: string;
-  fromUserName: string;
-  createTime: number;
-  msgType: string;
-  content: string;
-  msgId: string;
-  /** 事件类型（MsgType=event 时有值，如 enter_agent）；普通消息为空串。 */
-  event?: string;
-}
+import type { InboundMessage } from '../shared/wecom-types.js';
+
+// 类型定义已下沉到 shared（github 层的 handler 也要用它，留在 wecom 会成环）。
+// 这里 re-export 保持既有 import 路径不变。
+export type { InboundMessage } from '../shared/wecom-types.js';
 
 export type MessageHandler = (msg: InboundMessage) => Promise<void> | void;
 

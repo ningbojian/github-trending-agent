@@ -16,7 +16,7 @@ import { db } from '../db/client.js';
 import { kvCache } from '../db/schema.js';
 import { readFeedback, type FeedbackEvent } from './taste.js';
 import { readSubscription } from './subscription-store.js';
-import { sendWeComText } from '../wecom/api.js';
+import { sendWeComText } from '../shared/wecom-api.js';
 
 /** 累计几次「不感兴趣」才认为与订阅冲突。 */
 export const CONFLICT_THRESHOLD = 3;

@@ -1,0 +1,183 @@
+import { displayWidth } from '../text-width.js';
+
+/**
+ * 企微 news 卡片的渲染规则（纯函数，无网络/DB）。
+ *
+ * 为什么单独一层：这些约束来自 2026-10-28 在个人微信里的实测，不是审美偏好——
+ * - 一条 news 最多 8 篇，第 9 篇会被企微以 `45008 article size out of limit` 拒绝；
+ * - 多篇布局里**只有标题可见**，`description` 不显示；
+ * - 标题在客户端约 10–12 个汉字处被裁，尾部内容用户永远看不到；
+ * - 第 1 篇是仓库 OG 海报（宽图）；**第 2 篇起一律不发图**。
+ *   行内图会压缩 Abstract / 简介的显示空间，文字优先；桌面端的灰色
+ *   缩略图位是客户端行为，接受它，不为了填位而发图（发图会让手机端
+ *   也渲染行内图，两端反而冲突）。
+ *
+ * 标题的信息顺序因此是硬要求：仓库名必须在最前（最先可见），
+ * 短简介放在尾部（可被裁剪）。
+ *
+ * 简介不硬截：短简介由模型单独生成（≤18 个汉字，完整短语）；
+ * 拿不到就退回「完整分句」，再拿不到就**干脆不写**——绝不出现半句话加省略号。
+ */
+
+/** 企微 news 一条消息最多 8 篇（第 9 篇实测被拒：45008）。 */
+export const NEWS_MAX_ARTICLES = 8;
+
+/** 只有这批里增量最猛的 1–2 条给 🔥；每条都亮等于每条都不亮。 */
+export const HOT_TOP_N = 2;
+/** 火苗的绝对下限：增量没到这条线，一个都不给（避免小仓库靠极低基数刷榜）。 */
+export const HOT_MIN_DELTA = 100;
+/** 火苗的增长率下限：`+增量 / 总星标` ≥ 5%（一周）。基量大小不再决定谁能亮。 */
+export const HOT_MIN_RATE = 0.05;
+
+/**
+ * 短简介的显示宽度上限（列）：汉字/全角算 2 列，ASCII 算 1 列。
+ * 实测行标题在仓库名与星标之后只剩约 20 列。
+ */
+export const SHORT_SUMMARY_MAX_WIDTH = 40;
+
+/** 企微 news 单篇标题的字节上限。 */
+const TITLE_MAX_BYTES = 128;
+
+/** 进入标题的最小字段集。 */
+export interface NewsEntry {
+  fullName: string;
+  stars: number;
+  starsDelta: number;
+  isNew: boolean;
+  language: string | null;
+  /** 完整中文简介（多篇布局不显示，仍随卡片发送）。 */
+  summary?: string;
+  /** 模型生成的完整短句（≤18 个汉字）；缺省时退回完整分句。 */
+  short?: string;
+}
+
+import type { NewsArticle } from './wecom-types.js';
+
+// 类型定义已下沉到 shared（wecom/api.ts 与 github 层都要用它，留在 wecom 会成环）。
+// 这里 re-export 保持既有 import 路径不变。
+export type { NewsArticle } from '../shared/wecom-types.js';
+
+export interface BuildNewsOptions {
+  /** 仓库主页；缺省用 GitHub URL。 */
+  htmlUrlOf?: (entry: NewsEntry) => string | undefined;
+}
+
+/** 43800 → 43.8k；158300 → 158k；999 → 999。标题空间有限，不写全量数字。 */
+export function shortStars(stars: number): string {
+  if (!Number.isFinite(stars) || stars < 1000) return String(Math.trunc(stars));
+  const k = stars / 1000;
+  return k < 100 ? `${Number.isInteger(k) ? k : k.toFixed(1)}k` : `${Math.round(k)}k`;
+}
+
+/** 去掉首尾空白与结尾标点/省略号：短句不该以「，」「…」收尾。 */
+function cleanShort(text: string): string {
+  return text
+    .trim()
+    .replace(/^[「『“"'（(]+/, '')
+    .replace(/[，。；：、,.;:!?！？…「」『』“”"'）)]+$/u, '')
+    .trim();
+}
+
+/** 完整分句：取第一个标点之前的部分；超过显示宽度就放弃（宁可没有，也不截半句）。 */
+export function deriveShort(summary: string | undefined): string {
+  const text = (summary ?? '').trim();
+  if (text === '') return '';
+  const clause = text.split(/[，。；：、,.;:!?！？]/u)[0] ?? '';
+  const candidate = cleanShort(clause);
+  if (candidate === '') return '';
+  return displayWidth(candidate) <= SHORT_SUMMARY_MAX_WIDTH ? candidate : '';
+}
+
+/** 模型给的短句：清洗后仍超宽就放弃——不把长句硬切进标题。 */
+function normalizeShort(short: string | undefined): string {
+  const text = cleanShort(short ?? '');
+  if (text === '') return '';
+  return displayWidth(text) <= SHORT_SUMMARY_MAX_WIDTH ? text : '';
+}
+
+/** 按码点截断到不超过 maxBytes，保留结尾省略号的位置。 */
+function clipToBytes(text: string, maxBytes: number): string {
+  const chars = Array.from(text);
+  const ellipsis = '…';
+  const budget = maxBytes - Buffer.byteLength(ellipsis, 'utf8');
+  let used = 0;
+  let keep = 0;
+  for (const char of chars) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (used + size > budget) break;
+    used += size;
+    keep += 1;
+  }
+  return `${chars.slice(0, keep).join('').trimEnd()}${ellipsis}`;
+}
+
+/** 标题头：标记 + 序号 + 仓库 + 星标（一定可见的部分）。 */
+function titleHead(index: number, entry: NewsEntry, hot: boolean): string {
+  const marker = hot ? '🔥 ' : entry.isNew ? '🆕 ' : '';
+  return `${marker}${index + 1}. ${entry.fullName} ★${shortStars(entry.stars)} (+${entry.starsDelta})`;
+}
+
+/**
+ * 组装标题：固定头 + `｜短简介`。
+ * 头本身超限（极长仓库名）时硬截；加上简介会超限时**整段简介放弃**，
+ * 不把短句切一半——用户已经明确说过半句话比没有更糟。
+ */
+function buildTitle(index: number, entry: NewsEntry, hot: boolean): string {
+  const head = titleHead(index, entry, hot);
+  if (Buffer.byteLength(head, 'utf8') > TITLE_MAX_BYTES) {
+    return clipToBytes(head, TITLE_MAX_BYTES);
+  }
+
+  const short = normalizeShort(entry.short) || deriveShort(entry.summary);
+  if (short === '') return head;
+
+  const full = `${head}｜${short}`;
+  return Buffer.byteLength(full, 'utf8') <= TITLE_MAX_BYTES ? full : head;
+}
+
+function tileUrlPlaceholder(): void {}
+
+/** 一周增长率：新增星标 / 总星标。绝对增量会永远锁死在榜首，增长率不会。 */
+function growthRate(entry: NewsEntry): number {
+  return entry.stars > 0 ? entry.starsDelta / entry.stars : 0;
+}
+
+/** 增长率过线、且增量不低于绝对下限的条目里，取增长最快的 1–2 条。 */
+function hotIndexes(entries: NewsEntry[]): Set<number> {
+  const ranked = entries
+    .map((entry, index) => ({ entry, index, rate: growthRate(entry) }))
+    .filter(
+      (item) => item.entry.starsDelta >= HOT_MIN_DELTA && item.rate >= HOT_MIN_RATE,
+    )
+    .sort((a, b) => b.rate - a.rate)
+    .slice(0, HOT_TOP_N);
+  return new Set(ranked.map((item) => item.index));
+}
+
+/**
+ * 把条目渲染成 news 文章列表：
+ * - 第 1 篇用仓库 OG 海报（宽图）；
+ * - 第 2 篇起不发图（文字优先，图片会压缩简介空间）；
+ * - 超过 8 条截断——企微硬上限，多一条整条消息都会被拒。
+ */
+export function buildNewsArticles(
+  entries: NewsEntry[],
+  options: BuildNewsOptions = {},
+): NewsArticle[] {
+  const limited = entries.slice(0, NEWS_MAX_ARTICLES);
+  const hot = hotIndexes(limited);
+  return limited.map((entry, index) => {
+    const htmlUrl = options.htmlUrlOf?.(entry)?.trim();
+    // 电脑端新闻卡片的 description 会被右侧缩略图挤占：放短句（≤18 字），
+    // 完整上下文在「今日观察」里；放 28 字完整简介会被截断。
+    const description = entry.short?.trim() || entry.summary?.trim();
+    return {
+      title: buildTitle(index, entry, hot.has(index)),
+      ...(description ? { description } : {}),
+      url: htmlUrl !== undefined && htmlUrl !== '' ? htmlUrl : `https://github.com/${entry.fullName}`,
+      ...(index === 0
+        ? { picurl: `https://opengraph.githubassets.com/1/${entry.fullName}` }
+        : {}),
+    };
+  });
+}

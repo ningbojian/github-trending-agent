@@ -42,7 +42,7 @@ vi.mock('../src/db/client', () => ({
   }),
 }));
 
-vi.mock('../src/wecom/api', () => ({ sendWeComText: apiMock.sendWeComText }));
+vi.mock('../src/shared/wecom-api', () => ({ sendWeComText: apiMock.sendWeComText }));
 vi.mock('../src/github/client', () => ({ createGithubClient: () => clientMock }));
 vi.mock('../src/config', () => ({ env: configMock.env }));
 

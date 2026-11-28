@@ -50,7 +50,11 @@ const dbMock = vi.hoisted(() => ({
   selectConditions: [] as unknown[],
   selectRows: [] as unknown[],
   deleteCalls: [] as { table: unknown; condition: unknown }[],
-  insertCalls: [] as { table: unknown; values: Record<string, unknown> }[],
+  insertCalls: [] as {
+    table: unknown;
+    values: Record<string, unknown>;
+    onConflict?: unknown;
+  }[],
   insertError: undefined as Error | undefined,
   deleteError: undefined as Error | undefined,
   /**
@@ -69,7 +73,7 @@ const dbMock = vi.hoisted(() => ({
   claimResults: [] as Record<string, unknown>[][],
 }));
 
-vi.mock('../src/wecom/api', () => ({
+vi.mock('../src/shared/wecom-api', () => ({
   sendWeComText: apiMock.sendWeComText,
   sendWeComNews: apiMock.sendWeComNews,
 }));
@@ -158,11 +162,29 @@ vi.mock('../src/db/client', () => ({
       },
     }),
     insert: (table: unknown) => ({
-      values: async (values: Record<string, unknown>) => {
-        dbMock.insertCalls.push({ table, values });
-        if (dbMock.insertError) {
-          throw dbMock.insertError;
-        }
+      values: (values: Record<string, unknown>) => {
+        const call: { table: unknown; values: Record<string, unknown>; onConflict?: unknown } = {
+          table,
+          values,
+        };
+        let recorded = false;
+        const record = () => {
+          if (!recorded) {
+            recorded = true;
+            dbMock.insertCalls.push(call);
+          }
+          if (dbMock.insertError) throw dbMock.insertError;
+        };
+        // 同一对象既能 await（普通 insert），也能 .onConflictDoUpdate()（upsert）。
+        const result = {
+          then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+            Promise.resolve().then(record).then(resolve, reject),
+          onConflictDoUpdate: (config: unknown) => {
+            call.onConflict = config;
+            return result;
+          },
+        };
+        return result;
       },
     }),
   }),
@@ -1038,27 +1060,23 @@ describe('pushDigests — 快照可用时优先且不查 trending 表', () => {
 
 
 describe('saveRecentResults — search_caches 覆盖写', () => {
-  it('非空 items：先 delete 该用户全部行，再 insert 一行 { fullName }[]', async () => {
+  it('非空 items：一条 upsert 写入，不再 delete+insert（消除并发窗口）', async () => {
     await saveRecentResults('alice', [
       { fullName: 'a/one' },
       { fullName: 'b/two' },
     ]);
 
-    expect(dbMock.deleteCalls).toHaveLength(1);
-    expect(dbMock.deleteCalls[0]?.table).toBe(searchCaches);
-    const delCompiled = compileQuery(dbMock.deleteCalls[0]?.condition);
-    expect(delCompiled.sql).toContain('"search_caches"."wecom_userid"');
-    expect(delCompiled.params).toContain('alice');
-
+    expect(dbMock.deleteCalls).toHaveLength(0);
     expect(dbMock.insertCalls).toHaveLength(1);
     expect(dbMock.insertCalls[0]?.table).toBe(searchCaches);
     expect(dbMock.insertCalls[0]?.values).toEqual({
       wecomUserid: 'alice',
       results: [{ fullName: 'a/one' }, { fullName: 'b/two' }],
     });
+    expect(dbMock.insertCalls[0]?.onConflict).toBeDefined();
   });
 
-  it('空 items → 不写（delete/insert 都不发生）', async () => {
+  it('空 items → 不写', async () => {
     await saveRecentResults('alice', []);
 
     expect(dbMock.deleteCalls).toHaveLength(0);
@@ -1070,15 +1088,14 @@ describe('saveRecentResults — search_caches 覆盖写', () => {
 // pushDigests —— 推送成功后写 search_caches（「收藏 N」引用刚收到的简报）
 // ---------------------------------------------------------------------------
 describe('pushDigests — 推送后写 search_caches（收藏一致性）', () => {
-  it('发送成功 → 按展示顺序写该用户的 search_caches（delete + insert 各一次）', async () => {
+  it('发送成功 → 按展示顺序原子 upsert 该用户的 search_caches', async () => {
     dbMock.selectRows.push(makeSub());
     dbMock.executeRows.push(makeEntry('a/one'), makeEntry('b/two'));
 
     const result = await pushDigests();
 
     expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
-    expect(dbMock.deleteCalls).toHaveLength(1);
-    expect(dbMock.deleteCalls[0]?.table).toBe(searchCaches);
+    expect(dbMock.deleteCalls).toHaveLength(0);
     expect(dbMock.insertCalls).toHaveLength(1);
     expect(dbMock.insertCalls[0]?.table).toBe(searchCaches);
     expect(dbMock.insertCalls[0]?.values).toEqual({
@@ -1190,7 +1207,7 @@ describe('pushDigests — 推送后写 search_caches（收藏一致性）', () =
 // pushDigests —— 缓存写失败 → best-effort 失效旧缓存（陈旧非空行绝不残留）
 // ---------------------------------------------------------------------------
 describe('pushDigests — 缓存写失败的 best-effort 失效', () => {
-  it('saveRecentResults 失败（insert 抛错）→ 再 delete 该用户行做失效、计数不变、只发送一次', async () => {
+  it('saveRecentResults 失败（upsert 抛错）→ 兜底失效该用户缓存、计数不变、只发送一次', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     dbMock.selectRows.push(makeSub());
     dbMock.executeRows.push(makeEntry('a/one'));
@@ -1200,13 +1217,11 @@ describe('pushDigests — 缓存写失败的 best-effort 失效', () => {
 
     expect(result).toEqual({ sent: 1, skipped: 0, failed: 0 });
     expect(apiMock.sendWeComText).toHaveBeenCalledTimes(1);
-    // save 的 delete（成功）+ invalidate 的 delete；两次都按用户隔离删 search_caches。
-    expect(dbMock.deleteCalls).toHaveLength(2);
-    for (const call of dbMock.deleteCalls) {
-      expect(call.table).toBe(searchCaches);
-      const compiled = compileQuery(call.condition);
-      expect(compiled.params).toContain('alice');
-    }
+    // upsert 不再自带 delete；只剩失败兜底的一次 invalidate delete。
+    expect(dbMock.deleteCalls).toHaveLength(1);
+    expect(dbMock.deleteCalls[0]?.table).toBe(searchCaches);
+    const compiled = compileQuery(dbMock.deleteCalls[0]?.condition);
+    expect(compiled.params).toContain('alice');
     expect(console.error).toHaveBeenCalledWith(
       'saveRecentResults failed for alice:',
       expect.any(Error),
@@ -1218,6 +1233,8 @@ describe('pushDigests — 缓存写失败的 best-effort 失效', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     dbMock.selectRows.push(makeSub());
     dbMock.executeRows.push(makeEntry('a/one'));
+    // upsert 先失败 → 触发兜底失效；失效的 delete 再失败 → 两次都要被吞掉。
+    dbMock.insertError = new Error('insert down');
     dbMock.deleteError = new Error('db down');
 
     const result = await pushDigests();
